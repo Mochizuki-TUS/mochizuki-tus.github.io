@@ -387,9 +387,87 @@ function solid(nf){
   if (!V) return null;
   const R = Math.max.apply(null, V.map(vLen));
   const Vn = V.map(function(v){ return vMul(v, 1 / R); });
-  SOLIDS[nf] = { V: Vn, F: facesOf(Vn) };
+  let F = facesOf(Vn);
+  if (nf === 32){                                  // 五角形が 1〜6 と 27〜32 に来るよう並べ替える
+    const ord = order32(F);
+    F = ord.map(function(i){ return F[i]; });
+  }
+  F.forEach(function(f){
+    f.area = polyArea(Vn, f.idx);
+    f.omega = polySolid(Vn, f.idx);
+    f.sides = f.idx.length;
+  });
+  let sa = 0, so = 0;
+  F.forEach(function(f){ sa += f.area; so += f.omega; });
+  F.forEach(function(f){ f.pArea = f.area / sa; f.pOmega = f.omega / so; });
+  SOLIDS[nf] = { V: Vn, F: F };
   return SOLIDS[nf];
 }
+/* 面 k（1 始まり）が出る相対的な出やすさ。
+   面が対称に移り合う形（正多面体）ならどれも 1。
+   32 面体だけは面積に比例させる ―― 広い六角形のほうが出やすい。 */
+function faceWeight(n, k){
+  const S = solid(n);
+  if (!S || n !== 32) return 1;
+  return S.F[(k - 1) % S.F.length].pArea * n;      // 平均が 1 になるように規格化
+}
+/* ------------------------------------------------------------------------
+   面ごとの面積と立体角。
+   正多面体（4, 6, 8, 12, 20 面）はすべての面が対称に移り合うので、
+   どの面も同じ確率で出る。ところが 32 面体（切頂二十面体＝サッカーボール）は
+   正五角形 12 枚と正六角形 20 枚でできていて、面の形が 2 種類ある。
+   面積も中心からの距離も違うので、出る確率は 1/32 ではない。
+   ------------------------------------------------------------------------ */
+/* 平面多角形の面積。頂点が順に並んでいれば ½|Σ vᵢ × vᵢ₊₁| で出る */
+function polyArea(V, idx){
+  let s = [0, 0, 0];
+  for (let i = 0; i < idx.length; i++){
+    s = vAdd(s, vCross(V[idx[i]], V[idx[(i + 1) % idx.length]]));
+  }
+  return vLen(s) / 2;
+}
+/* 原点から見た立体角。三角形に分けて Van Oosterom–Strackee の式を足す */
+function triSolid(a, b, c){
+  const la = vLen(a), lb = vLen(b), lc = vLen(c);
+  const num = Math.abs(vDot(a, vCross(b, c)));
+  const den = la*lb*lc + vDot(a,b)*lc + vDot(a,c)*lb + vDot(b,c)*la;
+  return 2 * Math.atan2(num, den);
+}
+function polySolid(V, idx){
+  let s = 0;
+  for (let i = 1; i + 1 < idx.length; i++){
+    s += triSolid(V[idx[0]], V[idx[i]], V[idx[i + 1]]);
+  }
+  return s;
+}
+/* 32 面体の目の付け方。
+   1〜6 と 27〜32 を五角形（狭いほう）に、7〜26 を六角形に刻む。
+   さらに、向かい合う面どうしを k と 33−k の組にする
+   （ふつうのサイコロで向かい合う目が足して 7 になるのと同じ作法）。 */
+function order32(F){
+  const pent = [], hexa = [];
+  F.forEach(function(f, i){ (f.idx.length === 5 ? pent : hexa).push(i); });
+  const pairUp = function(list){
+    const used = {}, pairs = [];
+    list.slice().sort(function(i, j){ return F[j].n[2] - F[i].n[2]; }).forEach(function(i){
+      if (used[i]) return;
+      let best = -1, bd = 1e9;
+      list.forEach(function(j){
+        if (j === i || used[j]) return;
+        const d = vLen(vAdd(F[i].n, F[j].n));      // 法線の和が 0 なら真裏
+        if (d < bd){ bd = d; best = j; }
+      });
+      used[i] = 1; used[best] = 1;
+      pairs.push([i, best]);
+    });
+    return pairs;
+  };
+  const order = new Array(F.length);
+  pairUp(pent).forEach(function(p, i){ order[i] = p[0]; order[31 - i] = p[1]; });
+  pairUp(hexa).forEach(function(p, i){ order[6 + i] = p[0]; order[25 - i] = p[1]; });
+  return order;
+}
+
 const SOLID_N = [4, 6, 8, 12, 20, 32];
 const SOLID_NAME = { 4:'正四面体', 6:'正六面体', 8:'正八面体',
                      12:'正十二面体', 20:'正二十面体', 32:'切頂二十面体（サッカーボール）' };
@@ -431,7 +509,10 @@ function weight(dist, x, mu, sig){
 function probs(n, mode, dist, mu, sig){
   const P = new Array(n);
   let s = 0;
-  for (let k = 1; k <= n; k++){ P[k-1] = weight(dist, faceX(k, n, mode), mu, sig); s += P[k-1]; }
+  for (let k = 1; k <= n; k++){
+    P[k-1] = weight(dist, faceX(k, n, mode), mu, sig) * faceWeight(n, k);
+    s += P[k-1];
+  }
   if (s <= 0){ for (let k = 0; k < n; k++) P[k] = 1 / n; return P; }
   for (let k = 0; k < n; k++) P[k] /= s;
   return P;
@@ -693,6 +774,7 @@ function Sim(key, root){
   this.dist = key === 'bias' ? 'norm' : 'flat';
   this.mu = 3.0; this.sig = 0.9;
   this.counts = null; this.nRolls = 0; this.sum = 0; this.sum2 = 0; this.last = 0;
+  this.pitch = -0.34; this.yaw = 0.30;           // サイコロの向き（ドラッグで変わる）
   /* ③ 波動関数 */
   this.sys = 'box'; this.q = 1; this.ndiv = 12;
   this.xs = [];                                  // 「測った」位置
@@ -740,6 +822,7 @@ Sim.prototype.build = function(){
   const cv = document.createElement('canvas');
   stage.appendChild(cv); colMain.appendChild(stage);
   this.cv = cv; this.ctx = cv.getContext('2d');
+  if (this.key === 'fair' || this.key === 'bias') this.bindDrag();
 
   colMain.appendChild(el('div','legend',
     (this.key === 'fair' || this.key === 'bias')
@@ -992,6 +1075,54 @@ Sim.prototype.build = function(){
                  : this.key === 'wave' ? NOTE_WAVE : NOTE_EIG;
 };
 
+/* サイコロをドラッグで回す。
+   キャンバスにはグラフも載っているので、サイコロの上で押したときだけ掴む。 */
+Sim.prototype.bindDrag = function(){
+  const self = this, cv = this.cv;
+  let id = null, px = 0, py = 0;
+  const at = function(ev){
+    const r = cv.getBoundingClientRect();
+    return { x: (ev.clientX - r.left) * cv.clientWidth / r.width,
+             y: (ev.clientY - r.top) * cv.clientHeight / r.height };
+  };
+  const onDown = function(ev){
+    const h = self.dieHit;
+    if (!h) return;
+    const p = at(ev);
+    if (Math.hypot(p.x - h.cx, p.y - h.cy) > h.r) return;   // サイコロの外なら掴まない
+    id = ev.pointerId; px = ev.clientX; py = ev.clientY;
+    cv.setPointerCapture && cv.setPointerCapture(id);
+    cv.style.cursor = 'grabbing';
+    ev.preventDefault();
+  };
+  const onMove = function(ev){
+    if (id === null || ev.pointerId !== id){
+      /* 掴んでいないときは、サイコロの上でカーソルの形だけ変える */
+      const h = self.dieHit;
+      if (h && id === null){
+        const p = at(ev);
+        cv.style.cursor = Math.hypot(p.x - h.cx, p.y - h.cy) <= h.r ? 'grab' : '';
+      }
+      return;
+    }
+    self.yaw   += (ev.clientX - px) * 0.011;
+    self.pitch += (ev.clientY - py) * 0.011;
+    self.pitch = clamp(self.pitch, -1.45, 1.45);
+    px = ev.clientX; py = ev.clientY;
+    self.draw();
+    ev.preventDefault();
+  };
+  const onUp = function(ev){
+    if (id === null || ev.pointerId !== id) return;
+    cv.releasePointerCapture && cv.releasePointerCapture(id);
+    id = null; cv.style.cursor = 'grab';
+  };
+  cv.addEventListener('pointerdown', onDown);
+  cv.addEventListener('pointermove', onMove);
+  cv.addEventListener('pointerup', onUp);
+  cv.addEventListener('pointercancel', onUp);
+};
+
 /* ③ 位置を測る */
 Sim.prototype.measureX = function(m){
   const S = system(this.sys, this.q), M = moments(S, 3000);
@@ -1100,20 +1231,23 @@ function rotAxis(v, ax, ang){
   const cr = vCross(ax, v);
   return [v[0]*c + cr[0]*s + ax[0]*k, v[1]*c + cr[1]*s + ax[1]*k, v[2]*c + cr[2]*s + ax[2]*k];
 }
-/* 法線 nrm を「手前（+z）」に向ける回転を作り、そのあと少しだけ傾けて立体に見せる */
-function faceToFront(nrm){
+/* 法線 nrm を「手前（+z）」に向ける回転を作り、そのあと
+   ユーザーが指で回したぶん（pitch, yaw）だけ傾ける */
+function faceToFront(nrm, pitch, yaw){
   const to = [0, 0, 1];
   let ax = vCross(nrm, to), ang;
   if (vLen(ax) < 1e-9){ ax = [1, 0, 0]; ang = vDot(nrm, to) > 0 ? 0 : Math.PI; }
   else { ax = vNorm(ax); ang = Math.acos(clamp(vDot(nrm, to), -1, 1)); }
   return function(v){
     let u = rotAxis(v, ax, ang);
-    u = rotAxis(u, [1, 0, 0], -0.34);            // 少し上から見下ろす
-    u = rotAxis(u, [0, 1, 0],  0.30);            // 少し横から
+    u = rotAxis(u, [1, 0, 0], pitch);            // 上下（見下ろす角度）
+    u = rotAxis(u, [0, 1, 0], yaw);              // 左右
     return u;
   };
 }
-function drawDie(c, cx, cy, R, nf, face){
+function drawDie(c, cx, cy, R, nf, face, pitch, yaw){
+  pitch = pitch === undefined ? -0.34 : pitch;
+  yaw   = yaw   === undefined ?  0.30 : yaw;
   const S = solid(nf);
   if (!S){                                        /* 正多面体のない面数は「粒の集まった球」で */
     c.fillStyle = 'rgba(15,76,129,.07)';
@@ -1135,7 +1269,7 @@ function drawDie(c, cx, cy, R, nf, face){
     return;
   }
   const F = S.F[(face - 1) % S.F.length];
-  const rot = faceToFront(F.n);
+  const rot = faceToFront(F.n, pitch, yaw);
   const P = S.V.map(rot);
   const order = S.F.map(function(f, i){
     let z = 0; f.idx.forEach(function(m){ z += P[m][2]; });
@@ -1153,8 +1287,11 @@ function drawDie(c, cx, cy, R, nf, face){
       if (j === 0) c.moveTo(X, Y); else c.lineTo(X, Y);
     });
     c.closePath();
+    /* 32 面体は面が 2 種類あるので、色でも見分けられるようにする */
+    const five = f.idx.length === 5;
     c.fillStyle = on ? 'rgba(249,168,37,' + (0.55 + 0.4 * lit) + ')'
-                     : 'rgba(15,76,129,' + (0.10 + 0.42 * lit) + ')';
+               : five ? 'rgba(106,61,154,' + (0.10 + 0.40 * lit) + ')'
+                      : 'rgba(15,76,129,' + (0.10 + 0.42 * lit) + ')';
     c.fill();
     c.strokeStyle = on ? '#8a5a00' : 'rgba(15,76,129,.55)';
     c.lineWidth = on ? 1.8 : 1; c.stroke();
@@ -1202,7 +1339,8 @@ Sim.prototype.drawDice = function(){
   const dx0 = 8, dx1 = dx0 + dieW;
   const R = Math.min(dieW / 2 - 12, H * 0.20);
   const dcy = 30 + R;
-  drawDie(c, (dx0 + dx1) / 2, dcy, R, n, this.last || 1);
+  drawDie(c, (dx0 + dx1) / 2, dcy, R, n, this.last || 1, this.pitch, this.yaw);
+  this.dieHit = { cx: (dx0 + dx1) / 2, cy: dcy, r: R + 14 };
 
   c.fillStyle = '#15202b'; c.font = 'bold 11.5px ' + CFONT;
   c.textAlign = 'center'; c.textBaseline = 'top';
@@ -1227,7 +1365,8 @@ Sim.prototype.drawDice = function(){
     c.fillStyle = '#5c6670'; c.font = '10.5px ' + CFONT;
     c.fillText('「振る」を押すと', (dx0 + dx1) / 2, ty);
     c.fillText('その目が手前を向きます', (dx0 + dx1) / 2, ty + 14);
-    ty += 30;
+    c.fillText('ドラッグで回せます', (dx0 + dx1) / 2, ty + 28);
+    ty += 44;
   }
   c.fillStyle = '#c62828'; c.font = 'bold 11.5px ' + CFONT;
   c.fillText('期待値 ' + E.toFixed(3), (dx0 + dx1) / 2, ty + 3);
@@ -1727,13 +1866,35 @@ const NOTE_FAIR =
   + 'これは<b>区分求積法そのもの</b>で、n → ∞ で <i>E</i> = ∫<i>x</i>ρ(<i>x</i>)d<i>x</i> になります。'
   + '読み取り値の「区分和 − 積分」を見てください。この差はきっちり 3/n で消えていきます'
   + '（各区間の右端を代表値に取っているためです）。</div>'
-  + '<div class="note warn"><b>サイコロの形について、正直なところ。</b>'
-  + 'すべての面が同じ形で公平な<b>正多面体は 4・6・8・12・20 面体の 5 種類しかありません</b>。'
+  + '<div class="note warn"><b>32 面体だけは、公平ではありません。</b>'
+  + 'すべての面が対称に移り合う<b>正多面体は 4・6・8・12・20 面体の 5 種類しかありません</b>。'
   + '32 面体はサッカーボール（切頂二十面体、C<sub>60</sub> フラーレンと同じ形）で、'
-  + '正五角形 12 枚と正六角形 20 枚からできています。面の形が 2 種類あるので、'
-  + '本物のサイコロとしては厳密には公平ではありません。'
-  + 'それより多い面数では絵を「粒の集まった球」に切り替えています。'
-  + 'ここでは形の話には立ち入らず、<b>n 通りが等確率で出る</b>とだけ考えています。</div>';
+  + '<b>正五角形 12 枚と正六角形 20 枚</b>という 2 種類の面でできています。'
+  + '面積が違うのですから、出る確率も違います。'
+  + 'ここでは<b>面積に比例する</b>として扱いました。'
+  + '<br>・正五角形（1 辺 1）の面積 1.7205 → 出る確率 <b>0.02370</b>'
+  + '<br>・正六角形（1 辺 1）の面積 2.5981 → 出る確率 <b>0.03578</b>'
+  + '<br>一様なら 1/32 = 0.03125 ですから、'
+  + '<b>五角形は 24 % 出にくく、六角形は 14 % 出やすい</b>ことになります。</div>'
+  + '<div class="note key"><b>ところが、期待値は 16.5 のまま変わりません。</b>'
+  + '五角形に 1〜6 と 27〜32、六角形に 7〜26 を刻んであります'
+  + '（狭い五角形に、端の数字を割り当てました）。'
+  + 'すると<b>五角形の数字の平均も、六角形の数字の平均も、どちらも 16.5</b>。'
+  + 'だから重みを変えても全体の平均は動かないのです。'
+  + '<br><br>'
+  + '<b>変わるのは「ばらつき」のほうです。</b>'
+  + '標準偏差は一様なら 9.233 ですが、面積を考えると <b>8.525</b> に縮みます。'
+  + '真ん中あたりの数字（六角形）が出やすくなったぶん、散らばりが小さくなったのです。'
+  + '<b>期待値だけを見ていては気づけない違い</b>がここにあります。</div>'
+  + '<div class="note"><b>向かい合う面は、足すと 33 になります。</b>'
+  + 'ふつうのサイコロで向かい合う目が足して 7 になるのと同じ作法です。'
+  + '<b>サイコロはドラッグでくるくる回せます</b>ので、'
+  + '手前の面の裏に何番があるか、回して確かめてみてください。'
+  + '五角形は紫、六角形は青で塗り分けてあります。'
+  + '<br><br>'
+  + 'なお 32 面より多い面数では、絵を「粒の集まった球」に切り替え、'
+  + '<b>どの面も等確率</b>として扱っています'
+  + '（面の数がいくつでも公平なサイコロ自体は、すべての面が対称に移り合う形にすれば作れます）。</div>';
 
 const NOTE_BIAS =
   '<div class="note"><b>式は 1 文字も変わりません。</b>'
@@ -1835,12 +1996,18 @@ Sim.prototype.updateReadout = function(){
     let maxP = 0;
     for (let k = 0; k < n; k++) maxP = Math.max(maxP, P[k]);
 
-    R.push(['面の数 n', String(n)]);
+    R.push(['面の数 n', String(n) + (n === 32 ? '（五角 12 + 六角 20）' : '')]);
     R.push(['目の値', mode === 'raw' ? '1 … ' + n
             : (dx).toFixed(3) + ' … ' + LMAX + '（' + n + ' 等分）']);
     R.push(['目の幅 Δx', fmt(dx, 4)]);
-    R.push(['1 つの目が出る確率', this.dist === 'flat'
-            ? '1/' + n + ' = ' + fmt(1/n, 3) : fmt(maxP, 3) + '（最大）']);
+    if (n === 32 && this.dist === 'flat'){
+      const S32 = solid(32);
+      R.push(['五角形の目が出る確率', fmt(S32.F[0].pArea, 4)]);
+      R.push(['六角形の目が出る確率', fmt(S32.F[6].pArea, 4)]);
+    } else {
+      R.push(['1 つの目が出る確率', this.dist === 'flat'
+              ? '1/' + n + ' = ' + fmt(1/n, 3) : fmt(maxP, 3) + '（最大）']);
+    }
     R.push([mode === 'split' ? '確率密度 ρ = P/Δx' : 'P ÷ Δx（Δx = 1）',
             fmt(maxP / dx, 4)]);
     R.push(['期待値 E = Σ xₖPₖ', E.toFixed(4)]);
@@ -1874,6 +2041,18 @@ Sim.prototype.updateReadout = function(){
             + 'いま Δx = 1 なので、<b>確率と確率密度が同じ数</b>になっています ―― '
             + 'この 2 つが混同されやすいのは、まさにここが原因です。'
             + '右の「0〜6 を n 等分」に切り替えてみてください。';
+      } else if (n === 32){
+        const S32 = solid(32);
+        msg = '<b>32 面体（サッカーボール）は、じつは公平ではありません。</b>'
+            + '正五角形 12 枚と正六角形 20 枚でできていて、面積が違うからです。'
+            + '五角形が出る確率は ' + fmt(S32.F[0].pArea, 4) + '、'
+            + '六角形は ' + fmt(S32.F[6].pArea, 4) + '（一様なら ' + fmt(1/32, 4) + '）。'
+            + '<b>それでも期待値は 16.5 のまま</b>です ―― '
+            + '五角形に 1〜6 と 27〜32、六角形に 7〜26 を刻んであり、'
+            + 'どちらの平均も 16.5 だからです。'
+            + 'かわりに<b>ばらつきが ' + sd.toFixed(3) + ' に縮んでいます</b>'
+            + '（一様なら 9.233）。';
+        cls = 'warn';
       } else if (n <= 8){
         msg = '<b>0 〜 6 を ' + n + ' 等分しました。</b>'
             + (n === 6 ? 'n = 6 なので、これはふつうのサイコロそのものです。' : '')
