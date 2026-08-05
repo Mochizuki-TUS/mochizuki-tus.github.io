@@ -397,6 +397,22 @@ function solid(nf){
     f.omega = polySolid(Vn, f.idx);
     f.sides = f.idx.length;
   });
+  /* 同じ形の面は、本当はぴったり同じ面積。数値で拾っているぶん最後の桁だけ
+     ばらつくので、辺の数ごとに均しておく。これをやらないと、たとえば
+     「二つの山」で高さの等しいはずの 2 つの山に僅かな差が付き、
+     「いちばん出やすい目」の印がどちらか一方に片寄ってしまう。 */
+  {
+    const g = {};
+    F.forEach(function(f){
+      const s = f.sides;
+      if (!g[s]) g[s] = { a: 0, o: 0, c: 0 };
+      g[s].a += f.area; g[s].o += f.omega; g[s].c++;
+    });
+    F.forEach(function(f){
+      const q = g[f.sides];
+      f.area = q.a / q.c; f.omega = q.o / q.c;
+    });
+  }
   let sa = 0, so = 0;
   F.forEach(function(f){ sa += f.area; so += f.omega; });
   F.forEach(function(f){ f.pArea = f.area / sa; f.pOmega = f.omega / so; });
@@ -487,8 +503,15 @@ function faceX(k, n, mode){                       // k = 1 … n
 }
 function faceDx(n, mode){ return mode === 'raw' ? 1 : LMAX / n; }
 
-/* 重み（規格化前）。x は目の値。 */
-function weight(dist, x, mu, sig){
+/* 目の取りうる範囲の広さ。'raw' なら 1〜n なので n、'split' なら 0〜LMAX。
+   山の中心と幅は、この範囲に対する割合で持つ（下の spanOf を掛けて使う）。
+   そうしておくと、面の数を変えても山の形が変わらない ―― 変わるのは
+   「その山を何本の棒で刻むか」だけになる。このタブで見せたいのは、まさにそこ。 */
+function spanOf(n, mode){ return mode === 'raw' ? n : LMAX; }
+
+/* 重み（規格化前）。x は目の値。span は目の範囲の広さ。 */
+function weight(dist, x, mu, sig, span){
+  const L = span || LMAX;
   if (dist === 'flat') return 1;
   if (dist === 'norm') return Math.exp(-(x - mu) * (x - mu) / (2 * sig * sig));
   if (dist === 'maxw'){
@@ -498,7 +521,7 @@ function weight(dist, x, mu, sig){
     return x <= 0 ? 0 : x * x * Math.exp(-x * x / (2 * s * s));
   }
   if (dist === 'bimo'){
-    const d = 1.5;
+    const d = L / 4;                                // 山と山の間隔も範囲に比例させる
     return Math.exp(-(x - mu + d) * (x - mu + d) / (2 * sig * sig))
          + Math.exp(-(x - mu - d) * (x - mu - d) / (2 * sig * sig));
   }
@@ -507,10 +530,10 @@ function weight(dist, x, mu, sig){
 
 /* n 面のサイコロの確率 P_k（Σ P_k = 1 になるよう規格化） */
 function probs(n, mode, dist, mu, sig){
-  const P = new Array(n);
+  const P = new Array(n), L = spanOf(n, mode);
   let s = 0;
   for (let k = 1; k <= n; k++){
-    P[k-1] = weight(dist, faceX(k, n, mode), mu, sig) * faceWeight(n, k);
+    P[k-1] = weight(dist, faceX(k, n, mode), mu, sig, L) * faceWeight(n, k);
     s += P[k-1];
   }
   if (s <= 0){ for (let k = 0; k < n; k++) P[k] = 1 / n; return P; }
@@ -565,7 +588,7 @@ function simpson(f, a, b, NQ){
 /* 連続版の確率密度 ρ(x)（区間 [0, LMAX] で規格化）。分割数によらない曲線。 */
 function densCurve(dist, mu, sig){
   const NQ = 2000;
-  const w = function(x){ return weight(dist, x, mu, sig); };
+  const w = function(x){ return weight(dist, x, mu, sig, LMAX); };
   const Z = simpson(w, 0, LMAX, NQ);
   return {
     at: function(x){ return Z > 0 ? w(x) / Z : 0; },
@@ -765,6 +788,12 @@ Superpos.prototype.sdE = function(){
 const app = document.getElementById('qsim');
 const NLIST = [4, 6, 8, 12, 20, 32, 60, 120, 360, 1200];
 
+/* 山の幅の既定値（目の範囲に対する割合）。形ごとに見映えのする値が違う。
+   'norm' の 0.25 は、いちばん端の目でも山のてっぺんの 13 % ほどの高さが残る幅。
+   つまり <b>どの目も確実に出る</b>。'bimo' は 2 つの山がはっきり分かれるように狭く、
+   'maxw' は右の裾が枠の外に逃げないように広めに取る。 */
+const SIGDEF = { norm: 0.25, bimo: 0.13, maxw: 0.38, flat: 0.25 };
+
 function Sim(key, root){
   this.key = key;
   this.root = root;
@@ -772,7 +801,9 @@ function Sim(key, root){
   this.ni = 1;                                   // NLIST の何番目か（既定は 6 面）
   this.mode = 'raw';
   this.dist = key === 'bias' ? 'norm' : 'flat';
-  this.mu = 3.0; this.sig = 0.9;
+  /* 中心と幅は「目の範囲に対する割合」で持つ。0.5 は範囲のまんなか ――
+     12 面なら 6、20 面なら 10、32 面なら 16 が、いちばん出やすい目になる。 */
+  this.muF = 0.5; this.sigF = SIGDEF.norm;
   this.counts = null; this.nRolls = 0; this.sum = 0; this.sum2 = 0; this.last = 0;
   this.pitch = -0.34; this.yaw = 0.30;           // サイコロの向き（ドラッグで変わる）
   /* ③ 波動関数 */
@@ -794,8 +825,13 @@ Sim.prototype.resetCounts = function(){
   for (let k = 0; k < n; k++) this.counts[k] = 0;
   this.nRolls = 0; this.sum = 0; this.sum2 = 0; this.last = 0;
 };
+/* 目の範囲の広さと、そこから決まる山の中心・幅。割合から毎回作り直すので、
+   面の数や目の付け方を変えても、山の形はそのまま付いてくる。 */
+Sim.prototype.span = function(){ return spanOf(this.nFaces(), this.mode); };
+Sim.prototype.mu   = function(){ return this.muF  * this.span(); };
+Sim.prototype.sig  = function(){ return this.sigF * this.span(); };
 Sim.prototype.probs = function(){
-  return probs(this.nFaces(), this.mode, this.dist, this.mu, this.sig);
+  return probs(this.nFaces(), this.mode, this.dist, this.mu(), this.sig());
 };
 
 /* 振る。m 回まとめて振れる。 */
@@ -912,7 +948,13 @@ Sim.prototype.build = function(){
              ['二つの山', 'bimo'],
              ['一様（どの目も同じ）', 'flat']],
         function(){ return self.dist; },
-        function(v){ self.dist = v; self.resetCounts(); self.refresh(); });
+        function(v){
+          self.dist = v;
+          /* 形を変えたら、その形がいちばん見やすい幅に戻す */
+          self.sigF = SIGDEF[v] || SIGDEF.norm;
+          if (self.sSig) self.sSig.inp.value = String(Math.round(self.sigF * 1000));
+          self.resetCounts(); self.refresh();
+        });
       ctrl.appendChild(el('p','hint2','面ごとの重みを決めて、Σ P<sub>k</sub> = 1 になるように割り振っています'));
       ctrl.appendChild(el('hr','sep'));
     }
@@ -942,11 +984,14 @@ Sim.prototype.build = function(){
     if (this.key === 'bias'){
       ctrl.appendChild(el('hr','sep'));
       ctrl.appendChild(el('p','ctlhead','山の位置と幅'));
-      this.sMu = mkSlider('中心 = 3.00', 0, 600, 300, function(v){
-        self.mu = v / 100; self.resetCounts(); self.refresh(); });
-      this.sSig = mkSlider('幅 = 0.90', 20, 250, 90, function(v){
-        self.sig = v / 100; self.resetCounts(); self.refresh(); });
-      ctrl.appendChild(el('p','hint2','「二つの山」では中心の左右 1.5 のところに山が立ちます。'
+      /* スライダーが動かすのは「割合」のほう。札には実際の目の値を出す。 */
+      this.sMu = mkSlider('中心 = 3.00', 20, 980, Math.round(this.muF * 1000), function(v){
+        self.muF = v / 1000; self.resetCounts(); self.refresh(); });
+      this.sSig = mkSlider('幅 = 1.50', 10, 600, Math.round(this.sigF * 1000), function(v){
+        self.sigF = v / 1000; self.resetCounts(); self.refresh(); });
+      ctrl.appendChild(el('p','hint2','中心と幅は<b>目の範囲に合わせて</b>決まります。'
+        + '面の数を変えても<b>山の形はそのまま</b>で、刻みだけが細かくなります。'
+        + '「二つの山」では中心の左右（範囲の 1/4 ずつ）に山が立ち、'
         + '「Maxwell」では中心は使いません'));
     }
 
@@ -1390,7 +1435,7 @@ Sim.prototype.drawDice = function(){
      少し余裕を持たせて、線がいつも枠の内側に来るようにする。 */
   const topP = Math.max(1/6 * 1.12, maxP * 1.12);
   /* 下段は連続版の確率密度で決める。これは n によらないので、目盛が動かない。 */
-  const cont = mode === 'split' ? densCurve(this.dist, this.mu, this.sig) : null;
+  const cont = mode === 'split' ? densCurve(this.dist, this.mu(), this.sig()) : null;
   let topR = maxP / dx * 1.12;
   if (cont){
     let m = 0;
@@ -2008,13 +2053,19 @@ Sim.prototype.updateReadout = function(){
       R.push(['1 つの目が出る確率', this.dist === 'flat'
               ? '1/' + n + ' = ' + fmt(1/n, 3) : fmt(maxP, 3) + '（最大）']);
     }
-    R.push([mode === 'split' ? '確率密度 ρ = P/Δx' : 'P ÷ Δx（Δx = 1）',
-            fmt(maxP / dx, 4)]);
+    if (n === 32 && this.dist === 'flat'){
+      const S32b = solid(32);
+      R.push([mode === 'split' ? '確率密度 ρ（五角 ／ 六角）' : 'P ÷ Δx（五角 ／ 六角）',
+              fmt(S32b.F[0].pArea / dx, 3) + ' ／ ' + fmt(S32b.F[6].pArea / dx, 3)]);
+    } else {
+      R.push([mode === 'split' ? '確率密度 ρ = P/Δx' : 'P ÷ Δx（Δx = 1）',
+              fmt(maxP / dx, 4)]);
+    }
     R.push(['期待値 E = Σ xₖPₖ', E.toFixed(4)]);
     R.push(['標準偏差（ばらつき）', sd.toFixed(4)]);
     if (this.dist !== 'flat') R.push(['いちばん出やすい目', xM.toFixed(3)]);
     if (mode === 'split'){
-      const cont = densCurve(this.dist, this.mu, this.sig);
+      const cont = densCurve(this.dist, this.mu(), this.sig());
       R.push(['連続版 ∫xρ(x)dx', cont.mean.toFixed(4)]);
       R.push(['区分和 − 積分', fmt(E - cont.mean, 3)]);
     }
@@ -2035,24 +2086,39 @@ Sim.prototype.updateReadout = function(){
     });
 
     if (this.key === 'fair'){
-      if (mode === 'raw'){
+      /* 32 面体だけは公平でないので、目の付け方より先にその話をする */
+      if (n === 32){
+        const S32 = solid(32);
+        /* 一様なサイコロだったときの値と比べる */
+        let sd0 = 0;
+        for (let k = 1; k <= n; k++){
+          const d0 = faceX(k, n, mode) - E; sd0 += d0 * d0 / n;
+        }
+        sd0 = Math.sqrt(sd0);
+        msg = '<b>32 面体（サッカーボール）は、じつは公平ではありません。</b>'
+            + '正五角形 12 枚と正六角形 20 枚でできていて、<b>面積が違う</b>からです。'
+            + '面積に比例させると、五角形が出る確率は ' + fmt(S32.F[0].pArea, 4) + '、'
+            + '六角形は ' + fmt(S32.F[6].pArea, 4) + '（一様なら ' + fmt(1/32, 4) + '）。'
+            + '棒の高さが 2 段になっているのが、それです。'
+            + '<br><b>それでも期待値は ' + E.toFixed(4) + ' で、一様のときと同じ</b>です ―― '
+            + '狭い五角形に ' + (mode === 'raw' ? '1〜6 と 27〜32' : '端のほうの目')
+            + '、六角形に' + (mode === 'raw' ? ' 7〜26' : '真ん中の目') + 'を刻んであり、'
+            + 'どちらの組の平均も同じだからです。'
+            + '　かわりに<b>ばらつきが ' + sd0.toFixed(3) + ' → ' + sd.toFixed(3)
+            + ' に縮んでいます</b>。真ん中あたりの目が出やすくなったぶん、'
+            + '散らばりが小さくなりました ―― '
+            + '<b>期待値だけを見ていては気づけない違い</b>です。'
+            + (mode === 'split'
+               ? '　確率密度も 2 段になります。面の種類が 2 つあるのですから、当然です。'
+               : '　いま Δx = 1 なので、確率と確率密度が同じ数に見えています。'
+                 + '「0〜6 を n 等分」に切り替えると、この 2 つが分かれます。');
+        cls = 'warn';
+      } else if (mode === 'raw'){
         msg = '<b>目を 1, 2, …, ' + n + ' に取った場合。</b>'
             + '期待値は (n+1)/2 = ' + E.toFixed(2) + ' で、面を増やすほど大きくなります。'
             + 'いま Δx = 1 なので、<b>確率と確率密度が同じ数</b>になっています ―― '
             + 'この 2 つが混同されやすいのは、まさにここが原因です。'
             + '右の「0〜6 を n 等分」に切り替えてみてください。';
-      } else if (n === 32){
-        const S32 = solid(32);
-        msg = '<b>32 面体（サッカーボール）は、じつは公平ではありません。</b>'
-            + '正五角形 12 枚と正六角形 20 枚でできていて、面積が違うからです。'
-            + '五角形が出る確率は ' + fmt(S32.F[0].pArea, 4) + '、'
-            + '六角形は ' + fmt(S32.F[6].pArea, 4) + '（一様なら ' + fmt(1/32, 4) + '）。'
-            + '<b>それでも期待値は 16.5 のまま</b>です ―― '
-            + '五角形に 1〜6 と 27〜32、六角形に 7〜26 を刻んであり、'
-            + 'どちらの平均も 16.5 だからです。'
-            + 'かわりに<b>ばらつきが ' + sd.toFixed(3) + ' に縮んでいます</b>'
-            + '（一様なら 9.233）。';
-        cls = 'warn';
       } else if (n <= 8){
         msg = '<b>0 〜 6 を ' + n + ' 等分しました。</b>'
             + (n === 6 ? 'n = 6 なので、これはふつうのサイコロそのものです。' : '')
@@ -2081,15 +2147,34 @@ Sim.prototype.updateReadout = function(){
             + '最頻値 ' + xM.toFixed(3) + ' ＜ 平均 ' + E.toFixed(3) + ' ＜ '
             + '二乗平均 ' + Math.sqrt(E*E + sd*sd).toFixed(3) + ' の順に並びます。'
             + '右に裾を引いた分布では、いつもこうなります。';
-      } else if (sd < 0.12){
+      } else if (sd < 0.02 * this.span()){
         msg = '<b>幅がとても狭いので、ほとんど 1 つの目しか出ません。</b>'
             + 'ばらつき ' + sd.toFixed(4) + ' → 0 の極限が、量子力学でいう<b>固有状態</b>で、'
             + 'そのとき出る値が<b>固有値</b>です。タブ④で本物を見ます。';
         cls = 'key';
-      } else {
+      } else if (this.dist === 'flat'){
         msg = '<b>目の出やすさを変えても、E = Σ xₖPₖ の形は変わりません。</b>'
             + '面の数を増やすと、下の段の棒が<b>なめらかな曲線</b>に吸い寄せられていきます。'
             + 'その曲線が確率密度 ρ(x) です。';
+      } else {
+        /* 山の裾がどこまで届いているかを、両端の目の確率で示す。
+           「確率が 0 の目」を作らないのが、この設定のねらい。 */
+        const eLo = P[0] / maxP * 100, eHi = P[n-1] / maxP * 100;
+        msg = '<b>山のてっぺんは ' + fmt(xM, 4) + ' の目。</b>'
+            + '中心と幅は<b>目の範囲に対する割合</b>で決めてあるので、'
+            + '面の数を ' + n + ' に変えても山の形はそのままで、刻みだけが細かくなります。'
+            + '<br><b>いちばん小さい目もいちばん大きい目も、ちゃんと出ます</b> ―― '
+            + '確率は ' + fmt(P[0], 3) + ' と ' + fmt(P[n-1], 3) + '（てっぺんの '
+            + eLo.toFixed(1) + ' % と ' + eHi.toFixed(1) + ' %）。'
+            + '<b>確率 0 の目は 1 つもありません</b>。'
+            + (n === 32
+               ? '　なお 32 面体では、この山の上に<b>五角形と六角形の面積の差</b>が乗ります。'
+                 + '6 番目と 7 番目の面のあいだ、26 番目と 27 番目のあいだで'
+                 + '<b>棒に段が付いている</b>のがそれです ―― '
+                 + '六角形は五角形の ' + fmt(solid(32).F[6].pArea / solid(32).F[0].pArea, 3)
+                 + ' 倍の面積があるからで、タブ①で見た、あの効果です。'
+               : '　面の数を増やすと、下の段の棒が<b>なめらかな曲線</b>'
+                 + '（確率密度 ρ(x)）に吸い寄せられていきます。');
       }
     }
 
@@ -2217,8 +2302,12 @@ Sim.prototype.updateReadout = function(){
 
   /* スライダーの札 */
   if (this.sN)  this.sN.lab.innerHTML  = 'n = ' + this.nFaces();
-  if (this.sMu) this.sMu.lab.innerHTML = '中心 = ' + this.mu.toFixed(2);
-  if (this.sSig)this.sSig.lab.innerHTML= '幅 = ' + this.sig.toFixed(2);
+  /* 山の札は実際の目の値で出す。目が 1〜1200 まで伸びるので、桁は範囲で決める。 */
+  if (this.sMu || this.sSig){
+    const nd = this.span() >= 12 ? 1 : 2;
+    if (this.sMu) this.sMu.lab.innerHTML = '中心 = ' + this.mu().toFixed(nd);
+    if (this.sSig)this.sSig.lab.innerHTML= '幅 = ' + this.sig().toFixed(nd);
+  }
   if (this.sD)  this.sD.lab.innerHTML  = 'n = ' + this.ndiv;
   if (this.sTh) this.sTh.lab.innerHTML = 'theta = ' + Math.round(this.th * 180 / Math.PI) + '°';
   if (this.syncMode) this.syncMode();
