@@ -1046,39 +1046,66 @@ Sim.prototype.drawMode = function(){
   const G0 = 46, G1 = W - mW - 26;
   const M = rotM(D, this.gam);
 
-  /* 時間窓：うなりが 1 周期は入るように取る */
+  /* 時間の窓。うなりが 1 周期は入る幅に取る。
+     いまの時刻が窓の右端に来たら、窓のほうを一緒に動かす（オシロスコープと同じ）。
+     窓を固定したまま t を Tw で折り返すと、赤いカーソルだけが左端へ飛んで
+     曲線が切り替わり、上の質点の絵と食い違ってしまう。 */
   const dw = Math.abs(w1 - w2);
   const Tw = clamp(dw > 1e-6 ? 2.2 * 2 * Math.PI / dw : 120, 24, 150);
+  const t0 = Math.max(0, this.t - Tw);
   if (G1 - G0 > 60){
     frameL(c, G0, By0, G1, By1, '時刻 t', 'その基底で見た成分');
     const cg = Math.cos(this.gam), sg = Math.sin(this.gam);
-    let ymax = 1e-9;
+    /* 縦の目盛りは窓の中身から決めない。窓が動くたびに伸び縮みして、
+       やはり絵と食い違って見えるため。どの基底で見ても |y| ≤ |x₀| なので、
+       それを目安に固定する。 */
+    const ymax = Math.max(1e-9, Math.sqrt(this.x0[0]*this.x0[0] + this.x0[1]*this.x0[1])) * 1.15;
+    const NP = 500;
     const pts = [[], []];
-    for (let i = 0; i <= 400; i++){
-      const t = Tw * i / 400, xx = motion(D, this.x0, t);
-      const y1 = cg * xx[0] + sg * xx[1], y2 = -sg * xx[0] + cg * xx[1];
-      pts[0].push(y1); pts[1].push(y2);
-      ymax = Math.max(ymax, Math.abs(y1), Math.abs(y2));
+    for (let i = 0; i <= NP; i++){
+      const t = t0 + Tw * i / NP, xx = motion(D, this.x0, t);
+      pts[0].push(cg * xx[0] + sg * xx[1]);
+      pts[1].push(-sg * xx[0] + cg * xx[1]);
     }
-    ymax *= 1.15;
-    const gx = function(t){ return G0 + t / Tw * (G1 - G0); };
+    const gx = function(t){ return G0 + (t - t0) / Tw * (G1 - G0); };
     const gy = function(v){ return (By0 + By1) / 2 - v / ymax * (By1 - By0) / 2; };
     c.strokeStyle = 'rgba(31,35,40,.28)'; c.lineWidth = 1;
     c.beginPath(); c.moveTo(G0, gy(0)); c.lineTo(G1, gy(0)); c.stroke();
+
+    /* 横軸の目盛り。窓が動いていることが分かるように、実際の時刻を書く */
+    c.fillStyle = '#5c6670'; c.font = '9px ' + CFONT;
+    c.textAlign = 'center'; c.textBaseline = 'top';
+    for (let k = 0; k <= 4; k++){
+      const tt = t0 + Tw * k / 4, X = gx(tt);
+      c.strokeStyle = 'rgba(31,35,40,.22)'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(X, By1); c.lineTo(X, By1 + 4); c.stroke();
+      c.fillText(tt.toFixed(0), X, By1 + 5);
+    }
+
     ['#1565c0', '#00695c'].forEach(function(col, k){
       c.strokeStyle = col; c.lineWidth = k ? 1.8 : 2.2;
       c.beginPath();
-      for (let i = 0; i <= 400; i++){
+      for (let i = 0; i <= NP; i++){
         const Y = gy(pts[k][i]);
-        if (i === 0) c.moveTo(gx(Tw * i / 400), Y); else c.lineTo(gx(Tw * i / 400), Y);
+        if (i === 0) c.moveTo(gx(t0 + Tw * i / NP), Y);
+        else c.lineTo(gx(t0 + Tw * i / NP), Y);
       }
       c.stroke();
     });
-    /* いまの時刻 */
-    const tc = this.t % Tw;
+
+    /* いまの時刻。窓が動き出したあとは、いつも右端に来る。
+       曲線の上に丸を置いて、上の質点の位置と同じ値であることを示す。 */
+    const tNow = this.t;
+    const yNow = [cg * x[0] + sg * x[1], -sg * x[0] + cg * x[1]];
     c.strokeStyle = 'rgba(198,40,40,.6)'; c.setLineDash([2,3]); c.lineWidth = 1;
-    c.beginPath(); c.moveTo(gx(tc), By0); c.lineTo(gx(tc), By1); c.stroke();
+    c.beginPath(); c.moveTo(gx(this.t), By0); c.lineTo(gx(this.t), By1); c.stroke();
     c.setLineDash([]);
+    ['#1565c0', '#00695c'].forEach(function(col, k){
+      c.fillStyle = col;
+      c.beginPath(); c.arc(gx(tNow), gy(yNow[k]), 3.6, 0, 6.2832); c.fill();
+      c.strokeStyle = '#fff'; c.lineWidth = 1.2; c.stroke();
+    });
+
     const pure = Math.abs(this.gam - e.g) < 0.5 / DEG;
     c.fillStyle = pure ? '#0f4c81' : '#5c6670';
     c.font = (pure ? 'bold ' : '') + '10px ' + CFONT;
@@ -1340,7 +1367,10 @@ Sim.prototype.updateReadout = function(){
     R.push(['D の非対角成分', f3(M[0][1])]);
     R.push(['うなりの周期', Math.abs(w1 - w2) > 1e-6
       ? fmt(2 * Math.PI / Math.abs(w1 - w2), 4) : '—（振動数が同じ）']);
+    const cg2 = Math.cos(this.gam), sg2 = Math.sin(this.gam);
+    R.push(['いまの時刻 t', this.t.toFixed(2)]);
     R.push(['いまの変位 x₁ ／ x₂', f3(x[0]) + ' ／ ' + f3(x[1])]);
+    R.push(['いまの成分 y₁ ／ y₂', f3(cg2*x[0] + sg2*x[1]) + ' ／ ' + f3(-sg2*x[0] + cg2*x[1])]);
     msg = done
       ? '<b>対角化できました。</b>非対角がゼロなので、下のグラフの 2 本は'
         + '<b>それぞれ独立な単振動</b>（ω₁ = ' + f3(w1) + '、ω₂ = ' + f3(w2) + '）。'
