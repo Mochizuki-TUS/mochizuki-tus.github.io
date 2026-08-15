@@ -1,3 +1,14 @@
+---
+myst:
+  html_meta:
+    "description lang=en": "CrystOD (Crystal Orbital Diagram) is a command-line and Python toolkit for the symmetry analysis of crystals and molecules: LCAO crystal-orbital diagrams, SALC and space-group irreducible representations, isotropy subgroups, phonon irreps and symmetry-adapted modulations."
+    "keywords": "CrystOD, crystal orbital diagram, SALC, symmetry-adapted linear combination, space group, irreducible representation, isotropy subgroup, phonon irreps, phonon modulation, crystallography software"
+    "og:title": "CrystOD - Crystal Orbital Diagram"
+    "og:description": "LCAO orbital diagrams for crystals, with full space-group symmetry labels: SALC and crystal-orbital irreps, isotropy subgroups, phonon irreps and symmetry-adapted modulations."
+    "og:url": "https://mochizuki-tus.github.io/CrystOD/"
+    "og:type": "website"
+---
+
 # CrystOD
 
 **CrystOD** draws **LCAO orbital diagrams for crystals**: it takes a crystal
