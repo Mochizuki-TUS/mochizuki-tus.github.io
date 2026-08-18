@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<script src="assets/access-guard.js"></script>
+<title>第10章 分子の量子化学計算を実践する — マテリアル計算科学入門</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      rr: "\\bm{r}",
+      RR: "\\bm{R}",
+      xx: "\\bm{x}",
+      abs: ["\\left|#1\\right|", 1],
+      braket: ["\\langle #1 \\rangle", 1],
+      ket: ["\\left| #1 \\right\\rangle", 1],
+      bra: ["\\left\\langle #1 \\right|", 1],
+      Ham: "\\hat{\\mathcal{H}}",
+      ee: "e_0",
+      eps: "\\varepsilon_0"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">マテリアル計算科学入門 — 目次</a>
+  <span class="series">第III部 多電子系・スピン・全エネルギー / 第10章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第10章</span>分子の量子化学計算を実践する</h1>
+
+<div class="lead">
+  <p>ここまでの9つの章で、量子化学計算に必要な道具はひととおり揃った。変分原理(第3章)で「もっともらしい解」を選ぶ基準を得て、Gauss関数を3個足し合わせたSTO-3G基底(第5章・第6章)で軌道を表す方法を知り、Slater行列式(第7章)で電子の入れ替えに対する反対称性を担保し、Born–Oppenheimer近似(第8章)で原子核を止めてポテンシャルエネルギー曲面を定義し、そして全エネルギーの内訳としてCoulomb項と交換項(第9章)を書き下した。本章では、それらを<strong>実際に計算機で走らせる</strong>。ブラウザだけで動くMolcalcから始めて、PubChemから本物の分子構造を取ってきて、構造緩和・全エネルギー・状態密度(DOS)・分子軌道・波動関数の可視化・振動準位まで、ひととおりの「計算の作法」を身につけるのが目標である。手を動かして得られる数字は、それ自体が答えなのではない。基底関数を粗くすると構造の良し悪しの判定が逆転してしまうことがある、という本章の一件が示すとおり、<em>出てきた数字が信用できるかどうかを判断するのは常に人間の側</em>である。計算を機械にやらせ、意味づけを自分でやる——その分担を身につけるための章である。</p>
+  <div class="goals">
+    <strong>この章で学ぶこと</strong>
+    <ul>
+      <li>Molcalc(GAMESSベース、STO-3G)で自由エネルギー・振動数・分子軌道を出し、Web計算の限界を知る</li>
+      <li>PubChemから分子構造(SDF)を取得し、xyz形式に変換してVESTAで確認するまでの一連の作法</li>
+      <li>構造緩和の実行と読み方、緩和前後の全エネルギー比較、<strong>基底関数を粗くすると安定・不安定の判定が逆転しうる</strong>こと</li>
+      <li>状態密度 $D(E)=\sum_i g_i\,\delta(E-\epsilon_i)$ とGauss拡がり、元素別・軌道別の部分状態密度(PDOS)</li>
+      <li>CH$_4$の分子軌道:$-14.76\ \mathrm{eV}$ の3重縮退 $t_2$(HOMO、電子6個)と $+6.92\ \mathrm{eV}$ の $a_1^{*}$(LUMO)</li>
+      <li>Koopmansの定理 $I_i=-\epsilon_i$ と紫外光電子スペクトル(UPS)との比較、$t_2$:$a_1$ の面積比 3:1</li>
+      <li>cubeファイルによる波動関数の可視化(黄=正、青=負)と、結合性・反結合性の読み取り</li>
+      <li>調和近似 $U=\frac12 kx^2$ から力の定数 $k$、$\omega=\sqrt{k/\mu}$、$E_n=(n+\frac12)\hbar\omega$、波数 $\mathrm{cm}^{-1}$ への換算とスケーリング因子</li>
+    </ul>
+  </div>
+  <div class="prereq"><strong>前提：</strong>第5章(STO-3G基底)、第6章(Gauss基底と厳密解の比較)、第7章(Slater行列式とスピン多重度)、第8章(Born–Oppenheimer近似・ポテンシャルエネルギー曲面・構造最適化)、第9章(全エネルギーの内訳、Coulomb積分 $U$ と交換積分 $J$)。PySCFの導入とPythonの実行環境は付録B「計算環境の準備とPySCF入門」にまとめてある。</div>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec10-1">10.1 まずは Molcalc で触ってみる</a></li>
+    <li><a href="#sec10-2">10.2 PubChem から分子構造を取ってくる</a></li>
+    <li><a href="#sec10-3">10.3 構造緩和を実行する</a></li>
+    <li><a href="#sec10-4">10.4 状態密度(DOS)を描く</a></li>
+    <li><a href="#sec10-5">10.5 CH$_4$ の分子軌道</a></li>
+    <li><a href="#sec10-6">10.6 光電子スペクトルとの比較</a></li>
+    <li><a href="#sec10-7">10.7 波動関数を可視化する</a></li>
+    <li><a href="#sec10-8">10.8 振動準位</a></li>
+    <li><a href="#sec10-9">10.9 計算をするときの心構え</a></li>
+    <li><a href="#sec10-10">10.10 まとめと演習</a></li>
+  </ol>
+</nav>
+
+<p>本章の計算は、すべて次の流れの上に乗っている。まず分子構造を用意し(10.2節)、構造緩和で平衡構造を求め(10.3節)、その構造に対して電子状態を解き、そこから状態密度・分子軌道・波動関数・振動準位を取り出す(10.4〜10.8節)。図10.1にその全体像を示す。以降の節は、この図の各ブロックを順に説明していくものだと思ってよい。</p>
+
+<figure>
+<svg viewBox="0 0 760 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="分子計算のワークフロー:PubChemからの構造取得、xyz変換、構造緩和、各種物性計算">
+  <defs>
+    <marker id="wfarrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0, 10 4, 0 8" fill="#566573"/>
+    </marker>
+  </defs>
+  <rect x="30" y="25" width="200" height="52" rx="8" fill="#eef4f9" stroke="#1a5276" stroke-width="2"/>
+  <text x="130" y="47" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#1a5276">① PubChem で検索</text>
+  <text x="130" y="66" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">組成式 or 化学名 → SDF</text>
+
+  <rect x="30" y="105" width="200" height="52" rx="8" fill="#eef4f9" stroke="#1a5276" stroke-width="2"/>
+  <text x="130" y="127" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#1a5276">② sdf2xyz.py</text>
+  <text x="130" y="146" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">SDF_名前.sdf → XYZ_名前.xyz</text>
+
+  <rect x="30" y="185" width="200" height="52" rx="8" fill="#eef4f9" stroke="#1a5276" stroke-width="2"/>
+  <text x="130" y="207" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#1a5276">③ VESTA で目視確認</text>
+  <text x="130" y="226" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">結合長・結合角を読む</text>
+
+  <rect x="30" y="265" width="200" height="60" rx="8" fill="#eaf5f0" stroke="#14684a" stroke-width="2.4"/>
+  <text x="130" y="288" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#14684a">④ 構造緩和</text>
+  <text x="130" y="307" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">calc_pyscf_relax.py</text>
+
+  <rect x="30" y="353" width="200" height="52" rx="8" fill="#eaf5f0" stroke="#14684a" stroke-width="2"/>
+  <text x="130" y="375" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#14684a">XYZ_名前-finish.xyz</text>
+  <text x="130" y="394" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">平衡構造(力がゼロ)</text>
+
+  <line x1="130" y1="77" x2="130" y2="101" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <line x1="130" y1="157" x2="130" y2="181" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <line x1="130" y1="237" x2="130" y2="261" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <line x1="130" y1="325" x2="130" y2="349" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+
+  <rect x="330" y="45" width="400" height="56" rx="8" fill="#fdf3f1" stroke="#b03a2e" stroke-width="2"/>
+  <text x="530" y="68" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#b03a2e">⑤ 全エネルギー(第8・9章)</text>
+  <text x="530" y="87" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">calc_pyscf.py — 緩和前後の比較、基底依存性</text>
+
+  <rect x="330" y="125" width="400" height="56" rx="8" fill="#fdf3f1" stroke="#b03a2e" stroke-width="2"/>
+  <text x="530" y="148" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#b03a2e">⑥ 状態密度・部分状態密度(10.4節)</text>
+  <text x="530" y="167" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">calc_pyscf_dos.py — 軌道エネルギーと占有数</text>
+
+  <rect x="330" y="205" width="400" height="56" rx="8" fill="#fdf3f1" stroke="#b03a2e" stroke-width="2"/>
+  <text x="530" y="228" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#b03a2e">⑦ 波動関数の可視化(10.7節)</text>
+  <text x="530" y="247" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">calc_pyscf_wf.py → cube → VESTA</text>
+
+  <rect x="330" y="285" width="400" height="56" rx="8" fill="#fdf3f1" stroke="#b03a2e" stroke-width="2"/>
+  <text x="530" y="308" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#b03a2e">⑧ 振動準位(10.8節)</text>
+  <text x="530" y="327" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">calc_pyscf_vib.py — 力の定数と振動エネルギー</text>
+
+  <path d="M 230 379 C 280 379, 285 90, 326 76" fill="none" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <path d="M 230 379 C 285 379, 290 165, 326 156" fill="none" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <path d="M 230 379 C 290 379, 295 240, 326 236" fill="none" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <path d="M 230 379 C 295 379, 300 316, 326 316" fill="none" stroke="#566573" stroke-width="2" marker-end="url(#wfarrow)"/>
+  <text x="300" y="404" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">平衡構造ができてから</text>
+</svg>
+<figcaption>図10.1 本章で行う分子計算のワークフロー。左の列(①〜④)が構造を用意する工程、右の列(⑤〜⑧)が電子状態と振動状態から物理量を取り出す工程である。右の計算はすべて「平衡構造が得られてから」行うのが原則である。</figcaption>
+</figure>
+
+<h2 id="sec10-1">10.1 まずは Molcalc で触ってみる</h2>
+
+<p>いきなりPythonスクリプトを走らせる前に、ブラウザだけで量子化学計算が体験できるサービスに触れておこう。コペンハーゲン大学のJensenらが公開している <em class="term">Molcalc</em>(<a href="https://molcalc.org/">https://molcalc.org/</a>)である。分子を画面上で組み立て、ボタンを押すだけで構造最適化・熱力学量・振動数・分子軌道が返ってくる。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：最初にWebツールを触るのか</p>
+<p>本書のここまでの章では、$1s$軌道1本の重なり積分でさえ紙の上では骨が折れることを見てきた。分子ともなれば、積分の数は基底関数の数 $N$ に対しておよそ $N^4$ に比例して増える。手計算で追える限界はとうに超えている。しかし「計算がどういう<em>答えの形</em>で返ってくるのか」を先に知っておくと、あとで自分でスクリプトを走らせたときに、出力のどこを見ればよいかが分かる。Molcalcは入力の手間がほとんどないので、<strong>出力の型を覚えるための最短経路</strong>として最適である。</p>
+</div>
+
+<h3>10.1.1 Molcalcの中身:GAMESSとSTO-3G</h3>
+
+<p>Molcalcは、内部で <em class="term">GAMESS</em>(General Atomic and Molecular Electronic Structure System)という量子化学計算ソフトウェアを呼び出している。基底関数は <strong>STO-3G</strong>、すなわち第5章で導出した「Slater型軌道をGauss関数3個で近似した最小基底」である。1原子あたりの基底関数の数が最小限なので計算は速いが、そのぶん精度は粗い。原子数が多すぎる分子はサーバ側で計算不可になる。</p>
+
+<p>画面の左側に <code>Optimize</code>(構造緩和)と <code>Calculate Properties</code>(電子状態計算・振動準位計算)のボタンがある。まず <code>Optimize</code> を押して構造を緩和し、次に <code>Calculate Properties</code> を押す、という順番が基本である。結果は4つのタブに分かれて返ってくる。</p>
+
+<ul>
+  <li><strong>Free Energies</strong>:エンタルピー・エントロピー・定圧熱容量の並進/回転/振動成分と、生成熱。</li>
+  <li><strong>Vibrational Frequencies</strong>:基準振動の波数($\mathrm{cm}^{-1}$)の一覧と、各モードのアニメーション。</li>
+  <li><strong>Molecular Orbitals</strong>:分子軌道のエネルギー(eV)一覧と、その等値面表示。</li>
+  <li><strong>Polarity and Solvation</strong>:双極子モーメントと溶媒和自由エネルギー。</li>
+</ul>
+
+<p>たとえばメタン CH$_4$ について <code>Calculate Properties</code> を押すと、Free Energiesタブに表10.1のような数値が並ぶ。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表10.1 MolcalcがCH$_4$について返す熱力学量(298 K, 1 atm、STO-3G)。並進・回転・振動の3成分に分けて表示される。</caption>
+<thead>
+<tr><th>量</th><th>並進</th><th>回転</th><th>振動</th><th>合計</th></tr>
+</thead>
+<tbody>
+<tr><td>エンタルピー $H$ (kJ mol$^{-1}$)</td><td>6.20</td><td>3.72</td><td>119.28</td><td>129.20</td></tr>
+<tr><td>定圧熱容量 $C_p$ (J mol$^{-1}$K$^{-1}$)</td><td>20.79</td><td>12.47</td><td>2.25</td><td>35.51</td></tr>
+<tr><td>エントロピー $S$ (J mol$^{-1}$K$^{-1}$)</td><td>143.35</td><td>62.93</td><td>0.39</td><td>206.66</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>振動のエンタルピーが 119.28 kJ mol$^{-1}$ と飛び抜けて大きいことに気づいてほしい。これは室温の熱エネルギーによる寄与ではなく、その大半が絶対零度でも残る <em class="term">零点エネルギー</em>(zero-point energy)である。10.8節で見るとおり、振動の基底状態のエネルギーは $\frac12\hbar\omega$ であってゼロではない。CH$_4$の9個の振動モードの $\frac12\hbar\omega$ を足し合わせると、確かに 100 kJ mol$^{-1}$ 台になる(演習10.5)。</p>
+
+<div class="box ex">
+<p class="box-title">例題10.1 Molcalcの振動数リストを縮退で分類する</p>
+<p>MolcalcはCH$_4$について次の9個の波数を返した(単位 $\mathrm{cm}^{-1}$)。</p>
+<p>1362.27, 1362.68, 1363.07, 1451.06, 1451.20, 3207.36, 3208.09, 3208.72, 3311.59</p>
+<p>(1) なぜちょうど9個なのか。(2) これらを縮退したグループに分類せよ。</p>
+<p><strong>解答</strong>(1) $N$ 個の原子からなる非直線分子の振動の自由度は $3N-6$ である。全体で $3N$ 個の自由度のうち、分子全体の並進が3、回転が3を占めるからである。CH$_4$は $N=5$ なので $3\times 5-6=9$ となり、リストの個数と一致する。</p>
+<p>(2) 数値が小数第1位まで一致しているものを同じグループとみなすと、</p>
+<p>1362.27/1362.68/1363.07 → <strong>3重縮退</strong>、1451.06/1451.20 → <strong>2重縮退</strong>、3207.36/3208.09/3208.72 → <strong>3重縮退</strong>、3311.59 → <strong>非縮退</strong>。</p>
+<p>すなわち $9=3+2+3+1$ である。本来は完全に縮退しているはずの振動数がわずかにずれているのは、数値計算(有限差分によるHessianの評価)の誤差と、最適化構造がわずかに理想的な正四面体からずれているためである。この $1+2+3+3$ という縮退の構造が、正四面体の対称性(点群 $T_d$)から必然的に決まることは第12章で学ぶ。</p>
+</div>
+
+<h3>10.1.2 Molcalcが返す分子軌道と、その基底依存性</h3>
+
+<p>Molecular Orbitalsタブには、CH$_4$について次の9個の軌道エネルギー(eV)が並ぶ。</p>
+
+<p style="text-align:center">$-300.14,\ -24.76,\ -14.13,\ -14.12,\ -14.12,\ +19.47,\ +19.48,\ +19.48,\ +20.55$</p>
+
+<p>軌道が9個しかないのは、STO-3Gが最小基底だからである。C原子には $1s,\,2s,\,2p_x,\,2p_y,\,2p_z$ の5個、H原子には $1s$ が1個ずつで4個、合わせて9個の基底関数しかない。基底関数を $N$ 個用意すれば分子軌道もちょうど $N$ 個できる、という対応は第11章の永年方程式で明確になる。電子は10個(C:6個、H:4個)なので、下から5個の軌道が2個ずつ電子で埋まる。最低の $-300.14\ \mathrm{eV}$ はC-$1s$の内殻軌道であり、化学結合には関与しない。</p>
+
+<div class="box warn">
+<p class="box-title">注意：粗い基底では空軌道の順番さえ変わる</p>
+<p>STO-3Gで得られた空軌道は $+19.47$(3重縮退)と $+20.55$ である。ところが、後で10.5節で見るように、より柔軟な 6-31G 基底で同じCH$_4$を計算すると、空軌道は $+6.92$(非縮退)と $+8.78$(3重縮退)となり、<strong>最低空軌道(LUMO)の縮退度そのものが入れ替わる</strong>。占有軌道(結合を担う軌道)は $-24.76 \to -25.77$、$-14.12 \to -14.80$ と大きくは変わらないのに、である。<em>最小基底で得られる空軌道は、定量的にはまったく信用してはいけない</em>。空軌道は分子の外側に広がりたがるが、最小基底には「外側に広がる関数」が用意されていないためである。基底関数の柔軟さがなぜ効くのかは第6章で見たとおりである。</p>
+</div>
+
+<p>Molcalcは手軽だが、(i) 基底がSTO-3Gに固定、(ii) 原子数の上限がある、(iii) 出力をファイルとして自分の解析に流し込めない、という制約がある。そこで以降は、第6章以来使ってきた <em class="term">PySCF</em> に舞台を移し、Molcalcにある機能をすべて自分の手元で再現する。まずは計算する分子の構造を手に入れるところからである。</p>
+
+<h2 id="sec10-2">10.2 PubChem から分子構造を取ってくる</h2>
+
+<p>計算を始めるには、原子の並び(座標)が要る。水素原子やHe原子のように原子1個なら座標は原点だけで済んだが、分子ではそうはいかない。世の中の分子の構造は、幸いなことにデータベースとして整備されている。ここでは米国NIHが運営する <em class="term">PubChem</em>(<a href="https://pubchem.ncbi.nlm.nih.gov/">https://pubchem.ncbi.nlm.nih.gov/</a>)を使う。</p>
+
+<h3>10.2.1 組成式で探すか、化学名で探すか</h3>
+
+<p>検索窓に組成式 <code>C6H12O6</code> を入れると、候補が大量に出てくる。C$_6$H$_{12}$O$_6$ はグルコース(ブドウ糖)だけでなく、フルクトース、ガラクトース、マンノースなど多数の異性体が同じ組成式をもつからである。目的の物質が決まっているなら、<strong>化学名で検索するほうが速い</strong>。D-グルコースの環状構造(ピラノース形)なら <code>D-Glucopyranose</code> と入れればよい。すると次の情報をもつ候補が一意に見つかる。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表10.2 PubChemで <code>D-Glucopyranose</code> を検索して得られる情報。</caption>
+<tbody>
+<tr><th>Compound CID</th><td>5793</td></tr>
+<tr><th>分子式 (MF)</th><td>C$_6$H$_{12}$O$_6$</td></tr>
+<tr><th>分子量 (MW)</th><td>180.16 g mol$^{-1}$</td></tr>
+<tr><th>IUPAC名</th><td>(3R,4S,5S,6R)-6-(hydroxymethyl)oxane-2,3,4,5-tetrol</td></tr>
+<tr><th>InChIKey</th><td>WQZGKKKJIJFFOK-GASJEMHNSA-N</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>物質を一意に指定する識別子としては <strong>CID</strong>(PubChem Compound ID)と <strong>InChIKey</strong> が便利である。論文やレポートに「グルコースを計算した」と書くだけでは、どの異性体・どの立体配置を使ったのかが伝わらない。CIDを併記しておけば誤解がない。</p>
+
+<h3>10.2.2 3D Conformer と SDF のダウンロード</h3>
+
+<p>目的の化合物のページを開くと、「1.2 3D Conformer」という項目がある。ここに三次元の分子模型が表示され、右上の <code>Download Coordinates</code> から座標ファイルを保存できる。SDFの欄の <code>Save</code> をクリックすると、<code>Conformer3D_COMPOUND_CID_5793.sdf</code> というファイルが手に入る。</p>
+
+<p><em class="term">SDF</em>(structure-data file)は、原子の元素記号と座標に加えて、どの原子とどの原子が何重結合で結ばれているかという結合表(bond block)をもつ形式である。化学情報の世界では標準的だが、可視化ソフトによっては読めないことがあり、量子化学計算の入力としても冗長である。</p>
+
+<div class="box warn">
+<p class="box-title">注意：PubChemの3D構造は「量子化学の平衡構造」ではない</p>
+<p>PubChemの3D Conformerは、多くの場合<em>古典力場</em>(MMFF94など)で生成された「それらしい」立体構造である。第8章で定義したポテンシャルエネルギー曲面 $E(\{\bm{R}_I\})$ の極小点、すなわち量子化学計算の平衡構造とは一般に一致しない。したがって、ダウンロードした構造をそのまま使うのではなく、<strong>必ず自分の手法・基底で構造緩和をかけ直す</strong>(10.3節)。また同じ分子でも配座(conformer)は複数あり、PubChemでは「Conformer 1 of 8」のように複数用意されていることも多い。どれを取ったかを記録しておくこと。</p>
+</div>
+
+<h3>10.2.3 ファイル名の作法</h3>
+
+<p>ダウンロードしたファイルは <code>Conformer3D_COMPOUND_CID_5793.sdf</code> という機械的な名前をしている。このまま作業ディレクトリに放り込むと、1週間後の自分が「5793って何だったか」と悩むことになる。そこで、<strong>SDFファイルは <code>SDF_{物質名}.sdf</code>、xyzファイルは <code>XYZ_{物質名}.xyz</code> という規則で名前を付け替えておく</strong>。こうしておけば、<code>ls</code> を打った瞬間に「どの物質のどんなファイルがあるか」が一目で分かる。</p>
+
+<pre><code><span class="prompt">$</span> cp ~/Downloads/Conformer3D_COMPOUND_CID_5793.sdf .
+<span class="prompt">$</span> cp Conformer3D_COMPOUND_CID_5793.sdf SDF_D-glucose.sdf
+<span class="prompt">$</span> ls
+calc_pyscf.py        SDF_D-glucose.sdf    XYZ_CH4.xyz
+calc_pyscf_dos.py    sdf2xyz.py           XYZ_H.xyz
+calc_pyscf_relax.py  XYZ_B.xyz            XYZ_He.xyz
+calc_pyscf_vib.py    XYZ_Be.xyz           XYZ_N.xyz
+calc_pyscf_wf.py     XYZ_C.xyz            XYZ_O.xyz</code></pre>
+<p class="codecap">コード10.1 ダウンロードしたSDFファイルを、内容が分かる名前に付け替える。元のファイルも消さずに残しておくと、CIDを後から確認できる。</p>
+
+<h3>10.2.4 SDFからxyzへの変換と、xyz形式の書式</h3>
+
+<p>講義で配布されている <code>sdf2xyz.py</code> を使うと、SDFから結合表を落として座標だけを取り出したxyzファイルが得られる。</p>
+
+<pre><code><span class="prompt">$</span> python3 sdf2xyz.py --sdf SDF_D-glucose.sdf
+Converted: SDF_D-glucose.sdf -&gt; XYZ_D-glucose.xyz</code></pre>
+<p class="codecap">コード10.2 SDF から xyz への変換。出力ファイル名は入力名の <code>SDF_</code> を <code>XYZ_</code> に置き換えたものになる。</p>
+
+<p><em class="term">xyz形式</em>は、量子化学計算でもっともよく使われる素朴なテキスト形式である。書式は次の3つの規則だけである。</p>
+
+<div class="box def">
+<p class="box-title">定義：xyz形式</p>
+<ol>
+  <li><strong>1行目</strong>:原子数(整数1個だけ)。</li>
+  <li><strong>2行目</strong>:コメント行。何を書いてもよい(空行でもよい)。分子名・出典・単位などを書いておくとよい。</li>
+  <li><strong>3行目以降</strong>:1行につき1原子。元素記号と $x,\ y,\ z$ 座標を空白区切りで書く。<strong>長さの単位はオングストローム($1\ \text{Å}=10^{-10}\ \mathrm{m}$)</strong>。</li>
+</ol>
+</div>
+
+<pre><code>3
+H2O molecule  r(OH)=0.96 A, angle(HOH)=104.5 deg
+O    0.000000    0.000000    0.000000
+H    0.759062    0.587729    0.000000
+H   -0.759062    0.587729    0.000000</code></pre>
+<p class="codecap">コード10.3 水分子のxyzファイル(<code>XYZ_H2O.xyz</code>)。原子の並び順に決まりはないが、後で出力を読むとき混乱しないよう、重い原子から書く習慣をつけるとよい。</p>
+
+<div class="box ex">
+<p class="box-title">例題10.2 水分子のxyzファイルを自分で作る</p>
+<p>O–H結合長 $r=0.96\ \text{Å}$、H–O–H結合角 $\theta=104.5^\circ$ の水分子について、O原子を原点に置き、分子を $xy$ 面内に、$y$ 軸を二等分線にとったときの水素原子の座標を求めよ。</p>
+<p><strong>解答</strong> 二等分線から各O–H結合までの角度は $\theta/2 = 52.25^\circ$ である。O原子から見た水素の位置ベクトルは、大きさ $r$、$y$ 軸となす角 $\theta/2$ であるから、</p>
+$$
+\begin{align}
+x &amp;= \pm r\sin\frac{\theta}{2} = \pm 0.96 \times \sin 52.25^\circ = \pm 0.96\times 0.79081 = \pm 0.75906\ \text{Å},\notag\\
+y &amp;= r\cos\frac{\theta}{2} = 0.96 \times \cos 52.25^\circ = 0.96\times 0.61207 = 0.58773\ \text{Å},\notag\\
+z &amp;= 0 .\notag
+\end{align}
+$$
+<p>よってコード10.3のとおりとなる。検算として、2つの水素の距離は $2\times 0.75906 = 1.51812\ \text{Å}$ であり、余弦定理 $d=\sqrt{2r^2(1-\cos\theta)}=\sqrt{2\times0.96^2\times(1-(-0.24756))}=1.5181\ \text{Å}$ と一致する。</p>
+</div>
+
+<h3>10.2.5 VESTAで眺める</h3>
+
+<p>座標ができたら、計算に投入する前に必ず<strong>目で見る</strong>。結晶構造可視化ソフト <em class="term">VESTA</em> はxyz形式も読めるので、次のように開けばよい(macOSの例)。</p>
+
+<pre><code><span class="prompt">$</span> open -a VESTA XYZ_D-glucose.xyz</code></pre>
+<p class="codecap">コード10.4 xyzファイルをVESTAで開く。Windowsではファイルをダブルクリック、あるいはVESTAにドラッグ&amp;ドロップすればよい。</p>
+
+<p>VESTAでは分子をぐるぐる回して眺められるだけでなく、原子を2つクリックすれば<strong>結合長</strong>が、3つクリックすれば<strong>結合角</strong>が読める。D-グルコースなら、6員環(ピラノース環)が椅子形になっていること、C–O結合が約 1.4 Å、C–H結合が約 1.1 Å であることなどをその場で確認できる。画面下部のOutput欄には原子数と結合数(この構造では24原子・32結合)が表示される。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：計算する前に必ず絵を見るのか</p>
+<p>座標ファイルの取り違え、単位の取り違え(Å と Bohr)、原子の重なり、水素の付け忘れといった事故は、数値だけ眺めていても気づきにくい。しかし絵にすれば一瞬で分かる。「原子が2個くっついて団子になっている」「分子が2つ重なっている」といった構造は、SCF計算が収束しなかったり、あり得ない全エネルギーを返したりする原因になる。<strong>計算時間が長い仕事ほど、投入前の目視確認の費用対効果は大きい</strong>。</p>
+</div>
+
+<h2 id="sec10-3">10.3 構造緩和を実行する</h2>
+
+<p>構造緩和(構造最適化、geometry optimization)とは、第8章で導入したポテンシャルエネルギー曲面</p>
+$$
+\begin{equation}
+E(\{\bm{R}_I\}) = \min_{\psi}\ \frac{\braket{\psi|\Ham_{\mathrm{el}}(\{\bm{R}_I\})|\psi}}{\braket{\psi|\psi}} + \sum_{I\lt J}\frac{Z_I Z_J \ee^2}{4\pi\eps\abs{\bm{R}_I-\bm{R}_J}}
+\label{eq:10-pes}
+\end{equation}
+$$
+<p>の極小点を探す作業である。$\Ham_{\mathrm{el}}$ は原子核を固定したときの電子系のハミルトニアン、第2項は核間反発である。Born–Oppenheimer近似(第8章)のおかげで、原子核の位置 $\{\bm{R}_I\}$ は「動かせるパラメータ」として扱えるのだった。極小点では、すべての原子に働く力</p>
+$$
+\begin{equation}
+\bm{F}_I = -\frac{\partial E}{\partial \bm{R}_I}
+\label{eq:10-force}
+\end{equation}
+$$
+<p>がゼロになる。すなわち構造緩和とは、式 \eqref{eq:10-pes} の曲面の上で式 \eqref{eq:10-force} の力がすべての原子についてゼロになる点を探す作業にほかならない。この力はHellmann–Feynmanの定理(第8章)によって波動関数から直接計算できるので、「力を計算する → 力の向きに原子を少し動かす → 電子状態を解き直す」という手続きを、力が十分小さくなるまで繰り返せばよい。</p>
+
+<h3>10.3.1 実行と、出力の読み方</h3>
+
+<p>D-グルコース(24原子)を 6-31G 基底、閉殻(スピン多重度1)で緩和してみよう。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_relax.py --xyz XYZ_D-glucose.xyz --spin 0 --basis 6-31g</code></pre>
+<p class="codecap">コード10.5 構造緩和の実行。<code>--spin</code> はPySCFの流儀で $2S$(不対電子の数)を指定する。閉殻分子なら <code>0</code> である。</p>
+
+<p>実行すると、内部で geomeTRIC という最適化ライブラリが呼ばれ、次のようなログが1ステップごとに流れる。</p>
+
+<pre><code>Step  20 : Displace = 3.194e-03/1.351e-02 (rms/max) Trust = 3.000e-01 (=) Grad = 8.707e-05/1.712e-04 (rms/max) E (change) = -683.0329609087 (-2.811e-06) Quality = 1.350
+Step  21 : Displace = 1.732e-03/6.261e-03 (rms/max) Trust = 3.000e-01 (=) Grad = 6.012e-05/1.476e-04 (rms/max) E (change) = -683.0329621255 (-1.217e-06) Quality = 1.274
+Step  22 : Displace = 6.254e-04/1.609e-03 (rms/max) Trust = 3.000e-01 (=) Grad = 2.309e-05/5.726e-05 (rms/max) E (change) = -683.0329624172 (-2.917e-07) Quality = 1.204
+Converged!
+
+<span class="cmt">========================================</span>
+ PySCF Geometry Optimization
+<span class="cmt">========================================</span>
+XYZ file     : XYZ_D-glucose.xyz
+Basis        : 6-31g
+Method       : RHF
+Theory       : scf
+Charge       : 0
+Spin (2S)    : 0
+Text output  : relax_XYZ_D-glucose.txt
+<span class="cmt">----------------------------------------</span>
+Optimization finished.
+Final energy : -18586.273591 eV
+Output XYZ   : XYZ_D-glucose-finish.xyz</code></pre>
+<p class="codecap">コード10.6 構造緩和の出力(末尾)。24原子の分子では、構造緩和のためのSCF計算が23回(Step 0 から Step 22 まで)繰り返され、約960秒かかった。</p>
+
+<p>読むべき数字は次の4つである。</p>
+
+<ul>
+  <li><strong>Grad</strong>:力(エネルギー勾配)の二乗平均と最大値。これが収束判定の主役である。上の例では最終的に最大 $5.7\times10^{-5}$ まで落ちている。</li>
+  <li><strong>E (change)</strong>:全エネルギーと、前ステップからの変化量。単位はHartree。変化量が $10^{-6}$ Hartree(約 $3\times10^{-5}$ eV)を切れば十分収束している。</li>
+  <li><strong>Displace</strong>:原子がどれだけ動いたか。最終ステップでは最大 $1.6\times10^{-3}$ Bohr、すなわち $10^{-3}$ Å 程度しか動いていない。</li>
+  <li><strong>Converged!</strong>:上の3つがすべて閾値を下回った合図。<em>この表示が出ていない結果を使ってはいけない</em>。</li>
+</ul>
+
+<p>最終的な全エネルギーは $-683.0329624172$ Hartree と表示されている。eVに直すには $1\ \mathrm{Hartree}=27.211386\ \mathrm{eV}$ を掛けて</p>
+$$
+-683.0329624172 \times 27.211386 = -18586.2736\ \mathrm{eV}
+$$
+<p>となり、出力の <code>Final energy : -18586.273591 eV</code> と一致する。緩和後の構造は <code>XYZ_D-glucose-finish.xyz</code> というファイルに書き出される。<strong>元の <code>XYZ_D-glucose.xyz</code> は上書きされない</strong>ので、緩和前後の比較ができる。</p>
+
+<div class="box note">
+<p class="box-title">数学ノート：SCFループと構造緩和ループは二重になっている</p>
+<p>混同しやすいので整理しておく。内側のループは <em class="term">SCF</em>(self-consistent field、自己無撞着場)であり、<strong>原子核を固定したまま</strong>、電子の軌道と有効ポテンシャルが互いに矛盾しなくなるまで繰り返す。外側のループが構造緩和で、<strong>SCFが1回収束するごとに1ステップ進む</strong>。上の例では外側が23ステップ回ったので、SCF計算そのものは(数値微分による力の評価も含めて)少なくとも23回実行されたことになる。原子数が多いと時間がかかるのは、SCF1回あたりのコストと、外側のステップ数が両方増えるためである。</p>
+</div>
+
+<h3>10.3.2 緩和前後の全エネルギーを比べる</h3>
+
+<p>構造緩和が意味のある仕事をしたかどうかは、緩和前と緩和後で全エネルギーを比べれば分かる。単純に、同じ手法・同じ基底で1点計算(single point calculation)を2回走らせればよい。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_D-glucose.xyz --spin 0 --basis 6-31g
+<span class="cmt">========================================</span>
+ PySCF Calculation
+<span class="cmt">========================================</span>
+XYZ file     : XYZ_D-glucose.xyz
+Basis        : 6-31g
+Charge       : 0
+Spin (2S)    : 0
+Theory       : scf
+<span class="cmt">----------------------------------------</span>
+Method       : RHF
+Total Energy : -18585.549008 eV
+&lt;S^2&gt;        : 0.000000
+Multiplicity : 1.0
+
+<span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_D-glucose-finish.xyz --spin 0 --basis 6-31g
+...
+Total Energy : -18586.273591 eV</code></pre>
+<p class="codecap">コード10.7 緩和前(PubChemの構造)と緩和後の全エネルギーを 6-31G 基底で比較する。</p>
+
+<p>差を取ると</p>
+$$
+\begin{equation}
+\Delta E = E_{\text{緩和後}} - E_{\text{緩和前}} = -18586.273591 - (-18585.549008) = -0.724583\ \mathrm{eV}
+\label{eq:10-dE631g}
+\end{equation}
+$$
+<p>である。確かにエネルギーが下がっている。これを化学でなじみのある単位に直すと、$1\ \mathrm{eV} = 96.485\ \mathrm{kJ\,mol^{-1}}$ より</p>
+$$
+0.724583\ \mathrm{eV} \times 96.485\ \mathrm{kJ\,mol^{-1}\,eV^{-1}} = 69.9\ \mathrm{kJ\,mol^{-1}}
+$$
+<p>となる。水素結合1本が 20 kJ mol$^{-1}$ 程度であることを思えば、決して無視できない大きさである。PubChemの力場構造が量子化学の平衡構造からそれなりにずれていた、ということである。</p>
+
+<h3>10.3.3 余談:基底関数を落とすと判定が逆転する</h3>
+
+<p>ここからが本節の山場である。まったく同じ2つの構造を、今度は STO-3G 基底で計算してみよう。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_D-glucose.xyz --spin 0
+Basis        : sto-3g
+Total Energy : -18352.694979 eV
+
+<span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_D-glucose-finish.xyz --spin 0
+Basis        : sto-3g
+Total Energy : -18352.345758 eV</code></pre>
+<p class="codecap">コード10.8 同じ2つの構造を STO-3G 基底で計算する(<code>--basis</code> を省略すると既定の sto-3g になる)。</p>
+
+<p>今度は</p>
+$$
+\begin{equation}
+\Delta E^{\mathrm{STO\text{-}3G}} = -18352.345758-(-18352.694979) = +0.349221\ \mathrm{eV}
+\label{eq:10-dEsto3g}
+\end{equation}
+$$
+<p>と、<strong>緩和後のほうがエネルギーが高い</strong>という結果になる。6-31G では 0.72 eV 安定化していたはずの構造が、STO-3G では 0.35 eV 不安定と判定されてしまった。符号が逆である。</p>
+
+<figure>
+<svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="6-31G基底とSTO-3G基底で、構造緩和前後の全エネルギー差の符号が逆転することを示す図">
+  <defs>
+    <marker id="dnarrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#14684a"/>
+    </marker>
+    <marker id="uparrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#b03a2e"/>
+    </marker>
+  </defs>
+  <rect x="25" y="25" width="345" height="290" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="2"/>
+  <text x="197" y="50" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#14684a">6-31G 基底</text>
+  <line x1="70" y1="80" x2="70" y2="290" stroke="#566573" stroke-width="1.5"/>
+  <text x="52" y="190" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573" transform="rotate(-90 52 190)">全エネルギー(低いほど安定)</text>
+  <line x1="110" y1="120" x2="340" y2="120" stroke="#566573" stroke-width="2.5"/>
+  <text x="225" y="112" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">緩和前  −18585.549 eV</text>
+  <line x1="110" y1="250" x2="340" y2="250" stroke="#14684a" stroke-width="3"/>
+  <text x="225" y="270" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#14684a">緩和後  −18586.274 eV</text>
+  <line x1="95" y1="122" x2="95" y2="246" stroke="#14684a" stroke-width="2" marker-end="url(#dnarrow)"/>
+  <text x="180" y="192" text-anchor="middle" font-family="sans-serif" font-size="13.5" font-weight="bold" fill="#14684a">ΔE = −0.725 eV</text>
+  <text x="180" y="210" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#14684a">(安定化した)</text>
+
+  <rect x="390" y="25" width="345" height="290" rx="10" fill="#fdf3f1" stroke="#b03a2e" stroke-width="2"/>
+  <text x="562" y="50" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#b03a2e">STO-3G 基底(同じ2構造)</text>
+  <line x1="435" y1="80" x2="435" y2="290" stroke="#566573" stroke-width="1.5"/>
+  <line x1="475" y1="250" x2="705" y2="250" stroke="#566573" stroke-width="2.5"/>
+  <text x="590" y="270" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">緩和前  −18352.695 eV</text>
+  <line x1="475" y1="187" x2="705" y2="187" stroke="#b03a2e" stroke-width="3"/>
+  <text x="590" y="179" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">緩和後  −18352.346 eV</text>
+  <line x1="460" y1="248" x2="460" y2="191" stroke="#b03a2e" stroke-width="2" marker-end="url(#uparrow)"/>
+  <text x="590" y="130" text-anchor="middle" font-family="sans-serif" font-size="13.5" font-weight="bold" fill="#b03a2e">ΔE = +0.349 eV</text>
+  <text x="590" y="148" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">(不安定化した!?)</text>
+  <text x="380" y="330" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">縦軸のスケールは両パネル共通(1 eV = 179 px)。基底が違うと全エネルギーの絶対値は 233 eV も異なるので、左右のパネルを直接つなぐことはできない。</text>
+</svg>
+<figcaption>図10.2 D-グルコースの構造緩和前後の全エネルギー。6-31G(左)では緩和によって 0.725 eV 安定化するが、STO-3G(右)では同じ2つの構造の順序が逆転し、0.349 eV 不安定という判定になる。</figcaption>
+</figure>
+
+<div class="box warn">
+<p class="box-title">注意：荒い基底では「安定・不安定」の判定が逆転しうる</p>
+<p>変分原理(第3章)が保証するのは、<strong>同じ構造・同じ基底の中で</strong>エネルギーが低い波動関数ほど良い、ということだけである。「基底Aで計算した構造1のエネルギー」と「基底Bで計算した構造2のエネルギー」を比べても意味はない。さらに厄介なのは、上の例のように<em>同じ基底で2構造を比べても、その基底が粗すぎると差の符号を誤る</em>ことがある点である。STO-3Gは原子1個あたりの関数の数が最小限なので、原子の周りの電子分布のわずかな変形(結合角がすこし変わったときの電子雲の追随)を表現できない。その表現力不足は構造ごとに異なる大きさで効くので、$0.3$ eV 程度の差なら簡単にひっくり返る。</p>
+<p>実務上の教訓は3つである。(i) <strong>比較する2つの計算は、基底も手法も収束条件も完全に揃える</strong>。(ii) <strong>関心のあるエネルギー差より十分小さい誤差しか出ない基底を使う</strong>。(iii) <strong>結論が基底を変えても変わらないことを確認する</strong>(基底関数の収束テスト)。</p>
+</div>
+
+<div class="box why">
+<p class="box-title">なぜ？：なぜ基底を大きくすると全エネルギーが下がるのか</p>
+<p>変分原理により、試行関数の自由度を増やせば増やすほど、最小化されたエネルギーは真の値に向かって単調に下がる(第3章)。基底関数の集合が大きくなることは、試行関数の自由度が増えることそのものである。実際、D-グルコースの全エネルギーは STO-3G で $-18352.69$ eV、6-31G で $-18585.55$ eV と、$233$ eV も下がっている。この $233$ eV は化学結合のエネルギー(1本あたり数 eV)よりはるかに大きいが、<strong>ほとんどが内殻電子の記述の改善による</strong>もので、化学には効かない「下駄」である。だから絶対値の比較は無意味で、<em>差だけが物理的に意味をもつ</em>。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.3 単位換算の練習</p>
+<p>(1) 式 \eqref{eq:10-dEsto3g} の $+0.349221$ eV を kJ mol$^{-1}$ に直せ。(2) 構造緩和の最終ステップでのエネルギー変化 $-2.917\times 10^{-7}$ Hartree は何 eV か。(3) この変化量は室温の熱エネルギー $k_{\mathrm{B}}T$($T=300$ K で約 $0.026$ eV)の何分の1か。</p>
+<p><strong>解答</strong>(1) $0.349221\times 96.485 = 33.7\ \mathrm{kJ\,mol^{-1}}$。</p>
+<p>(2) $-2.917\times10^{-7}\times 27.211386 = -7.94\times10^{-6}\ \mathrm{eV}$。</p>
+<p>(3) $0.026/7.94\times10^{-6} \approx 3.3\times10^{3}$ 倍。すなわち収束判定は室温の熱ゆらぎの3000分の1以下の精度で行われている。構造緩和の収束条件が「行き過ぎではないか」と思うほど厳しいのは、力(エネルギーの微分)を精度よく求めるには、エネルギーそのものをそれよりずっと高い精度で求める必要があるからである。</p>
+</div>
+
+<h2 id="sec10-4">10.4 状態密度(DOS)を描く</h2>
+
+<p>平衡構造が得られたら、次はその構造での電子状態を調べる。もっとも見通しのよい表示が <em class="term">状態密度</em>(density of states, DOS)である。</p>
+
+<div class="box def">
+<p class="box-title">定義：状態密度</p>
+<p>あるエネルギー $E$ の付近に、電子が入れる状態がどれだけ密に存在するかを表す量を状態密度という。分子軌道のエネルギーを $\epsilon_i$($i=1,2,\dots,M$、$M$ は基底関数の数)とすると、</p>
+$$
+\begin{equation}
+D(E)=\sum_{i=1}^{M} g_i\,\delta(E-\epsilon_i)
+\label{eq:10-dos-delta}
+\end{equation}
+$$
+<p>と定義される。$g_i$ は1本の分子軌道が収容できる電子数で、スピンを区別しない閉殻計算(RHF)では $g_i=2$(上向きと下向き)である。$\delta$ はDiracのデルタ関数で、$\int D(E)\,\dd E = 2M$ が成り立つ。</p>
+</div>
+
+<p>固体では軌道が連続的なエネルギーバンドをつくるので $D(E)$ は文字どおり連続関数になる(第14章)。一方、分子の軌道エネルギーは飛び飛びなので、式 \eqref{eq:10-dos-delta} のままでは無限に細い針が何本も立っているだけの絵になってしまい、見づらい。そこでデルタ関数を幅 $\sigma$ のGauss関数で置き換える。</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+D(E)=\sum_{i=1}^{M} g_i\,\frac{1}{\sigma\sqrt{2\pi}}\exp\!\left[-\frac{(E-\epsilon_i)^2}{2\sigma^2}\right]
+\label{eq:10-dos-gauss}
+\end{equation}
+$$
+</div>
+
+<p>これを <em class="term">Gauss拡がり</em>(Gaussian broadening)という。$\sigma\to 0$ の極限で式 \eqref{eq:10-dos-delta} に戻る。Gauss関数の全積分は1なので、$\sigma$ をどう選んでもピークの<strong>面積</strong>は変わらない。変わるのは高さと幅だけである。<code>calc_pyscf_dos.py</code> の既定値は $\sigma=0.300$ eV である。</p>
+
+<div class="box note">
+<p class="box-title">数学ノート：GaussかLorentzか</p>
+<p>デルタ関数を近似する関数には、Gauss関数のほかにLorentz関数</p>
+$$
+\delta(E-\epsilon_i)\ \to\ \frac{1}{\pi}\frac{\gamma}{(E-\epsilon_i)^2+\gamma^2}
+$$
+<p>もよく使われる。どちらも $\int(\cdots)\dd E=1$ に規格化されている。Lorentz型は裾が $1/E^2$ でゆっくり落ちるので、離れたピークどうしが重なりやすい。実験スペクトルの線幅は、状態の有限寿命に由来する場合はLorentz型、装置分解能や不均一な広がりに由来する場合はGauss型になることが多い。分子のDOSに入れる幅は<strong>単に絵を見やすくするための人為的な幅</strong>であって、物理的な寿命幅ではないことに注意してほしい。</p>
+</div>
+
+<h3>10.4.1 部分状態密度(PDOS)</h3>
+
+<p>DOSの本当の威力は、「どの原子の、どの軌道が、どのエネルギーに寄与しているか」を分解できる点にある。分子軌道はLCAO(基底関数の線形結合)で</p>
+$$
+\begin{equation}
+\phi_i(\bm{r})=\sum_{\mu=1}^{M} c_{\mu i}\,\chi_\mu(\bm{r})
+\label{eq:10-lcao}
+\end{equation}
+$$
+<p>と書ける($\chi_\mu$ は原子に置かれた基底関数、第5章のSTO-3Gなど)。式 \eqref{eq:10-lcao} の係数 $c_{\mu i}$ は、第11章で導く永年方程式を解いて決まる量である。この $i$ 番目の分子軌道のうち、基底関数 $\mu$ がどれだけの割合を占めているかを表す重み $w_{i\mu}$ を決められれば、</p>
+$$
+\begin{equation}
+D_\alpha(E)=\sum_{i}\ \sum_{\mu\in\alpha} w_{i\mu}\; g_i\,\frac{1}{\sigma\sqrt{2\pi}}\exp\!\left[-\frac{(E-\epsilon_i)^2}{2\sigma^2}\right]
+\label{eq:10-pdos}
+\end{equation}
+$$
+<p>として、原子(あるいは元素、あるいは $s$/$p$/$d$ 軌道)ごとの <em class="term">部分状態密度</em>(partial DOS, PDOS)が定義できる。ここで $\mu\in\alpha$ は「グループ $\alpha$ に属する基底関数についての和」を意味する。</p>
+
+<p>重みの決め方には流儀がある。素朴には $|c_{\mu i}|^2$ を使いたくなるが、基底関数どうしが直交していない($S_{\mu\nu}=\int\chi_\mu^*\chi_\nu\,\dd^3r \neq \delta_{\mu\nu}$、第5章の重なり積分)ため、$\sum_\mu |c_{\mu i}|^2 \neq 1$ となってしまう。そこで重なり行列 $S$ の平方根を使って基底を直交化してから係数を取る <em class="term">Löwdin射影</em></p>
+$$
+\begin{equation}
+w_{i\mu}=\left|\left(S^{1/2}C\right)_{\mu i}\right|^{2},
+\qquad \sum_{\mu=1}^{M} w_{i\mu}=1
+\label{eq:10-lowdin}
+\end{equation}
+$$
+<p>が広く使われる($C$ は係数 $c_{\mu i}$ を並べた行列)。<code>calc_pyscf_dos.py</code> の出力に <code>Projection : lowdin</code> と書かれているのはこの意味である。$\sum_\mu w_{i\mu}=1$ が成り立つので、すべてのPDOSを足すと必ず全DOSに戻る。</p>
+
+<h3>10.4.2 グルコースのDOSを描く</h3>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_dos.py --xyz XYZ_D-glucose-finish.xyz --spin 0 --basis 6-31g \
+      --xrange -30 10 --element-pdos
+<span class="cmt">========================================</span>
+ PySCF DOS-like Calculation
+<span class="cmt">========================================</span>
+XYZ file     : XYZ_D-glucose-finish.xyz
+Method       : RHF
+Theory       : scf
+Basis        : 6-31g
+Total Energy : -18586.273591 eV
+Charge       : 0
+Spin (2S)    : 0
+Projection   : lowdin
+DOS mode     : gaussian broadening
+Gaussian sigma: 0.300 eV
+Energy zero  : absolute MO energy
+Plot output  : DOS_XYZ_D-glucose-finish.pdf
+CSV output   : DOS_XYZ_D-glucose-finish.csv
+Text output  : DOS_XYZ_D-glucose-finish.txt
+Element PDOS : C(s), C(p), H(s), O(s), O(p)</code></pre>
+<p class="codecap">コード10.9 元素別・軌道別の部分状態密度を計算する。<code>--xrange -30 10</code> は横軸の範囲(eV)、<code>--element-pdos</code> は元素ごとのPDOSを出すオプション。オプションを忘れたら <code>python3 calc_pyscf_dos.py --help</code> と打てばよい。</p>
+
+<p>出てきたPDOSを見ると、$-30$ eV から $-11$ eV あたりまでが占有された価電子帯にあたり、そのうち <strong>もっとも高い占有軌道(HOMO)付近は O-$2p$ と C-$2p$ で構成されている</strong>ことが分かる。一方 $+4$ eV より上の空軌道側は H-$s$ の寄与が大きい。グルコースは C, H, O の3元素からなるが、化学的に反応しやすい「一番外側の電子」がどの原子のどの軌道に住んでいるかが、この一枚の図から読み取れるわけである。</p>
+
+<h3>10.4.3 CH$_4$のDOSと、そこから読めること</h3>
+
+<p>グルコースは24原子もあって準位が混み合っているので、もっと単純なCH$_4$で練習しよう。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_dos.py --xyz XYZ_CH4.xyz --spin 0 --basis 6-31g --xrange -30 10
+ PySCF DOS-like Calculation
+<span class="cmt">----------------------------------------</span>
+Total Energy : -1093.361059 eV
+Gaussian sigma: 0.300 eV
+
+MO projected weights:
+spin        MO   energy(eV)     occ        s        p        d        f
+<span class="cmt">-----------------------------------------------------------------------</span>
+restricted   1   -305.00055       2   1.0000   0.0000   0.0000   0.0000
+restricted   2    -25.71378       2   1.0000   0.0000   0.0000   0.0000
+restricted   3    -14.76147       2   0.4275   0.5725   0.0000   0.0000
+restricted   4    -14.76090       2   0.4275   0.5725   0.0000   0.0000
+restricted   5    -14.76075       2   0.4275   0.5725   0.0000   0.0000
+restricted   6      6.91612       0   1.0000   0.0000   0.0000   0.0000
+restricted   7      8.77636       0   0.6643   0.3357   0.0000   0.0000
+restricted   8      8.77645       0   0.6643   0.3357   0.0000   0.0000
+restricted   9      8.77674       0   0.6644   0.3356   0.0000   0.0000
+restricted  10     20.26052       0   0.2080   0.7920   0.0000   0.0000
+restricted  11     20.26068       0   0.2080   0.7920   0.0000   0.0000
+restricted  12     20.26099       0   0.2080   0.7920   0.0000   0.0000</code></pre>
+<p class="codecap">コード10.10 CH$_4$のDOS計算。各分子軌道のエネルギー、占有数(occ)、$s$/$p$/$d$/$f$ 成分の重み(式 \eqref{eq:10-lowdin} のLöwdin重み)が表になって出てくる。</p>
+
+<p>この表とDOSの図(図10.3)を見比べると、次のことが読み取れる。</p>
+
+<ul>
+  <li>$-305.00$ eV の軌道はC-$1s$の内殻軌道である。図の範囲($-30$ eV 以上)には現れない。</li>
+  <li>$-25.71$ eV に非縮退の軌道が1本、占有数2。$s$ 成分100%である。</li>
+  <li>$-14.76$ eV に<strong>3本の軌道がほぼ完全に縮退</strong>しており、占有数はいずれも2、合わせて<strong>電子6個</strong>。$s$ が 42.75%、$p$ が 57.25% である。これがHOMOである。</li>
+  <li>$+6.92$ eV に占有数0の軌道が1本($s$ 成分100%)。これがLUMOである。</li>
+  <li>$+8.78$ eV に3重縮退の空軌道。</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CH4の状態密度と部分状態密度。−25.7 eVのa1ピークと−14.76 eVの3重縮退t2ピーク、正のエネルギー側の空軌道ピーク">
+  <rect x="95" y="45" width="620" height="275" fill="#ffffff" stroke="#566573" stroke-width="1"/>
+  <line x1="95" y1="320" x2="715" y2="320" stroke="#566573" stroke-width="1.5"/>
+  <line x1="95" y1="320" x2="95" y2="45" stroke="#566573" stroke-width="1.5"/>
+  <g font-family="sans-serif" font-size="12" fill="#566573" text-anchor="middle">
+    <text x="95" y="338">−30</text><text x="172.5" y="338">−25</text><text x="250" y="338">−20</text>
+    <text x="327.5" y="338">−15</text><text x="405" y="338">−10</text><text x="482.5" y="338">−5</text>
+    <text x="560" y="338">0</text><text x="637.5" y="338">5</text><text x="715" y="338">10</text>
+  </g>
+  <g font-family="sans-serif" font-size="12" fill="#566573" text-anchor="end">
+    <text x="88" y="324">0</text><text x="88" y="266">2</text><text x="88" y="208">4</text>
+    <text x="88" y="151">6</text><text x="88" y="93">8</text>
+  </g>
+  <text x="405" y="360" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">軌道エネルギー (eV)</text>
+  <text x="30" y="182" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333" transform="rotate(-90 30 182)">DOS (states/eV)</text>
+  <polyline fill="none" stroke="#14684a" stroke-width="2.2" points="95.0,320.0 144.6,319.9 146.2,319.7 147.7,319.0 149.2,317.5 150.8,314.4 152.3,308.6 153.9,299.3 155.4,286.5 157.0,271.3 158.6,256.6 160.1,246.3 161.7,243.2 163.2,248.5 164.8,260.4 166.3,275.5 167.8,290.3 169.4,302.3 170.9,310.5 172.5,315.5 174.1,318.1 175.6,319.3 177.2,319.7 313.5,319.8 315.1,319.4 316.7,318.3 318.2,315.4 319.8,308.9 321.3,296.1 322.9,274.1 324.4,241.0 325.9,198.3 327.5,152.2 329.1,112.9 330.6,91.4 332.1,94.2 333.7,120.4 335.2,162.1 336.8,208.3 338.3,249.2 339.9,279.9 341.5,299.7 343.0,310.8 344.6,316.3 346.1,318.6 347.6,319.6 349.2,319.9 651.4,319.8 653.0,319.3 654.6,318.1 656.1,315.6 657.6,310.7 659.2,302.5 660.8,290.6 662.3,275.9 663.9,260.7 665.4,248.7 667.0,243.3 668.5,246.1 670.0,256.3 671.6,270.9 673.1,286.1 674.7,299.1 676.2,308.4 677.8,314.2 679.4,317.1 680.9,317.8 682.5,316.4 684.0,311.8 685.5,301.8 687.1,283.6 688.6,254.7 690.2,215.1 691.8,169.3 693.3,126.1 694.9,96.9 696.4,90.2 697.9,108.2 699.5,145.4 701.1,191.1 702.6,234.9 704.1,269.7 705.7,293.4 707.2,307.4 708.8,314.7 710.4,318.0 711.9,319.3 713.4,319.8 715.0,319.9"/>
+  <polyline fill="none" stroke="#1a5276" stroke-width="1.6" points="95.0,320.0 144.6,319.9 146.2,319.7 147.7,319.0 149.2,317.5 150.8,314.4 152.3,308.6 153.9,299.3 155.4,286.5 157.0,271.3 158.6,256.6 160.1,246.3 161.7,243.2 163.2,248.5 164.8,260.4 166.3,275.5 167.8,290.3 169.4,302.3 170.9,310.5 172.5,315.5 174.1,318.1 175.6,319.3 177.2,319.7 315.1,319.8 316.7,319.3 318.2,318.0 319.8,315.3 321.3,309.8 322.9,300.4 324.4,286.2 325.9,268.0 327.5,248.2 329.1,231.5 330.6,222.3 332.1,223.5 333.7,234.7 335.2,252.5 336.8,272.2 338.3,289.7 339.9,302.9 341.5,311.3 343.0,316.1 344.6,318.4 346.1,319.4 347.6,319.8 651.4,319.8 653.0,319.3 654.6,318.1 656.1,315.6 657.6,310.7 659.2,302.5 660.8,290.6 662.3,275.9 663.9,260.7 665.4,248.7 667.0,243.3 668.5,246.1 670.0,256.3 671.6,270.9 673.1,286.1 674.7,299.1 676.2,308.4 677.8,314.2 679.4,317.2 680.9,318.2 682.5,317.5 684.0,314.5 685.5,307.9 687.1,295.8 688.6,276.6 690.2,250.3 691.8,219.9 693.3,191.2 694.9,171.8 696.4,167.3 697.9,179.3 699.5,204.0 701.1,234.4 702.6,263.5 704.1,286.6 705.7,302.3 707.2,311.6 708.8,316.5 710.4,318.7 711.9,319.5 713.4,319.9 715.0,320.0"/>
+  <polyline fill="none" stroke="#b03a2e" stroke-width="1.6" stroke-dasharray="6,4" points="95.0,320.0 313.5,319.9 315.1,319.7 316.7,319.0 318.2,317.4 319.8,313.6 321.3,306.3 322.9,293.7 324.4,274.8 325.9,250.3 327.5,223.9 329.1,201.5 330.6,189.1 332.1,190.7 333.7,205.7 335.2,229.6 336.8,256.0 338.3,279.5 339.9,297.0 341.5,308.4 343.0,314.7 344.6,317.9 346.1,319.2 347.6,319.7 679.4,319.9 680.9,319.6 682.5,318.9 684.0,317.3 685.5,313.9 687.1,307.8 688.6,298.1 690.2,284.8 691.8,269.4 693.3,254.9 694.9,245.1 696.4,242.9 697.9,248.9 699.5,261.4 701.1,276.7 702.6,291.4 704.1,303.1 705.7,311.1 707.2,315.8 708.8,318.2 710.4,319.3 711.9,319.8 715.0,320.0"/>
+  <g font-family="sans-serif" font-size="12.5">
+    <line x1="440" y1="60" x2="470" y2="60" stroke="#14684a" stroke-width="2.2"/><text x="476" y="64" fill="#333">total</text>
+    <line x1="440" y1="78" x2="470" y2="78" stroke="#1a5276" stroke-width="1.6"/><text x="476" y="82" fill="#333">s-PDOS</text>
+    <line x1="440" y1="96" x2="470" y2="96" stroke="#b03a2e" stroke-width="1.6" stroke-dasharray="6,4"/><text x="476" y="100" fill="#333">p-PDOS</text>
+  </g>
+  <text x="150" y="232" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#14684a">a₁(2電子)</text>
+  <text x="150" y="248" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">−25.71 eV</text>
+  <text x="332" y="78" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#14684a">t₂ = HOMO(6電子)</text>
+  <text x="332" y="94" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">−14.76 eV(3重縮退)</text>
+  <text x="622" y="120" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">LUMO a₁*</text>
+  <text x="622" y="136" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">+6.92 eV</text>
+  <text x="700" y="72" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">t₂*</text>
+  <line x1="343" y1="300" x2="655" y2="300" stroke="#566573" stroke-width="1.2" stroke-dasharray="4,4"/>
+  <text x="500" y="294" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">HOMO–LUMOギャップ 21.68 eV(電子が入れる状態がない)</text>
+</svg>
+<figcaption>図10.3 CH$_4$の状態密度(RHF/6-31G、$\sigma=0.300$ eV)。実線が全DOS、細実線が $s$ 成分、破線が $p$ 成分のPDOS。$-14.76$ eV のピークは3本の縮退した軌道が重なったもので、高さが $-25.71$ eV のピークのちょうど3倍になっている。C-$1s$($-305$ eV)は図の範囲外。</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題10.4 DOSのピークの高さを予言する</p>
+<p>式 \eqref{eq:10-dos-gauss} で $\sigma=0.300$ eV としたとき、(1) 完全に縮退した3本の占有軌道がつくるピークの高さ、(2) 非縮退の占有軌道1本がつくるピークの高さを求め、図10.3と照合せよ。</p>
+<p><strong>解答</strong> Gauss関数のピーク高さは $E=\epsilon_i$ で $\dfrac{1}{\sigma\sqrt{2\pi}}$ である。$\sigma=0.300$ eV なら</p>
+$$
+\frac{1}{0.300\times\sqrt{2\pi}}=\frac{1}{0.300\times 2.50663}=\frac{1}{0.751988}=1.3298\ \mathrm{eV^{-1}} .
+$$
+<p>(1) 3本の軌道が同じエネルギーにあり、各軌道が $g_i=2$ 個の電子を収容できるので、状態数は $3\times 2=6$。よって高さは $6\times 1.3298 = 7.98\ \mathrm{states/eV}$。</p>
+<p>(2) 状態数は2なので $2\times1.3298=2.66\ \mathrm{states/eV}$。</p>
+<p>図10.3のピークの高さ(約8.0と約2.7)と一致する。<strong>比がちょうど 3:1 になっている</strong>ことに注目してほしい。これは10.6節で光電子スペクトルと比較するときの決め手になる。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：DOSの縦軸は「電子の数」ではなく「入れる状態の数」</p>
+<p>式 \eqref{eq:10-dos-delta} の $D(E)$ は、その場所に電子が<em>実際に入っているか</em>ではなく、<em>入れる箱がいくつあるか</em>を数えている。図10.3で $+6.92$ eV や $+8.78$ eV にもピークが立っているのはそのためで、これらは占有数0の空軌道である。実際に入っている電子数を知りたければ、占有軌道だけを足した</p>
+$$
+N=\int_{-\infty}^{E_{\mathrm{HOMO}}} D(E)\,\dd E
+$$
+<p>を計算する。CH$_4$なら $2+2+6=10$ 個で、C(6個)+ H$_4$(4個)と一致する。</p>
+</div>
+
+<h2 id="sec10-5">10.5 CH$_4$ の分子軌道</h2>
+
+<p>コード10.10の表は、実はCH$_4$の化学結合の全体像をそのまま含んでいる。読み解いていこう。</p>
+
+<h3>10.5.1 電子はどこに入っているか</h3>
+
+<p>CH$_4$の電子数は $6+4\times1=10$ 個である。表の占有数(occ)を上から足すと $2+2+2+2+2=10$ となり、5本の軌道が埋まっている。内訳は</p>
+
+<div class="tablewrap">
+<table>
+<caption>表10.3 CH$_4$の占有分子軌道(RHF/6-31G)。$s$、$p$ はLöwdin射影による成分比。</caption>
+<thead>
+<tr><th>MO</th><th>$\epsilon_i$ (eV)</th><th>占有数</th><th>$s$</th><th>$p$</th><th>正体</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>$-305.00$</td><td>2</td><td>1.000</td><td>0.000</td><td>C-$1s$ 内殻</td></tr>
+<tr><td>2</td><td>$-25.71$</td><td>2</td><td>1.000</td><td>0.000</td><td>$a_1$ 結合性(C-$2s$ + H-$1s$)</td></tr>
+<tr><td>3,4,5</td><td>$-14.76$</td><td>2 ずつ(計6)</td><td>0.428</td><td>0.573</td><td>$t_2$ 結合性(C-$2p$ + H-$1s$)= <strong>HOMO</strong></td></tr>
+<tr><td>6</td><td>$+6.92$</td><td>0</td><td>1.000</td><td>0.000</td><td>$a_1^{*}$ 反結合性 = <strong>LUMO</strong></td></tr>
+<tr><td>7,8,9</td><td>$+8.78$</td><td>0</td><td>0.664</td><td>0.336</td><td>$t_2^{*}$ 反結合性</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>である。<strong>$-14.76$ eV の軌道に電子が6個入っている</strong>——これが本節でいちばん覚えてほしい事実である。同じエネルギーの軌道が3本あり、それぞれに2個ずつ電子が入るからである。</p>
+
+<h3>10.5.2 $s$ 成分と $p$ 成分が語ること</h3>
+
+<p>表10.3の $s$ と $p$ の欄は、単なる数字の羅列ではない。MO 2($-25.71$ eV)は $p$ 成分がぴったり 0 である。つまりこの軌道はC-$2p$をまったく含まず、C-$2s$と4個のH-$1s$だけからできている。一方 MO 3–5($-14.76$ eV)は $s$ が 0.4275、$p$ が 0.5725 で、C-$2p$ が半分以上を占める。しかもこちらには C-$2s$ が混ざっていない。</p>
+
+<div class="box phys">
+<p class="box-title">物理的意味：なぜ $s$ と $p$ はきれいに分離するのか</p>
+<p>正四面体構造のCH$_4$では、C-$2s$軌道はどの方向にも等しく広がる(球対称)。4個の水素をすべて等価に扱う「全部同符号」の組み合わせ $\chi_{a_1}\propto(1s_{\mathrm{H}_1}+1s_{\mathrm{H}_2}+1s_{\mathrm{H}_3}+1s_{\mathrm{H}_4})$ とだけ重なりをもち、符号が入れ替わる組み合わせとは重なりがちょうど打ち消して 0 になる。逆にC-$2p_z$のように向きをもつ軌道は、「上の2個のHが $+$、下の2個が $-$」というような符号の変わる組み合わせと重なる。両者は<em>そもそも重なり積分がゼロ</em>なので、混ざりようがない。したがってCH$_4$の価電子軌道は、必ず「$s$ 型 1本」と「$p$ 型 3本」に分かれる。</p>
+<p>この「重なりがゼロになるかどうかは対称性だけで決まる」という主張を、群論の言葉(既約表現・指標表)で定式化するのが第12章である。そこで使われる記号 $a_1$ と $t_2$ は、まさに表10.3の分類そのものである($a$ は非縮退、$t$ は3重縮退を意味する)。</p>
+</div>
+
+<h3>10.5.3 分子軌道ダイアグラム</h3>
+
+<p>以上をまとめると、図10.4のような <em class="term">分子軌道ダイアグラム</em>(molecular orbital diagram)が描ける。左に4個の水素がつくる群軌道、右に炭素の原子軌道、中央に両者が混ざってできた分子軌道を置く。</p>
+
+<figure>
+<svg viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CH4の分子軌道ダイアグラム。H4群軌道とC原子軌道からa1、t2の結合性軌道と反結合性軌道ができる">
+  <line x1="60" y1="55" x2="60" y2="410" stroke="#566573" stroke-width="1.5"/>
+  <g font-family="sans-serif" font-size="11.5" fill="#566573" text-anchor="end">
+    <text x="54" y="95">10</text><text x="54" y="172">0</text><text x="54" y="249">−10</text>
+    <text x="54" y="327">−20</text><text x="54" y="404">−30</text>
+  </g>
+  <g stroke="#566573" stroke-width="1">
+    <line x1="55" y1="90.9" x2="65" y2="90.9"/><line x1="55" y1="168.2" x2="65" y2="168.2"/>
+    <line x1="55" y1="245.5" x2="65" y2="245.5"/><line x1="55" y1="322.7" x2="65" y2="322.7"/>
+    <line x1="55" y1="400" x2="65" y2="400"/>
+  </g>
+  <text x="24" y="230" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333" transform="rotate(-90 24 230)">エネルギー (eV)</text>
+
+  <!-- H4 group orbitals (left) -->
+  <line x1="140" y1="287.9" x2="200" y2="287.9" stroke="#1a5276" stroke-width="3"/>
+  <text x="170" y="305" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#1a5276">a₁</text>
+  <text x="170" y="281" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">↑↓</text>
+  <line x1="105" y1="258.6" x2="145" y2="258.6" stroke="#1a5276" stroke-width="3"/>
+  <line x1="150" y1="258.6" x2="190" y2="258.6" stroke="#1a5276" stroke-width="3"/>
+  <line x1="195" y1="258.6" x2="235" y2="258.6" stroke="#1a5276" stroke-width="3"/>
+  <text x="170" y="245" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#1a5276">t₂</text>
+  <text x="125" y="252" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">↑</text>
+  <text x="170" y="252" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">↑</text>
+  <text x="215" y="252" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">—</text>
+  <text x="170" y="440" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#1a5276">4H(H₄群軌道)</text>
+  <text x="170" y="458" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1s の4通りの組み合わせ</text>
+
+  <!-- CH4 MOs (center) -->
+  <line x1="372" y1="366.8" x2="428" y2="366.8" stroke="#14684a" stroke-width="3.5"/>
+  <text x="400" y="384" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#14684a">a₁(結合性) −25.71 eV</text>
+  <text x="400" y="360" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#b03a2e">↑↓</text>
+  <line x1="340" y1="282.2" x2="374" y2="282.2" stroke="#14684a" stroke-width="3.5"/>
+  <line x1="383" y1="282.2" x2="417" y2="282.2" stroke="#14684a" stroke-width="3.5"/>
+  <line x1="426" y1="282.2" x2="460" y2="282.2" stroke="#14684a" stroke-width="3.5"/>
+  <text x="357" y="276" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#b03a2e">↑↓</text>
+  <text x="400" y="276" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#b03a2e">↑↓</text>
+  <text x="443" y="276" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#b03a2e">↑↓</text>
+  <text x="400" y="300" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#14684a">t₂(結合性)= HOMO  −14.76 eV</text>
+  <line x1="372" y1="114.7" x2="428" y2="114.7" stroke="#14684a" stroke-width="3.5" stroke-dasharray="none"/>
+  <text x="400" y="108" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#b03a2e">a₁*(反結合性)= LUMO  +6.92 eV</text>
+  <line x1="340" y1="100.3" x2="374" y2="100.3" stroke="#14684a" stroke-width="3.5"/>
+  <line x1="383" y1="100.3" x2="417" y2="100.3" stroke="#14684a" stroke-width="3.5"/>
+  <line x1="426" y1="100.3" x2="460" y2="100.3" stroke="#14684a" stroke-width="3.5"/>
+  <text x="400" y="88" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">t₂*(反結合性)  +8.78 eV</text>
+  <text x="400" y="440" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#14684a">CH₄ 分子軌道</text>
+  <text x="400" y="458" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">数値は RHF/6-31G の計算値</text>
+
+  <!-- C atomic orbitals (right) -->
+  <line x1="600" y1="333.5" x2="660" y2="333.5" stroke="#b03a2e" stroke-width="3"/>
+  <text x="630" y="351" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">C-2s</text>
+  <text x="630" y="327" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">↑↓</text>
+  <line x1="565" y1="256.3" x2="599" y2="256.3" stroke="#b03a2e" stroke-width="3"/>
+  <line x1="608" y1="256.3" x2="642" y2="256.3" stroke="#b03a2e" stroke-width="3"/>
+  <line x1="651" y1="256.3" x2="685" y2="256.3" stroke="#b03a2e" stroke-width="3"/>
+  <text x="582" y="250" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">↑</text>
+  <text x="625" y="250" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">↑</text>
+  <text x="668" y="250" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#566573">—</text>
+  <text x="630" y="240" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">C-2p</text>
+  <text x="630" y="440" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#b03a2e">C 原子軌道</text>
+  <text x="630" y="458" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">C-1s(−305 eV)は図の下方外</text>
+
+  <!-- correlation lines -->
+  <g stroke="#566573" stroke-width="1.2" stroke-dasharray="5,4" fill="none">
+    <line x1="200" y1="287.9" x2="372" y2="366.8"/>
+    <line x1="200" y1="287.9" x2="372" y2="114.7"/>
+    <line x1="600" y1="333.5" x2="428" y2="366.8"/>
+    <line x1="600" y1="333.5" x2="428" y2="114.7"/>
+    <line x1="235" y1="258.6" x2="340" y2="282.2"/>
+    <line x1="235" y1="258.6" x2="340" y2="100.3"/>
+    <line x1="565" y1="256.3" x2="460" y2="282.2"/>
+    <line x1="565" y1="256.3" x2="460" y2="100.3"/>
+  </g>
+  <text x="290" y="180" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">結合性は下がり</text>
+  <text x="290" y="196" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">反結合性は上がる</text>
+  <text x="530" y="60" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">価電子8個(C:4 + H:4)は</text>
+  <text x="530" y="76" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">a₁ に2個、t₂ に6個</text>
+</svg>
+<figcaption>図10.4 CH$_4$の分子軌道ダイアグラム。中央の分子軌道のエネルギーはRHF/6-31Gの計算値、左右の原子軌道側は目安の位置(拡張Hückel法で標準的に用いられる H-$1s$: $-13.6$ eV、C-$2s$: $-21.4$ eV、C-$2p$: $-11.4$ eV を参考にした模式)である。8個の価電子は $a_1$ に2個、$t_2$ に6個入り、反結合性軌道はすべて空である。</figcaption>
+</figure>
+
+<p>図の読み方を確認しておこう。</p>
+
+<ol>
+  <li>まず4個の水素の $1s$ 軌道を、CH$_4$の対称性に合った4通りの組み合わせ(<em class="term">群軌道</em>、symmetry-adapted linear combination)に組み替える。全部同符号のものが1本($a_1$)、符号が入れ替わるものが3本($t_2$)できる。</li>
+  <li>炭素側の $2s$ は $a_1$ 型、$2p_x,2p_y,2p_z$ は $t_2$ 型である。</li>
+  <li><strong>同じ型どうししか混ざらない。</strong>$a_1$ と $a_1$ から結合性 $a_1$ と反結合性 $a_1^{*}$ が、$t_2$ と $t_2$ から結合性 $t_2$(3本)と反結合性 $t_2^{*}$(3本)ができる。</li>
+  <li>価電子8個(炭素の $2s^2 2p^2$ で4個、水素4個で4個)を下から詰めると、$a_1$ に2個、$t_2$ に6個入り、ちょうど結合性軌道だけが満たされる。反結合性は空である。だからCH$_4$は安定な分子で、結合次数は形式的に4本ぶんになる。</li>
+</ol>
+
+<div class="box warn">
+<p class="box-title">注意：「4本の等価なsp³混成軌道」との折り合い</p>
+<p>高校や学部1年の化学では、CH$_4$の結合を「4本の等価な $sp^3$ 混成軌道」で説明する。この描像は結合の<em>向き</em>(正四面体、109.47°)を理解するには優れているが、そのまま読むと「4本の結合はすべて同じエネルギー」という誤った期待を生む。実際には図10.4のとおり、価電子は $-25.71$ eV と $-14.76$ eV という<strong>2つの異なるエネルギー</strong>に分かれている。</p>
+<p>両者は矛盾しない。$a_1$ と $t_2$ の4本の分子軌道を適当に線形結合し直せば、4本の等価な局在軌道($sp^3$的な描像)がつくれるからである。全電子密度も全エネルギーも変わらない。しかし<strong>軌道エネルギーという物理量は、線形結合で混ぜ直すと定義できなくなる</strong>。次節で見るように、光電子分光は $-14.76$ eV と $-25.71$ eV に対応する2本のピークを実際に観測する。実験が見ているのは $a_1$/$t_2$ の描像のほうである。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.5 HOMO–LUMOギャップとその意味</p>
+<p>表10.3から、CH$_4$のHOMO–LUMOギャップを求めよ。またこの値から、CH$_4$が可視光(波長 400–800 nm、光子エネルギー 1.6–3.1 eV)を吸収するかどうかを論じよ。</p>
+<p><strong>解答</strong> ギャップは</p>
+$$
+\Delta = \epsilon_{\mathrm{LUMO}}-\epsilon_{\mathrm{HOMO}} = 6.92-(-14.76) = 21.68\ \mathrm{eV}
+$$
+<p>である。可視光の光子エネルギーよりはるかに大きいので、CH$_4$は可視光では電子励起を起こさない。実際メタンは無色透明である。</p>
+<p>ただし注意が必要である。Hartree–Fock法の軌道エネルギー差は励起エネルギーを大きく過大評価することが知られており(電子を1個励起したときの軌道の緩和と電子相関を無視しているため)、実測のCH$_4$の最低励起エネルギーは 9 eV 程度(真空紫外領域)である。<em>ギャップの数値そのものを実験と比べるのは危険で、「可視光より十分大きい」といった定性的な議論にとどめるべき</em>である。バンドギャップの計算は固体でも同じ困難を抱えており、第14章で再び触れる。</p>
+</div>
+
+<h2 id="sec10-6">10.6 光電子スペクトルとの比較</h2>
+
+<p>計算した軌道エネルギーは、実験で確かめられるのだろうか。確かめられる。<em class="term">光電子分光</em>(photoelectron spectroscopy)がそれである。</p>
+
+<h3>10.6.1 光電子分光とは</h3>
+
+<p>物質に、エネルギー $h\nu$ の光(紫外線ならUPS、X線ならXPS)を当てると、電子が飛び出す。飛び出した電子の運動エネルギー $E_{\mathrm{kin}}$ を測れば、エネルギー保存則から、その電子がもともと束縛されていたエネルギー(<em class="term">イオン化エネルギー</em> $I$)が分かる。</p>
+$$
+\begin{equation}
+I = h\nu - E_{\mathrm{kin}}
+\label{eq:10-pes-energy}
+\end{equation}
+$$
+<p>式 \eqref{eq:10-pes-energy} の $h\nu$ は入射光のエネルギーで既知、$E_{\mathrm{kin}}$ は測定量だから、$I$ が決まる。横軸を $I$、縦軸を「飛び出してきた電子の数」にとってプロットしたものが光電子スペクトルである。ある $I$ に電子がたくさん詰まっていれば、そこから飛び出す電子も多い。つまり<strong>光電子スペクトルは占有状態の状態密度を実験的に測っている</strong>とみなせる。</p>
+
+<h3>10.6.2 Koopmansの定理</h3>
+
+<p>計算で得られた軌道エネルギー $\epsilon_i$ と、実験のイオン化エネルギー $I$ を結ぶのが <em class="term">Koopmansの定理</em>(Koopmans' theorem)である。</p>
+
+<div class="box thm">
+<p class="box-title">定理：Koopmansの定理</p>
+<p>Hartree–Fock法で得られた閉殻分子について、$i$ 番目の分子軌道から電子を1個取り去るときに必要なエネルギーは、<strong>残りの軌道が変化しない(凍結する)と仮定すれば</strong></p>
+$$
+\begin{equation}
+I_i = E^{(N-1)}-E^{(N)} = -\epsilon_i
+\label{eq:10-koopmans}
+\end{equation}
+$$
+<p>で与えられる。すなわち、軌道エネルギーの符号を変えたものがイオン化エネルギーである。</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">導出：Koopmansの定理を第9章の記法で示す</p>
+<p>第9章で、閉殻($N=2n$ 電子)のSlater行列式に対するHartree–Fockの全エネルギーが</p>
+$$
+\begin{equation}
+E^{(N)} = 2\sum_{i=1}^{n} h_{i} + \sum_{i=1}^{n}\sum_{j=1}^{n}\left(2J_{ij}-K_{ij}\right)
+\label{eq:10-ehf}
+\end{equation}
+$$
+<p>と書けることを見た。ここで $h_i=\braket{\phi_i|\hat{h}|\phi_i}$ は1電子部分(運動エネルギー+核引力)、$J_{ij}$ はCoulomb積分、$K_{ij}$ は交換積分である。また軌道エネルギーは</p>
+$$
+\begin{equation}
+\epsilon_i = h_i + \sum_{j=1}^{n}\left(2J_{ij}-K_{ij}\right)
+\label{eq:10-orbital-energy}
+\end{equation}
+$$
+<p>であった。いま、軌道 $k$ から電子を1個(スピン $\alpha$ としよう)取り去る。<strong>残りの $N-1$ 個の電子の軌道は変化しないと仮定する</strong>(凍結軌道近似)。取り去られた電子が失った相互作用を数え上げよう。</p>
+<p>まず1電子部分が $-h_k$ 減る。次に、この電子が他の電子と及ぼしあっていた相互作用を数える。</p>
+<ul>
+  <li>$j\neq k$ の軌道:そこには $\alpha$ スピンと $\beta$ スピンの電子が1個ずつ、計2個いる。Coulomb相互作用は2個ぶんで $2J_{kj}$。交換相互作用は<strong>同じスピンの相手とだけ</strong>働く(第9章)ので、$\alpha$ スピンの1個ぶんだけ $-K_{kj}$。合計 $2J_{kj}-K_{kj}$。</li>
+  <li>$j=k$ の軌道:同じ軌道にはもう1個、逆向きスピン($\beta$)の電子が残っている。Coulombは $J_{kk}$ の1個ぶん。スピンが逆なので交換はゼロ。ところが $J_{kk}=K_{kk}$ が恒等的に成り立つので、これは $2J_{kk}-K_{kk}$ と書ける。</li>
+</ul>
+<p>したがって失われる相互作用の総和は、$j=k$ も込めて</p>
+$$
+\sum_{j=1}^{n}\left(2J_{kj}-K_{kj}\right)
+$$
+<p>とひとまとめに書ける。以上より</p>
+$$
+E^{(N-1)}-E^{(N)} = -h_k-\sum_{j=1}^{n}\left(2J_{kj}-K_{kj}\right) = -\epsilon_k
+$$
+<p>となり、式 \eqref{eq:10-koopmans} が示された。全エネルギーの表式 \eqref{eq:10-ehf} と軌道エネルギーの定義 \eqref{eq:10-orbital-energy} を見比べると、$E^{(N)}\neq 2\sum_i\epsilon_i$(軌道エネルギーの単純な和は全エネルギーではない)ことにも注意してほしい。相互作用を二重に数えてしまうからである。<strong>証明の鍵は $J_{kk}=K_{kk}$ という等式</strong>である。同じ軌道どうしのCoulomb積分と交換積分は、定義の積分そのものが同一になる(第9章)。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：Koopmansの定理が含む2つの近似</p>
+<p>上の導出では2つの近似をした。(i) <strong>軌道緩和の無視</strong>:電子が1個抜けると、残りの電子は「反発が減った」ぶん内側に縮み、イオンのエネルギーは下がる。これを無視すると $I$ を<em>過大評価</em>する。(ii) <strong>電子相関の無視</strong>:Hartree–Fockは電子相関を含まないが、相関エネルギーは電子数が多いほど大きいので、中性分子($N$ 電子)のほうがイオン($N-1$ 電子)より相関で得をしている。これを無視すると $I$ を<em>過小評価</em>する。この2つは逆向きに効くので部分的に打ち消し合い、結果としてKoopmansの定理は「そこそこ当たる」。誤差は典型的に 1–2 eV である。</p>
+</div>
+
+<h3>10.6.3 CH$_4$のスペクトルと計算DOSの比較</h3>
+
+<p>CH$_4$の紫外光電子スペクトルには、$I\approx 14$ eV あたりに幅の広い大きなバンドと、$I\approx 23$ eV に小さなバンドの、合わせて2本が現れる。これを計算DOSと並べたのが図10.5である。</p>
+
+<figure>
+<svg viewBox="0 0 760 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CH4の計算DOSと実験の光電子スペクトルの比較。t2バンドとa1バンドの面積比が3対1になる">
+  <text x="120" y="35" font-family="sans-serif" font-size="13.5" font-weight="bold" fill="#14684a">(a) 計算(RHF/6-31G):横軸を −ε に取り直したDOS</text>
+  <line x1="120" y1="165" x2="700" y2="165" stroke="#566573" stroke-width="1.5"/>
+  <line x1="120" y1="165" x2="120" y2="45" stroke="#566573" stroke-width="1.5"/>
+  <polyline fill="none" stroke="#14684a" stroke-width="2.2" points="120.0,165.0 237.6,164.9 239.2,164.8 240.8,164.6 242.4,164.4 244.1,163.9 245.7,163.2 247.3,162.2 248.9,160.7 250.5,158.5 252.1,155.5 253.7,151.4 255.3,146.2 256.9,139.7 258.6,131.9 260.2,122.8 261.8,112.7 263.4,101.9 265.0,91.1 266.6,80.7 268.2,71.5 269.8,64.2 271.4,59.3 273.1,57.1 274.7,58.0 276.3,61.7 277.9,68.0 279.5,76.5 281.1,86.4 282.7,97.1 284.3,108.0 285.9,118.4 287.6,128.0 289.2,136.4 290.8,143.5 292.4,149.3 294.0,153.8 295.6,157.3 297.2,159.8 298.8,161.6 300.4,162.8 302.1,163.7 303.7,164.2 305.3,164.5 306.9,164.7 308.5,164.9 310.1,164.9 593.7,164.9 595.3,164.8 596.9,164.7 598.5,164.4 600.1,164.1 601.7,163.6 603.3,162.9 604.9,161.9 606.6,160.6 608.2,158.8 609.8,156.7 611.4,154.1 613.0,151.1 614.6,147.7 616.2,144.2 617.8,140.6 619.4,137.1 621.1,134.0 622.7,131.5 624.3,129.8 625.9,129.1 627.5,129.3 629.1,130.5 630.7,132.5 632.3,135.3 633.9,138.6 635.6,142.2 637.2,145.8 638.8,149.3 640.4,152.5 642.0,155.3 643.6,157.7 645.2,159.7 646.8,161.2 648.4,162.4 650.1,163.2 651.7,163.8 653.3,164.3 654.9,164.5 656.5,164.7 658.1,164.8 659.7,164.9 700.0,165.0"/>
+  <text x="273" y="48" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#14684a">t₂(6状態)</text>
+  <text x="626" y="118" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#14684a">a₁(2状態)</text>
+  <text x="273" y="150" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">14.76 eV</text>
+  <text x="626" y="152" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">25.71 eV</text>
+  <text x="105" y="105" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333" transform="rotate(-90 105 105)">DOS</text>
+
+  <text x="120" y="225" font-family="sans-serif" font-size="13.5" font-weight="bold" fill="#b03a2e">(b) 実験:紫外光電子スペクトル(模式)</text>
+  <line x1="120" y1="355" x2="700" y2="355" stroke="#566573" stroke-width="1.5"/>
+  <line x1="120" y1="355" x2="120" y2="235" stroke="#566573" stroke-width="1.5"/>
+  <polyline fill="none" stroke="#b03a2e" stroke-width="2.2" points="120.0,355.0 163.5,353.9 165.9,353.4 168.3,352.7 170.7,351.7 173.2,350.5 175.6,348.8 178.0,346.8 180.4,344.2 182.8,341.1 185.2,337.5 187.7,333.2 190.1,328.4 192.5,323.0 194.9,317.2 197.3,311.0 199.8,304.7 202.2,298.3 204.6,292.1 207.0,286.1 209.4,280.7 211.8,275.8 214.2,271.6 216.7,268.2 219.1,265.6 221.5,263.6 223.9,262.3 226.3,261.5 228.8,261.0 231.2,260.8 233.6,260.7 236.0,260.4 238.4,260.1 240.8,259.4 243.2,258.5 245.7,257.4 248.1,256.1 250.5,254.7 252.9,253.4 255.3,252.2 257.8,251.5 260.2,251.2 262.6,251.5 265.0,252.4 267.4,254.0 269.8,256.3 272.2,259.2 274.7,262.6 277.1,266.5 279.5,270.8 281.9,275.4 284.3,280.2 286.8,285.2 289.2,290.4 291.6,295.6 294.0,300.9 296.4,306.1 298.8,311.3 301.2,316.4 303.7,321.2 306.1,325.8 308.5,330.1 310.9,334.0 313.3,337.6 315.8,340.8 318.2,343.5 320.6,345.9 323.0,347.8 325.4,349.5 327.8,350.8 330.2,351.9 332.7,352.7 335.1,353.3 337.5,353.8 489.8,354.1 492.2,353.5 494.6,352.3 497.0,350.6 499.4,348.1 501.8,344.5 504.3,339.7 506.7,333.6 509.1,326.4 511.5,318.2 513.9,309.6 516.3,301.1 518.8,293.4 521.2,287.0 523.6,282.3 526.0,279.6 528.4,278.8 530.8,279.4 533.2,281.3 535.7,283.9 538.1,286.9 540.5,290.1 542.9,293.5 545.3,297.0 547.8,300.7 550.2,304.8 552.6,309.1 555.0,313.8 557.4,318.6 559.8,323.5 562.2,328.2 564.7,332.8 567.1,336.9 569.5,340.6 571.9,343.8 574.3,346.5 576.8,348.7 579.2,350.4 581.6,351.7 584.0,352.7 586.4,353.5 588.8,354.0 700.0,355.0"/>
+  <text x="255" y="242" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#b03a2e">T₂ バンド(幅が広い)</text>
+  <text x="528" y="262" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">A₁ バンド</text>
+  <text x="105" y="295" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333" transform="rotate(-90 105 295)">電子の数</text>
+  <g font-family="sans-serif" font-size="12" fill="#566573" text-anchor="middle">
+    <text x="120" y="374">10</text><text x="184.4" y="374">12</text><text x="248.9" y="374">14</text>
+    <text x="313.3" y="374">16</text><text x="377.8" y="374">18</text><text x="442.2" y="374">20</text>
+    <text x="506.7" y="374">22</text><text x="571.1" y="374">24</text><text x="635.6" y="374">26</text><text x="700" y="374">28</text>
+  </g>
+  <g stroke="#566573" stroke-width="1">
+    <line x1="184.4" y1="355" x2="184.4" y2="360"/><line x1="248.9" y1="355" x2="248.9" y2="360"/>
+    <line x1="313.3" y1="355" x2="313.3" y2="360"/><line x1="377.8" y1="355" x2="377.8" y2="360"/>
+    <line x1="442.2" y1="355" x2="442.2" y2="360"/><line x1="506.7" y1="355" x2="506.7" y2="360"/>
+    <line x1="571.1" y1="355" x2="571.1" y2="360"/><line x1="635.6" y1="355" x2="635.6" y2="360"/>
+  </g>
+  <text x="410" y="394" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">イオン化エネルギー (eV)</text>
+  <line x1="273" y1="170" x2="273" y2="232" stroke="#566573" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="626" y1="170" x2="626" y2="232" stroke="#566573" stroke-width="1" stroke-dasharray="4,4"/>
+  <text x="410" y="417" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">どちらのパネルでも、面積比は t₂(T₂):a₁(A₁) = 3:1</text>
+</svg>
+<figcaption>図10.5 CH$_4$の計算DOS(上、横軸をKoopmansの定理により $I=-\epsilon_i$ に取り直した)と、紫外光電子スペクトルの模式図(下、A. W. Potts と W. C. Price の測定に基づく)。実験の $T_2$ バンドは 12〜16 eV に広がっており、$A_1$ バンドは 23 eV 付近にある。ピーク位置は半定量的に一致し、<strong>面積比 3:1 はきれいに一致する</strong>。</figcaption>
+</figure>
+
+<p>比較の結論を整理しよう。</p>
+
+<ul>
+  <li><strong>ピークの本数と面積比</strong>:計算は $t_2$(6状態)と $a_1$(2状態)の2本を予言し、面積比は $3:1$ である。実験でも $T_2$ バンドの強度は $A_1$ バンドのおよそ3倍であり、一致する。<em>これがCH$_4$の価電子が「1種類の等価な結合」ではないことの、直接的な実験的証拠</em>である。</li>
+  <li><strong>ピークの位置</strong>:計算(Koopmans)は $14.76$ eV と $25.71$ eV、実験は約 $14$ eV と約 $23$ eV である。$t_2$ の誤差は 1 eV 弱、$a_1$ は 3 eV 程度で、内殻に近い深い準位ほど軌道緩和の効果が大きく、Koopmansのずれも大きい。</li>
+  <li><strong>ピークの幅</strong>:計算では $\sigma=0.3$ eV の人為的な幅しかないが、実験の $T_2$ バンドは 4 eV 近い幅をもつ。これは(i) イオン化に伴って分子が振動励起される(電子状態と振動状態の結合)、(ii) CH$_4^{+}$ が3重縮退した $T_2$ 状態になるためJahn–Teller効果で構造が歪む、という物理による。<strong>計算の細いピークと実験の太いバンドを、幅まで比べてはいけない</strong>。</li>
+</ul>
+
+<div class="box ex">
+<p class="box-title">例題10.6 Koopmansの定理で第一イオン化エネルギーを予言する</p>
+<p>(1) 表10.3から、CH$_4$の第一イオン化エネルギーをKoopmansの定理で予言せよ。(2) 実験値(垂直イオン化エネルギー)は約 14.4 eV である。誤差の符号は、軌道緩和と電子相関のどちらの効果で説明できるか。</p>
+<p><strong>解答</strong>(1) 第一イオン化エネルギーはもっとも浅い占有軌道、すなわちHOMOから電子を抜くのに要するエネルギーである。HOMOは $t_2$($\epsilon=-14.76$ eV)なので</p>
+$$
+I_1 = -\epsilon_{\mathrm{HOMO}} = 14.76\ \mathrm{eV} .
+$$
+<p>(2) 計算値のほうが実験値より 0.4 eV ほど<em>大きい</em>。凍結軌道近似は、電子が抜けたあとに残りの電子が内側に縮んでイオンが安定化する効果を無視しているので、イオン化エネルギーを過大評価する。したがって誤差の符号は<strong>軌道緩和の無視</strong>で説明できる。電子相関は逆向きに効くが、この場合は軌道緩和のほうが勝っている。</p>
+<p>なお、実験値には「垂直(vertical)」と「断熱(adiabatic)」の区別がある。垂直イオン化エネルギーは分子の構造を中性のまま凍結して電子を取り去るときの値、断熱イオン化エネルギーはイオンが構造緩和した後の値である。CH$_4$の断熱値は約 12.6 eV とかなり小さい。<strong>計算値と実験値を比べるときは、どちらの定義かを必ず確認すること</strong>。Koopmansの定理は構造を凍結しているので、比べるべき相手は垂直イオン化エネルギーである。</p>
+</div>
+
+<h2 id="sec10-7">10.7 波動関数を可視化する</h2>
+
+<p>軌道エネルギーと成分比だけでは、「その軌道がどんな形をしているか」は分からない。分子軌道 $\phi_i(\bm{r})$ は空間の各点で値をもつ関数なので、三次元の地図として描き出せる。</p>
+
+<h3>10.7.1 cubeファイルを作る</h3>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_wf.py --xyz XYZ_CH4-finish.xyz --spin 0 --basis 6-31g --homo --lumo
+<span class="cmt">========================================</span>
+ PySCF Wavefunction Cube Generator
+<span class="cmt">========================================</span>
+XYZ file     : XYZ_CH4-finish.xyz
+Method       : RHF
+Basis        : 6-31g
+Charge       : 0
+Spin (2S)    : 0
+Grid mode    : nx, ny, nz = 80, 80, 80
+Margin       : 3.000 Bohr
+Output dir   : WF_XYZ_CH4-finish
+<span class="cmt">----------------------------------------</span>
+Generated cube files:
+spin        MO   energy(Ha)   energy(eV)   occ   file
+restricted   5    -0.545033     -14.8311     2   WF_XYZ_CH4-finish/MO_005_HOMO.cube
+restricted   6     0.256250       6.9729     0   WF_XYZ_CH4-finish/MO_006_LUMO.cube</code></pre>
+<p class="codecap">コード10.11 HOMOとLUMOのcubeファイルを生成する。<code>WF_</code> で始まるディレクトリが作られ、その中にcubeファイルが出力される。</p>
+
+<p><em class="term">cubeファイル</em>(Gaussian cube format)は、直方体の格子点上での関数値を並べたテキストファイルである。ここでは分子を囲む箱を $80\times80\times80$ の格子に切り(全部で 512000 点)、各点での $\phi_i(\bm{r})$ の値を書き出している。<code>Margin : 3.000 Bohr</code> は、分子の外側に 3 Bohr($\approx1.6\ \text{Å}$)ぶんの余白をとる、という意味である。軌道は原子核から離れても指数関数的にしか減衰しないので、余白が狭すぎると軌道の裾が箱からはみ出して絵が切れてしまう。</p>
+
+<p>他の軌道も見たければ、番号を直接指定すればよい。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_wf.py --xyz XYZ_CH4-finish.xyz --spin 0 --basis 6-31g --mo 1 2 3 4 7
+<span class="prompt">$</span> cd WF_XYZ_CH4-finish
+<span class="prompt">$</span> ls
+MO_001.cube  MO_002.cube  MO_003.cube  MO_004.cube  MO_005_HOMO.cube
+MO_006_LUMO.cube  MO_007.cube
+<span class="prompt">$</span> open -a VESTA MO_005_HOMO.cube
+<span class="prompt">$</span> open -a VESTA MO_006_LUMO.cube</code></pre>
+<p class="codecap">コード10.12 番号を指定して任意の分子軌道を出力し、VESTAで開く。第9章で議論した内殻軌道(MO 1)がいかに原子核に張り付いているかも、この方法で確認できる。</p>
+
+<h3>10.7.2 等値面の読み方:黄は正、青は負</h3>
+
+<p>VESTAでcubeファイルを開くと、<em class="term">等値面</em>(isosurface)が表示される。$\phi_i(\bm{r})=\pm c$($c$ は適当な定数、たとえば $0.02$)を満たす面を描いたもので、雲のような塊として見える。VESTAの既定の色分けは</p>
+
+<p style="text-align:center"><strong>黄色 = 波動関数が正の領域、青色 = 波動関数が負の領域</strong></p>
+
+<p>である。図10.6にCH$_4$のHOMOとLUMOの模式図を示す。</p>
+
+<figure>
+<svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CH4のHOMO(t2)とLUMO(a1*)の等値面の模式図。黄色が正、青色が負の領域">
+  <rect x="25" y="30" width="340" height="255" rx="10" fill="#fbfdfc" stroke="#14684a" stroke-width="2"/>
+  <text x="195" y="55" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#14684a">HOMO:t₂(結合性、−14.76 eV)</text>
+  <ellipse cx="195" cy="120" rx="88" ry="52" fill="#f4d03f" opacity="0.72"/>
+  <ellipse cx="195" cy="222" rx="88" ry="52" fill="#5dade2" opacity="0.72"/>
+  <line x1="195" y1="171" x2="195" y2="171" stroke="none"/>
+  <line x1="85" y1="171" x2="305" y2="171" stroke="#566573" stroke-width="1.3" stroke-dasharray="6,5"/>
+  <text x="322" y="168" font-family="sans-serif" font-size="11.5" fill="#566573">節面</text>
+  <line x1="195" y1="171" x2="135" y2="115" stroke="#566573" stroke-width="2"/>
+  <line x1="195" y1="171" x2="255" y2="115" stroke="#566573" stroke-width="2"/>
+  <line x1="195" y1="171" x2="135" y2="227" stroke="#566573" stroke-width="2"/>
+  <line x1="195" y1="171" x2="255" y2="227" stroke="#566573" stroke-width="2"/>
+  <circle cx="195" cy="171" r="13" fill="#566573"/>
+  <text x="195" y="176" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">C</text>
+  <circle cx="135" cy="115" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <circle cx="255" cy="115" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <circle cx="135" cy="227" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <circle cx="255" cy="227" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <text x="195" y="273" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">C-2p と H-1s が同符号で重なる = 結合性</text>
+
+  <rect x="395" y="30" width="340" height="255" rx="10" fill="#fbfdfc" stroke="#b03a2e" stroke-width="2"/>
+  <text x="565" y="55" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#b03a2e">LUMO:a₁*(反結合性、+6.92 eV)</text>
+  <circle cx="565" cy="171" r="46" fill="#f4d03f" opacity="0.75"/>
+  <circle cx="505" cy="115" r="27" fill="#5dade2" opacity="0.72"/>
+  <circle cx="625" cy="115" r="27" fill="#5dade2" opacity="0.72"/>
+  <circle cx="505" cy="227" r="27" fill="#5dade2" opacity="0.72"/>
+  <circle cx="625" cy="227" r="27" fill="#5dade2" opacity="0.72"/>
+  <circle cx="565" cy="171" r="60" fill="none" stroke="#566573" stroke-width="1.3" stroke-dasharray="6,5"/>
+  <line x1="565" y1="171" x2="505" y2="115" stroke="#566573" stroke-width="2"/>
+  <line x1="565" y1="171" x2="625" y2="115" stroke="#566573" stroke-width="2"/>
+  <line x1="565" y1="171" x2="505" y2="227" stroke="#566573" stroke-width="2"/>
+  <line x1="565" y1="171" x2="625" y2="227" stroke="#566573" stroke-width="2"/>
+  <circle cx="565" cy="171" r="13" fill="#566573"/>
+  <text x="565" y="176" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">C</text>
+  <circle cx="505" cy="115" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <circle cx="625" cy="115" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <circle cx="505" cy="227" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <circle cx="625" cy="227" r="9" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+  <text x="565" y="273" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">C-2s と H-1s が逆符号 = 節面が結合の間に入る</text>
+
+  <rect x="270" y="298" width="16" height="12" fill="#f4d03f" opacity="0.8"/>
+  <text x="292" y="309" font-family="sans-serif" font-size="12" fill="#333">波動関数が正</text>
+  <rect x="400" y="298" width="16" height="12" fill="#5dade2" opacity="0.8"/>
+  <text x="422" y="309" font-family="sans-serif" font-size="12" fill="#333">波動関数が負</text>
+</svg>
+<figcaption>図10.6 CH$_4$のHOMO($t_2$)とLUMO($a_1^{*}$)の等値面の模式図(断面で見た様子)。HOMOはC-$2p$の形をしていて、正のローブ側の2個のH、負のローブ側の2個のHとそれぞれ同符号で重なる。LUMOでは中心のC-$2s$と4個のH-$1s$が逆符号で、C–H結合の途中に節面(球状の破線)が入る。</figcaption>
+</figure>
+
+<p>形から結合性・反結合性を読むコツは、<strong>「C–H結合の途中に節面(符号が変わる面)があるか」</strong>を見ることである。</p>
+
+<ul>
+  <li><strong>結合性(bonding)</strong>:結合の途中に節面がない。2つの原子の間で波動関数が同符号に重なるので、そこに電子密度が積み増しされ、原子核どうしを引きつける糊の役割を果たす。CH$_4$のHOMOがこれである。</li>
+  <li><strong>反結合性(antibonding)</strong>:結合の途中に節面がある。電子密度が結合の中央で減るので、電子が入ると分子は不安定になる。CH$_4$のLUMOがこれである。</li>
+</ul>
+
+<div class="box warn">
+<p class="box-title">注意：波動関数の符号そのものには意味がない</p>
+<p>$\phi_i(\bm{r})$ と $-\phi_i(\bm{r})$ は、まったく同じ物理状態を表す(電子密度 $|\phi_i|^2$ は同じ、エネルギーも同じ)。したがって「黄と青が入れ替わった絵」が出てきても間違いではない。意味があるのは<strong>相対的な符号関係</strong>、すなわち「隣り合う原子の上で同符号か逆符号か」だけである。この点は第11章で永年方程式を解いて結合性・反結合性軌道を導くときにも本質的である。</p>
+</div>
+
+<h3>10.7.3 グルコースのHOMOとLUMO</h3>
+
+<p>同じことをD-グルコース(24原子)でもやってみよう。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_wf.py --xyz XYZ_D-glucose-finish.xyz --spin 0 --basis 6-31g \
+      --homo --lumo</code></pre>
+<p class="codecap">コード10.13 グルコースのHOMO/LUMOをcube出力する。原子数が多いので格子点数も増え、ファイルサイズは1つあたり数十MBになる。</p>
+
+<p>得られた等値面を読むと、次のことが分かる。</p>
+
+<ul>
+  <li><strong>HOMO</strong>:C-$2p$ と C-$2p$ が同符号で並ぶ $\sigma$ 結合性の部分と、C-$2p$ と O-$2p$ が逆符号で向かい合う $\pi^{*}$ 反結合性の部分が共存している。10.4節のPDOSで「HOMOはO-$2p$とC-$2p$で構成されている」と読んだこととも整合する。反結合性成分をもつ軌道がいちばん上にあるという事実は、この分子のどこが化学的に弱いか(酸化されやすいか)を示唆する。</li>
+  <li><strong>LUMO</strong>:波動関数が分子全体に大きく広がってしまい、目視での判断は難しい。PDOSではこの領域はH-$s$が支配的なので、HとC、HとOの間に何らかの反結合性をもつ軌道だと推測できる。</li>
+</ul>
+
+<div class="box phys">
+<p class="box-title">物理的意味：目視の限界と、その先の道具</p>
+<p>「絵を見て結合性か反結合性かを言う」という方法は、CH$_4$のように小さくて対称性の高い分子では強力だが、原子数が増えると急速に破綻する。等値面はしきい値 $c$ の取り方に依存するし、複数の結合が同時に絡むと目では分離できない。</p>
+<p>そこで、結合の性格を<strong>数値として</strong>取り出す道具が要る。第1章で名前だけ紹介した <em class="term">重なり密度(overlap population)</em> と <em class="term">結晶軌道Hamilton population(COHP)</em> がそれである。原子 $A$ と $B$ の間の結合について、各エネルギー準位が結合を強めているか弱めているかを、正負の符号をもつ関数として与えてくれる。固体まで含めた一般的な結合解析の道具であり、担当教員のグループでもペロブスカイト酸化物の結合解析に用いている(文献[8])。厳密な結合解析にはこうした量が必要であることを、いまは覚えておいてほしい。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.7 節面の数を数える</p>
+<p>CH$_4$の分子軌道のうち、MO 2($a_1$、$-25.71$ eV)には C–H 結合を横切る節面がいくつあるか。MO 6($a_1^{*}$、$+6.92$ eV)ではどうか。またこの違いから、両者のエネルギーの高低が説明できることを述べよ。</p>
+<p><strong>解答</strong> MO 2 はC-$2s$と4個のH-$1s$が<em>同符号</em>で重なった軌道なので、C–H結合を横切る節面は<strong>0個</strong>である(C-$2s$自身がもつ動径方向の節は核のごく近傍にあり、結合領域には出てこない)。一方 MO 6 は同じ組み合わせを<em>逆符号</em>で作った軌道なので、4本のC–H結合それぞれの途中に節面が現れる(図10.6右の球状の破線)。</p>
+<p>節面が増えるほど波動関数の空間変化が急になり、運動エネルギー $\displaystyle -\frac{\hbar^2}{2m}\int\phi^*\nabla^2\phi\,\dd^3r$ が増える。加えて、結合領域から電子密度が追い出されるので核との引力も弱まる。この2つの効果で $a_1^{*}$ は $a_1$ より 32.6 eV も高くなる。「節が多い軌道ほど高い」という規則は、第2章で見た水素原子の $1s,2s,3s$ の序列とまったく同じ論理である。</p>
+</div>
+
+<h2 id="sec10-8">10.8 振動準位</h2>
+
+<p>ここまでは電子の話だった。最後に原子核の運動、すなわち分子振動を扱う。Born–Oppenheimer近似(第8章)では、原子核はポテンシャルエネルギー曲面 $E(\{\bm{R}_I\})$ の上を運動する。平衡構造はその極小点だから、その近くでは曲面を放物線で近似できる。</p>
+
+<h3>10.8.1 調和近似から振動数へ</h3>
+
+<p>簡単のため、まず1次元(2原子分子の伸縮)で考える。平衡結合長を $r_0$、そこからのずれを $x=r-r_0$ とし、ポテンシャル $U(x)$ を $x=0$ のまわりでTaylor展開する。</p>
+$$
+\begin{equation}
+U(x)=U(0)+\left.\frac{\dd U}{\dd x}\right|_{0}x+\frac{1}{2}\left.\frac{\dd^2U}{\dd x^2}\right|_{0}x^2+\frac{1}{6}\left.\frac{\dd^3U}{\dd x^3}\right|_{0}x^3+\cdots
+\label{eq:10-taylor}
+\end{equation}
+$$
+<p>平衡点では力がゼロ、すなわち1次の項の係数 $\dd U/\dd x|_0$ が消える。エネルギーの原点を $U(0)=0$ に選び、3次以上を捨てると</p>
+<div class="keyeq">
+$$
+\begin{equation}
+U(x)\simeq\frac{1}{2}kx^2,
+\qquad
+k \equiv \left.\frac{\dd^2 U}{\dd x^2}\right|_{0}
+\label{eq:10-harmonic}
+\end{equation}
+$$
+</div>
+<p>を得る。これが <em class="term">調和近似</em>(harmonic approximation)であり、$k$ を <em class="term">力の定数</em>(force constant)という。単位は N m$^{-1}$ である。実際の計算では、平衡構造のまわりで原子を少しずつ動かしてエネルギーを何点か求め、$\frac12kx^2$ にフィッティングして $k$ を決める(あるいは2階微分を解析的に評価する)。</p>
+
+<p>質量 $m_A,m_B$ の2原子が、ばね定数 $k$ のばねでつながれているときの振動は、<em class="term">換算質量</em></p>
+$$
+\begin{equation}
+\mu=\frac{m_A m_B}{m_A+m_B}
+\label{eq:10-mu}
+\end{equation}
+$$
+<p>をもつ1個の粒子の運動に帰着する(相対座標に移ると重心運動が分離するため)。したがって古典的な角振動数は</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\omega=\sqrt{\frac{k}{\mu}}
+\label{eq:10-omega}
+\end{equation}
+$$
+</div>
+<p>である。量子力学では、この調和振動子のエネルギー準位は等間隔に量子化され、</p>
+$$
+\begin{equation}
+E_n=\left(n+\frac{1}{2}\right)\hbar\omega,\qquad n=0,1,2,\dots
+\label{eq:10-levels}
+\end{equation}
+$$
+<p>となる。基底状態 $n=0$ でもエネルギーが $\frac12\hbar\omega$ 残る。これが10.1節で出てきた零点エネルギーである。</p>
+
+<figure>
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="真のポテンシャル曲線と調和近似の放物線、および等間隔の振動準位">
+  <line x1="115" y1="300" x2="700" y2="300" stroke="#566573" stroke-width="1.5"/>
+  <line x1="317.9" y1="310" x2="317.9" y2="50" stroke="#566573" stroke-width="1.5"/>
+  <g font-family="sans-serif" font-size="12" fill="#566573" text-anchor="middle">
+    <text x="182.6" y="318">−0.2</text><text x="250.3" y="318">−0.1</text><text x="317.9" y="318">0</text>
+    <text x="385.6" y="318">0.1</text><text x="453.2" y="318">0.2</text><text x="520.9" y="318">0.3</text>
+    <text x="588.5" y="318">0.4</text><text x="656.2" y="318">0.5</text>
+  </g>
+  <g font-family="sans-serif" font-size="12" fill="#566573" text-anchor="end">
+    <text x="108" y="304">0</text><text x="108" y="248">0.5</text><text x="108" y="193">1.0</text>
+    <text x="108" y="137">1.5</text><text x="108" y="82">2.0</text>
+  </g>
+  <text x="405" y="340" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">平衡位置からのずれ x (Å)</text>
+  <text x="80" y="175" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333" transform="rotate(-90 80 175)">ポテンシャル U (eV)</text>
+  <polyline fill="none" stroke="#566573" stroke-width="2" points="160.5,61.5 167.7,88.2 174.9,112.8 182.1,135.3 189.3,156.0 196.5,174.8 203.6,191.9 210.8,207.4 218.0,221.4 225.2,233.9 232.4,245.1 239.6,255.1 246.8,263.8 254.0,271.5 261.1,278.1 268.3,283.7 275.5,288.3 282.7,292.1 289.9,295.1 297.1,297.4 304.3,298.9 311.5,299.8 318.6,300.0 325.8,299.7 333.0,298.8 340.2,297.4 347.4,295.6 354.6,293.3 361.8,290.6 369.0,287.6 376.1,284.2 383.3,280.5 390.5,276.5 397.7,272.2 404.9,267.7 412.1,263.0 419.3,258.1 426.5,253.0 433.6,247.7 440.8,242.3 448.0,236.7 455.2,231.0 462.4,225.3 469.6,219.4 476.8,213.5 484.0,207.4 491.1,201.4 498.3,195.3 505.5,189.1 512.7,183.0 519.9,176.8 527.1,170.6 534.3,164.4 541.5,158.2 548.6,152.0 555.8,145.8 563.0,139.6 570.2,133.5 577.4,127.4 584.6,121.4 591.8,115.3 599.0,109.4 606.1,103.4 613.3,97.6 620.5,91.7 627.7,86.0 634.9,80.2 642.1,74.6 649.3,69.0 656.5,63.5 663.6,58.0"/>
+  <polyline fill="none" stroke="#14684a" stroke-width="2.4" stroke-dasharray="7,4" points="115.0,68.0 122.2,84.1 129.4,99.7 136.6,114.7 143.8,129.1 150.9,142.9 158.1,156.1 165.3,168.8 172.5,180.8 179.7,192.3 186.9,203.2 194.1,213.5 201.2,223.3 208.4,232.4 215.6,241.0 222.8,249.0 230.0,256.4 237.2,263.3 244.4,269.5 251.6,275.2 258.8,280.3 265.9,284.8 273.1,288.7 280.3,292.0 287.5,294.8 294.7,297.0 301.9,298.5 309.1,299.6 316.2,300.0 323.4,299.8 330.6,299.1 337.8,297.8 345.0,295.9 352.2,293.4 359.4,290.3 366.6,286.7 373.8,282.5 380.9,277.6 388.1,272.2 395.3,266.3 402.5,259.7 409.7,252.6 416.9,244.9 424.1,236.6 431.2,227.7 438.4,218.2 445.6,208.2 452.8,197.5 460.0,186.3 467.2,174.5 474.4,162.1 481.6,149.2 488.8,135.6 495.9,121.5 503.1,106.8 510.3,91.5 517.5,75.6 524.7,59.2"/>
+  <g stroke="#b03a2e" stroke-width="2">
+    <line x1="251.0" y1="274.8" x2="384.9" y2="274.8"/>
+    <line x1="202.0" y1="224.3" x2="433.9" y2="224.3"/>
+    <line x1="168.3" y1="173.8" x2="467.6" y2="173.8"/>
+    <line x1="140.8" y1="123.3" x2="495.1" y2="123.3"/>
+  </g>
+  <g font-family="sans-serif" font-size="11.5" fill="#b03a2e">
+    <text x="392" y="279">n=0  (1/2)ħω = 0.227 eV</text>
+    <text x="441" y="228">n=1  (3/2)ħω = 0.680 eV</text>
+    <text x="475" y="178">n=2  (5/2)ħω = 1.133 eV</text>
+    <text x="502" y="127">n=3  (7/2)ħω = 1.587 eV</text>
+  </g>
+  <text x="600" y="185" font-family="sans-serif" font-size="12.5" fill="#566573">真のポテンシャル</text>
+  <text x="600" y="201" font-family="sans-serif" font-size="12.5" fill="#566573">(結合が切れる)</text>
+  <text x="150" y="55" font-family="sans-serif" font-size="12.5" fill="#14684a">調和近似 U = (1/2)k x²</text>
+</svg>
+<figcaption>図10.7 O–H結合を例にした調和近似(破線、$k=747$ N m$^{-1}$)と、実際のポテンシャル(実線、結合が切れると一定値に近づく)。振動準位 \eqref{eq:10-levels} は調和近似では等間隔だが、真のポテンシャルでは上に行くほど間隔が詰まる(非調和性)。$n=0$ でもエネルギーは 0 にならない。</figcaption>
+</figure>
+
+<h3>10.8.2 波数への換算</h3>
+
+<p>分光の世界では、振動数は <em class="term">波数</em>(wavenumber)$\tilde\nu$ で表す習慣である。定義は「$1$ cm あたりに波が何個入るか」で、</p>
+$$
+\begin{equation}
+\tilde\nu=\frac{\nu}{c}=\frac{\omega}{2\pi c}
+\label{eq:10-wavenumber}
+\end{equation}
+$$
+<p>である($c$ は光速)。エネルギーとの関係は $E=h\nu=hc\tilde\nu$ だから、$1$ eV に対応する波数は</p>
+$$
+\tilde\nu=\frac{E}{hc}=\frac{1.602177\times10^{-19}\ \mathrm{J}}{(6.626070\times10^{-34}\ \mathrm{J\,s})\times(2.997925\times10^{10}\ \mathrm{cm\,s^{-1}})}=8065.54\ \mathrm{cm^{-1}}
+$$
+<p>すなわち</p>
+<div class="keyeq">
+$$
+\begin{equation}
+1\ \mathrm{eV}=8065.54\ \mathrm{cm^{-1}}
+\label{eq:10-ev-cm}
+\end{equation}
+$$
+</div>
+<p>である。$3000\ \mathrm{cm^{-1}}$ の振動なら $3000/8065.54=0.372$ eV、室温の熱エネルギー $k_{\mathrm{B}}T\approx0.026$ eV($\approx 209\ \mathrm{cm^{-1}}$)の14倍もある。<strong>分子振動の多くは室温ではほとんど励起されていない</strong>(基底状態 $n=0$ にいる)ことがここから分かる。</p>
+
+<h3>10.8.3 CH$_4$の振動計算</h3>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_vib.py --xyz XYZ_CH4-finish.xyz --basis 6-31g --spin 0
+<span class="cmt">========================================</span>
+ PySCF Vibrational Level Analysis
+<span class="cmt">========================================</span>
+XYZ file     : XYZ_CH4-finish.xyz
+Theory       : scf
+Method       : rhf
+Basis        : 6-31g
+Charge       : 0
+Spin (2S)    : 0
+SCF E_tot    : -40.1805541767 Hartree (-1093.368579 eV)
+<span class="cmt">----------------------------------------</span>
+Mode  Frequency(cm^-1)  Type
+   1         1516.7889  vibrational
+   2         1516.7896  vibrational
+   3         1516.7911  vibrational
+   4         1708.6872  vibrational
+   5         1708.6873  vibrational
+   6         3181.4044  vibrational
+   7         3295.8557  vibrational
+   8         3295.8593  vibrational
+   9         3295.8661  vibrational</code></pre>
+<p class="codecap">コード10.14 CH$_4$の振動準位計算。$3N-6=9$ 個の振動モードが、縮退度 3, 2, 1, 3 のグループに分かれている。</p>
+
+<p>実験値と比べてみよう。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表10.4 CH$_4$の基準振動(単位 $\mathrm{cm}^{-1}$)。計算はRHF/6-31G。実験値は気相の基本振動数。対称性の記号($a_1$, $e$, $t_2$)は第12章で学ぶ。</caption>
+<thead>
+<tr><th>モード</th><th>対称性</th><th>縮退度</th><th>計算値</th><th>実験値</th><th>実験/計算</th></tr>
+</thead>
+<tbody>
+<tr><td>$\nu_4$(変角)</td><td>$t_2$</td><td>3</td><td>1516.8</td><td>1306</td><td>0.861</td></tr>
+<tr><td>$\nu_2$(変角)</td><td>$e$</td><td>2</td><td>1708.7</td><td>1534</td><td>0.898</td></tr>
+<tr><td>$\nu_1$(対称伸縮)</td><td>$a_1$</td><td>1</td><td>3181.4</td><td>2917</td><td>0.917</td></tr>
+<tr><td>$\nu_3$(反対称伸縮)</td><td>$t_2$</td><td>3</td><td>3295.9</td><td>3019</td><td>0.916</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>計算値はすべて実験値より高い。しかも「実験/計算」の比が $0.86$〜$0.92$ とだいたい揃っている点に注目してほしい。</p>
+
+<h3>10.8.4 H$_2$Oの振動モード</h3>
+
+<p>3原子の水分子なら、振動は $3\times3-6=3$ 個だけである。3つのモードの動き方を図10.8に示す。</p>
+
+<figure>
+<svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="水分子の3つの基準振動モード:変角、対称伸縮、反対称伸縮">
+  <defs>
+    <marker id="vibarrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#b03a2e"/>
+    </marker>
+  </defs>
+  <g>
+    <rect x="20" y="25" width="230" height="215" rx="9" fill="#eaf5f0" stroke="#14684a" stroke-width="1.6"/>
+    <line x1="135" y1="105" x2="77" y2="150" stroke="#566573" stroke-width="3"/>
+    <line x1="135" y1="105" x2="193" y2="150" stroke="#566573" stroke-width="3"/>
+    <circle cx="135" cy="105" r="17" fill="#c0392b"/>
+    <text x="135" y="110" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">O</text>
+    <circle cx="77" cy="150" r="11" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+    <circle cx="193" cy="150" r="11" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+    <line x1="70" y1="164" x2="103" y2="185" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <line x1="200" y1="164" x2="167" y2="185" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <line x1="135" y1="78" x2="135" y2="52" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <text x="135" y="212" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#14684a">変角 ν₂(a₁)</text>
+    <text x="135" y="231" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">計算 1804 / 実験 1595 cm⁻¹</text>
+  </g>
+  <g>
+    <rect x="265" y="25" width="230" height="215" rx="9" fill="#eaf5f0" stroke="#14684a" stroke-width="1.6"/>
+    <line x1="380" y1="105" x2="322" y2="150" stroke="#566573" stroke-width="3"/>
+    <line x1="380" y1="105" x2="438" y2="150" stroke="#566573" stroke-width="3"/>
+    <circle cx="380" cy="105" r="17" fill="#c0392b"/>
+    <text x="380" y="110" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">O</text>
+    <circle cx="322" cy="150" r="11" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+    <circle cx="438" cy="150" r="11" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+    <line x1="313" y1="157" x2="283" y2="180" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <line x1="447" y1="157" x2="477" y2="180" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <line x1="380" y1="78" x2="380" y2="52" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <text x="380" y="212" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#14684a">対称伸縮 ν₁(a₁)</text>
+    <text x="380" y="231" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">計算 4065 / 実験 3657 cm⁻¹</text>
+  </g>
+  <g>
+    <rect x="510" y="25" width="230" height="215" rx="9" fill="#fdf3f1" stroke="#b03a2e" stroke-width="1.6"/>
+    <line x1="625" y1="105" x2="567" y2="150" stroke="#566573" stroke-width="3"/>
+    <line x1="625" y1="105" x2="683" y2="150" stroke="#566573" stroke-width="3"/>
+    <circle cx="625" cy="105" r="17" fill="#c0392b"/>
+    <text x="625" y="110" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">O</text>
+    <circle cx="567" cy="150" r="11" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+    <circle cx="683" cy="150" r="11" fill="#fdfefe" stroke="#566573" stroke-width="1.5"/>
+    <line x1="558" y1="157" x2="528" y2="180" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <line x1="675" y1="141" x2="648" y2="120" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <line x1="640" y1="97" x2="668" y2="83" stroke="#b03a2e" stroke-width="2.4" marker-end="url(#vibarrow)"/>
+    <text x="625" y="212" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#b03a2e">反対称伸縮 ν₃(b₂)</text>
+    <text x="625" y="231" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">計算 4164 / 実験 3756 cm⁻¹</text>
+  </g>
+  <text x="380" y="268" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#566573">矢印は原子の変位の向き(振動の半周期ぶん)。重心が動かないよう、O原子も逆向きに小さく動く。</text>
+  <text x="380" y="288" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#566573">対称性の記号 b₂ は、分子面を yz 面にとったときの慣用。xz 面にとる流儀では b₁ と書かれる。</text>
+</svg>
+<figcaption>図10.8 H$_2$Oの3つの基準振動。左と中央は対称($a_1$)、右は反対称($b_2$)である。計算値はRHF/6-31G、実験値は気相のFT-IRなどで得られる値。</figcaption>
+</figure>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf_vib.py --xyz XYZ_H2O-finish.xyz --basis 6-31g --spin 0
+SCF E_tot    : -75.9839219956 Hartree (-2067.627850 eV)
+<span class="cmt">----------------------------------------</span>
+Mode  Frequency(cm^-1)  Type
+   1         1803.9668  vibrational
+   2         4065.0470  vibrational
+   3         4164.2241  vibrational
+<span class="cmt">----------------------------------------</span>
+Harmonic vibrational levels up to n=3
+(E_n = (n + 1/2) h nu, for each normal mode)
+
+Mode 1  nu = 1803.9668 cm^-1        Mode 2  nu = 4065.0470 cm^-1
+  n     E_n (eV)                      n     E_n (eV)
+  0      0.111832                      0      0.252001
+  1      0.335495                      1      0.756002
+  2      0.559158                      2      1.260004
+  3      0.782822                      3      1.764006</code></pre>
+<p class="codecap">コード10.15 H$_2$Oの振動準位。各モードについて式 \eqref{eq:10-levels} の $E_n$ が表示される。$n=0$ の値がそのモードの零点エネルギーである。</p>
+
+<p>実験値(気相)は 1595、3657、3756 $\mathrm{cm}^{-1}$ であり、FT-IRで水蒸気を測ると確かに $1600\ \mathrm{cm^{-1}}$ 付近と $3600$〜$3800\ \mathrm{cm^{-1}}$ に吸収が現れる。計算はこの「2本立て」の構造をよく再現している。</p>
+
+<div class="box ex">
+<p class="box-title">例題10.8 波数から力の定数を求める</p>
+<p>水のO–H伸縮振動(実験値 $\tilde\nu=3657\ \mathrm{cm^{-1}}$)を、O原子とH原子1個が結ばれた2原子振動子とみなして、力の定数 $k$ と $\hbar\omega$(eV)を求めよ。原子量は $m_{\mathrm{H}}=1.008$、$m_{\mathrm{O}}=15.995$、$1\ \mathrm{u}=1.66054\times10^{-27}$ kg とする。</p>
+<p><strong>解答</strong> まず換算質量を式 \eqref{eq:10-mu} で求める。</p>
+$$
+\mu=\frac{1.008\times15.995}{1.008+15.995}\ \mathrm{u}=\frac{16.123}{17.003}\ \mathrm{u}=0.94810\ \mathrm{u}
+=0.94810\times1.66054\times10^{-27}=1.57436\times10^{-27}\ \mathrm{kg}.
+$$
+<p>次に角振動数を式 \eqref{eq:10-wavenumber} から逆算する。$c=2.99792458\times10^{10}\ \mathrm{cm\,s^{-1}}$ を使って</p>
+$$
+\omega=2\pi c\tilde\nu = 2\pi\times2.99792458\times10^{10}\times3657
+= 2\pi\times1.09644\times10^{14}=6.8885\times10^{14}\ \mathrm{rad\,s^{-1}} .
+$$
+<p>式 \eqref{eq:10-omega} を $k$ について解くと $k=\mu\omega^2$ であるから</p>
+$$
+k=1.57436\times10^{-27}\times\left(6.8885\times10^{14}\right)^{2}
+=1.57436\times10^{-27}\times4.7451\times10^{29}=747\ \mathrm{N\,m^{-1}} .
+$$
+<p>エネルギーは式 \eqref{eq:10-ev-cm} を使うのが早い。</p>
+$$
+\hbar\omega=hc\tilde\nu=\frac{3657}{8065.54}\ \mathrm{eV}=0.4534\ \mathrm{eV} .
+$$
+<p>$k\approx 750\ \mathrm{N\,m^{-1}}$ という値は、単結合としては非常に硬い部類である(C–H結合なら約 $500\ \mathrm{N\,m^{-1}}$、演習10.5)。ばね定数 $750\ \mathrm{N\,m^{-1}}$ は、$1\ \text{Å}$ 縮めるのに $0.5\times750\times(10^{-10})^2=3.75\times10^{-18}\ \mathrm{J}=23\ \mathrm{eV}$ を要する計算になる。原子レベルのばねがいかに硬いかが実感できる。</p>
+</div>
+
+<h3>10.8.5 計算値はなぜ実験値より高いのか:スケーリング因子</h3>
+
+<p>表10.4でも水でも、Hartree–Fock計算の振動数は実験値より一様に 10% 前後高かった。原因は3つある。</p>
+
+<ol>
+  <li><strong>調和近似そのもの</strong>:式 \eqref{eq:10-taylor} で捨てた3次以降の項(非調和項)が効く。実際のポテンシャルは図10.7の実線のように、伸ばす方向では放物線より緩やか(結合が切れて平坦になる)である。したがって真の $n=0\to1$ 遷移エネルギーは調和近似の $\hbar\omega$ より小さい。実験の「基本振動数」は非調和性を含んだ値なので、必然的に低く出る。</li>
+  <li><strong>基底関数の不足</strong>:柔軟性の足りない基底では、結合を伸ばしたときの電子分布の変化を十分に記述できず、ポテンシャルが硬めに出る。</li>
+  <li><strong>電子相関の欠如</strong>:Hartree–Fockは電子相関を含まないので(第9章)、結合が伸びたときのエネルギー上昇を過大評価する。これも $k$ を大きくする方向に効く。</li>
+</ol>
+
+<p>3つとも同じ向き(振動数を高くする方向)に効き、しかもその割合が分子やモードによらずおおむね一定なので、実務では計算値に定数を掛けて補正する。この定数を <em class="term">スケーリング因子</em>(scaling factor)という。</p>
+$$
+\begin{equation}
+\tilde\nu_{\text{補正}} = c_{\mathrm{scale}}\,\tilde\nu_{\text{計算}}
+\label{eq:10-scaling}
+\end{equation}
+$$
+
+<div class="box ex">
+<p class="box-title">例題10.9 スケーリング因子を自分で決める</p>
+<p>H$_2$Oの計算値(1803.97, 4065.05, 4164.22 $\mathrm{cm^{-1}}$)と実験値(1595, 3657, 3756 $\mathrm{cm^{-1}}$)から、この手法・基底に対するスケーリング因子を推定せよ。</p>
+<p><strong>解答</strong> モードごとに実験値/計算値を求めると</p>
+$$
+\frac{1595}{1803.97}=0.8842,\qquad
+\frac{3657}{4065.05}=0.8996,\qquad
+\frac{3756}{4164.22}=0.9020 .
+$$
+<p>平均をとると</p>
+$$
+c_{\mathrm{scale}}=\frac{0.8842+0.8996+0.9020}{3}=0.8953 .
+$$
+<p>すなわち約 $0.895$ である。これはHartree–Fock/6-31G系の計算に対して文献で推奨されている値($0.89$〜$0.90$)とよく一致する。実際に式 \eqref{eq:10-scaling} で補正してみると $1803.97\times0.8953=1615\ \mathrm{cm^{-1}}$、$4065.05\times0.8953=3639\ \mathrm{cm^{-1}}$、$4164.22\times0.8953=3728\ \mathrm{cm^{-1}}$ となり、実験値との差は 20〜30 $\mathrm{cm^{-1}}$ まで縮む。</p>
+<p><em>注意</em>:スケーリング因子は「手法と基底の組」ごとに決まる経験的な補正であり、密度汎関数法(B3LYPなど)ではもっと1に近い($0.96$〜$0.98$)。他人の計算と比べるときは、補正済みの値か生の値かを必ず確認すること。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：虚の振動数が出たら平衡構造ではない</p>
+<p>振動計算の結果に「虚数の振動数」(出力によっては負の値、$-320\ \mathrm{cm^{-1}}$ のように表示される)が現れたら、それは $k\lt 0$、すなわちその方向にはエネルギーが<strong>下がる</strong>ことを意味する。つまり得られた構造は極小点ではなく<em>鞍点</em>である。構造緩和が不十分だったか、対称性の高すぎる初期構造にとらわれた(遷移状態に落ちた)可能性が高い。虚振動のモードの向きに原子を少し動かしてから、もう一度構造緩和をやり直すのが定石である。<strong>振動計算は「構造緩和がうまくいったかどうかの検算」でもある</strong>。</p>
+</div>
+
+<div class="box phys">
+<p class="box-title">物理的意味：赤外活性・ラマン活性は対称性が決める</p>
+<p>計算で出た9本(CH$_4$)や3本(H$_2$O)の振動が、すべて赤外吸収スペクトルに現れるわけではない。赤外光が吸収されるのは、その振動によって<strong>双極子モーメントが変化する</strong>モードだけである(赤外活性)。ラマン散乱では代わりに<strong>分極率の変化</strong>が問われる(ラマン活性)。CH$_4$の場合、対称伸縮 $\nu_1$($a_1$)と変角 $\nu_2$($e$)は振動しても双極子モーメントが生じないため赤外不活性で、赤外スペクトルには $t_2$ の2本($\nu_3,\nu_4$)しか現れない。一方 H$_2$O は3本すべてが赤外活性である。どのモードが活性かは分子の対称性(点群)から機械的に判定できる。その方法が第12章の主題である。</p>
+</div>
+
+<h2 id="sec10-9">10.9 計算をするときの心構え</h2>
+
+<p>最後に、本章で見た具体例から一般化できる「作法」をまとめておく。計算そのものは機械にやらせるべきだが、<strong>その結果を信用してよいかを判断するのは人間の仕事</strong>である。</p>
+
+<h3>10.9.1 基底関数依存性を必ず確かめる</h3>
+
+<p>10.3節のグルコースの一件が示すとおり、基底関数の選び方は結論の符号すら変える。実務上の原則は次の3つである。</p>
+
+<ul>
+  <li><strong>絶対値は比較しない。</strong>基底が違えば全エネルギーは何十 eV も変わる(グルコースで 233 eV、CH$_4$ でも STO-3G と 6-31G で 12.3 eV)。意味があるのは、<em>同じ基底・同じ手法で計算した2つの状態の差</em>だけである。</li>
+  <li><strong>収束テストをする。</strong>STO-3G → 6-31G → 6-31G(d) → cc-pVTZ と基底を大きくしていき、興味のある量(結合長、エネルギー差、振動数)が変化しなくなることを確認する。変化が止まらないうちは、その数値を結論に使ってはいけない。</li>
+  <li><strong>空軌道は特に危ない。</strong>10.1節で見たように、最小基底ではLUMOの縮退度さえ変わる。HOMO–LUMOギャップや励起エネルギーを論じるなら、十分大きな基底が要る。</li>
+</ul>
+
+<h3>10.9.2 収束条件を意識する</h3>
+
+<p>計算には二重のループがあった(10.3節)。それぞれに収束条件がある。</p>
+
+<ul>
+  <li><strong>SCFの収束</strong>:エネルギー変化や密度行列の変化が閾値(既定では $10^{-9}$ Hartree 程度)を下回るまで繰り返す。収束しない場合は、初期推定を変える、収束加速法(DIIS)の設定を変える、対称性の高すぎる初期構造を崩す、といった対処をする。<em>「収束しませんでした」という出力を見落として結果を使う</em>のが最悪の事故である。</li>
+  <li><strong>構造緩和の収束</strong>:力の最大値と、エネルギー変化、原子の変位がすべて閾値を下回ること。<code>Converged!</code> の表示を必ず確認する。</li>
+  <li>比較する2つの計算では、<strong>収束条件も揃える</strong>。片方だけ緩い条件で止めた計算と比べると、0.1 eV 程度の差は簡単に生まれる。</li>
+</ul>
+
+<h3>10.9.3 電荷とスピン多重度は自分で指定する</h3>
+
+<p>計算機は「この分子は中性で閉殻だろう」と勝手に判断してくれるが、それが正しいとは限らない。第7章で学んだとおり、スピン多重度は $2S+1$ である。PySCF系のスクリプトでは <code>--spin</code> に $2S$(不対電子の数)を、<code>--charge</code> に電荷を指定する。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表10.5 <code>--charge</code> と <code>--spin</code> の指定例。<code>--spin</code> は $2S$(不対電子数)であって多重度そのものではないことに注意。</caption>
+<thead>
+<tr><th>系</th><th>電子数</th><th><code>--charge</code></th><th><code>--spin</code>($2S$)</th><th>多重度 $2S+1$</th></tr>
+</thead>
+<tbody>
+<tr><td>H 原子</td><td>1</td><td>0</td><td>1</td><td>2(二重項)</td></tr>
+<tr><td>He 原子、CH$_4$、H$_2$O</td><td>偶数</td><td>0</td><td>0</td><td>1(一重項)</td></tr>
+<tr><td>O$_2$ 分子(基底状態)</td><td>16</td><td>0</td><td>2</td><td>3(三重項)</td></tr>
+<tr><td>CH$_4^{+}$(光電子で生成)</td><td>9</td><td>1</td><td>1</td><td>2(二重項)</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>指定を誤ると、たとえばO$_2$を一重項として計算してしまい、実験と合わない結合長・振動数が出る。O$_2$の基底状態が三重項であることはHundの規則(第9章)から予想できる。<strong>計算を始める前に、その系の電子配置を紙の上で考えておく</strong>のが正しい順番である。</p>
+
+<h3>10.9.4 全エネルギーの内訳を見る</h3>
+
+<p>エネルギーがおかしいと感じたら、内訳を見るとよい。第9章で分解した各項が出力できる。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_CH4-finish.xyz --spin 0 --basis 6-31g \
+      --decompose-total-energy
+Method       : RHF
+Total Energy : -1093.366788 eV
+<span class="cmt">--- decomposition (eV) ---</span>
+Kinetic          T    :  +1094.611539
+Nuclear attr.    V_ne :  -3264.363352
+Coulomb (Hartree) J   :   +888.540843
+Exchange         K    :   -178.760384
+Nuclear repulsion     :   +366.604566
+<span class="cmt">--------------------------</span>
+Sum                   :  -1093.366788</code></pre>
+<p class="codecap">コード10.16 全エネルギーの内訳。第9章で導いた $E=T+V_{ne}+J+K+E_{\text{核間}}$ の各項が数値として現れる。</p>
+
+<p>ここで交換項 $K=-178.76$ eV が負であること、すなわち<strong>交換相互作用が系を安定化している</strong>ことを確認してほしい。第9章で「同じスピンの電子どうしは互いを避けるので、Coulomb反発の数え過ぎが補正される」と述べた効果が、そのまま数値として現れている。またこの分解は検算にも使える。$T$ と全ポテンシャル $V=V_{ne}+J+K+E_{\text{核間}}$ の比は</p>
+$$
+-\frac{V}{T}=\frac{3264.363-888.541+178.760-366.605}{1094.612}=1.9989\approx 2
+$$
+<p>となり、Coulomb系の平衡構造で成り立つビリアル定理 $2T=-V$ をほぼ満たしている。<em>この比が2から大きくずれていたら、構造緩和が終わっていないか、計算のどこかが壊れている</em>と判断できる。</p>
+
+<h3>10.9.5 実験値と比べるときの作法</h3>
+
+<p>本章では2回、計算値と実験値を比べた(光電子スペクトルと振動数)。どちらの場合も、比べる前に問うべき質問は同じである。</p>
+
+<ol>
+  <li><strong>同じ量を比べているか。</strong>垂直イオン化エネルギーか断熱イオン化エネルギーか。調和振動数か非調和を含む基本振動数か。</li>
+  <li><strong>系の状態は同じか。</strong>計算は絶対零度・気相・孤立分子である。実験が水溶液中や結晶中なら、周囲の分子との相互作用(第13章のvan der Waals力や水素結合)が数百 $\mathrm{cm^{-1}}$ 単位で振動数を動かす。</li>
+  <li><strong>手法固有の系統誤差はどちらを向いているか。</strong>Hartree–Fockの振動数は高めに出る、Koopmansのイオン化エネルギーは深い準位ほど過大になる、といった<em>系統誤差の向き</em>を知っていれば、ずれを見て慌てずに済む。</li>
+  <li><strong>絶対値が合わなくても、傾向は合うことが多い。</strong>置換基を変えたときの振動数の増減、分子を変えたときのHOMOの上下といった<em>相対的な傾向</em>は、絶対値よりずっと信頼できる。マテリアル探索で計算が力を発揮するのはこの点である(文献[9])。</li>
+</ol>
+
+<div class="box why">
+<p class="box-title">なぜ？：それでも計算する価値はどこにあるのか</p>
+<p>これだけ注意事項を並べると、計算などあてにならないように見えるかもしれない。しかし考えてみてほしい。グルコースの分子軌道のエネルギーと形を、実験だけで一つひとつ調べるのはほとんど不可能である。計算なら、<strong>実験では分けられないものを分けて見せてくれる</strong>——どの元素のどの軌道が、どのエネルギーに、どんな形で存在しているかを。また、まだ合成されていない物質についても答えを出せる。誤差の性質を理解したうえで使えば、計算は「実験の代用品」ではなく「実験では見えない量を見るための顕微鏡」になる。</p>
+</div>
+
+<h2 id="sec10-10">10.10 まとめと演習</h2>
+
+<h3>10.10.1 この章のまとめ</h3>
+
+<ul>
+  <li><strong>Molcalc</strong>(GAMESSベース、STO-3G固定)はブラウザだけで構造最適化・熱力学量・振動数・分子軌道を返す。出力の型を覚えるのに便利だが、基底が固定で原子数の上限もあるため、本格的な計算はPySCFで行う。</li>
+  <li><strong>構造の入手</strong>:PubChemで化学名(組成式では候補が多すぎることがある)を検索し、3D ConformerからSDFを保存する。<code>SDF_{物質名}.sdf</code> と名前を付け替え、<code>sdf2xyz.py</code> でxyz形式に変換し、VESTAで目視確認する。xyz形式は「1行目=原子数、2行目=コメント、3行目以降=元素記号と座標(Å)」。</li>
+  <li><strong>構造緩和</strong>:力 $\bm{F}_I=-\partial E/\partial\bm{R}_I$ がゼロになる点を探す(第8章)。D-グルコース(24原子)ではSCFが23回繰り返されて収束した。6-31G基底では緩和により $\Delta E=-0.725$ eV(式 \eqref{eq:10-dE631g})と安定化するが、<strong>同じ2構造をSTO-3Gで計算すると $\Delta E=+0.349$ eV(式 \eqref{eq:10-dEsto3g})と符号が逆転する</strong>。荒い基底では構造の良し悪しの判定そのものが誤りうる。</li>
+  <li><strong>状態密度</strong>:$D(E)=\sum_i g_i\delta(E-\epsilon_i)$(式 \eqref{eq:10-dos-delta})。分子では離散準位をGauss関数で幅 $\sigma$ にぼかして描く(式 \eqref{eq:10-dos-gauss})。Löwdin射影(式 \eqref{eq:10-lowdin})により元素別・軌道別のPDOS(式 \eqref{eq:10-pdos})が得られる。グルコースのHOMOは主にO-$2p$とC-$2p$からなる。</li>
+  <li><strong>CH$_4$の分子軌道</strong>:$-25.71$ eV に $a_1$(電子2個、$s$ 成分100%)、$-14.76$ eV に3重縮退した $t_2$(電子6個、HOMO、C-$2p$とH-$1s$の結合性)、$+6.92$ eV に $a_1^{*}$(占有数0、LUMO)。$a_1$ と $t_2$ が混ざらないのは対称性による(第12章)。</li>
+  <li><strong>光電子スペクトル</strong>:Koopmansの定理 $I_i=-\epsilon_i$(式 \eqref{eq:10-koopmans})により、軌道エネルギーがイオン化エネルギーと対応する。CH$_4$では $T_2$ バンドと $A_1$ バンドの面積比が 3:1 になり、計算と実験が一致する。横軸はイオン化エネルギーである。</li>
+  <li><strong>波動関数の可視化</strong>:cubeファイルをVESTAで開き、等値面を見る(黄=正、青=負)。結合の途中に節面がなければ結合性、あれば反結合性。グルコースのHOMOはC-$2p$どうしの $\sigma$ 結合性とC-$2p$/O-$2p$の $\pi^{*}$ 反結合性が共存する。厳密な解析には重なり密度やCOHP(第1章)が要る。</li>
+  <li><strong>振動準位</strong>:調和近似 $U=\frac12kx^2$(式 \eqref{eq:10-harmonic})、$\omega=\sqrt{k/\mu}$(式 \eqref{eq:10-omega})、$E_n=(n+\frac12)\hbar\omega$(式 \eqref{eq:10-levels})。$1\ \mathrm{eV}=8065.54\ \mathrm{cm^{-1}}$(式 \eqref{eq:10-ev-cm})。H$_2$Oの実験値 1595, 3657, 3756 $\mathrm{cm^{-1}}$ に対し計算値は 1804, 4065, 4164 $\mathrm{cm^{-1}}$ と約10%高く、スケーリング因子 $0.895$ で補正できる。虚振動が出たら平衡構造ではない。</li>
+</ul>
+
+<h3>10.10.2 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習10.1 メタンのxyzファイルを手で書く</p>
+<p>C–H結合長を $1.087\ \text{Å}$ とする正四面体形のCH$_4$について、C原子を原点に置いたxyzファイルを作れ。次に、そのファイルをVESTAで開き、H–C–H結合角が $109.47^\circ$ になっていることを確かめよ。</p>
+<p><em>ヒント：</em>立方体の頂点を交互にとると正四面体になる。C を原点、4個の H を $(d,d,d)$, $(-d,-d,d)$, $(-d,d,-d)$, $(d,-d,-d)$ に置けばよい。原点からの距離が $\sqrt{3}\,d=1.087$ Å となるように $d=1.087/\sqrt3=0.6276$ を選ぶ。結合角は2本のベクトルの内積から $\cos\theta=(d^2-d^2-d^2)/(3d^2)=-1/3$、すなわち $\theta=109.47^\circ$ と検算できる。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.2 基底関数の逆転を説明する</p>
+<p>10.3節では、同じ2つの構造(緩和前・緩和後)に対して、6-31Gでは $\Delta E=-0.725$ eV、STO-3Gでは $\Delta E=+0.349$ eV という逆の結論が出た。</p>
+<p>(1) この事実は変分原理に矛盾しないことを説明せよ。(2) どちらの結論を信用すべきか、理由とともに述べよ。(3) 「STO-3Gで構造緩和し、STO-3Gで全エネルギーを比較する」という手順なら、少なくとも符号の逆転は起きないはずである。その理由を述べよ。</p>
+<p><em>ヒント：</em>(1) 変分原理が保証するのは「同じ系・同じハミルトニアンに対して、試行関数の空間を広げれば下がる」ことだけである。異なる構造どうしのエネルギー差の精度については何も言っていない。(2) 基底が大きいほど真の値に近いことと、6-31Gが構造緩和にも使われたこと(その基底で力がゼロになる構造)に注目する。(3) 緩和後の構造はその基底の下でのエネルギー極小点だから、他のどの構造よりエネルギーが低い(少なくとも近傍では)。手法・基底を一貫させることの意味を述べればよい。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.3 DOSの面積と幅</p>
+<p>CH$_4$のDOSを $\sigma=0.300$ eV のGauss拡がりで描いた(図10.3)。</p>
+<p>(1) $\sigma$ を $0.100$ eV に変えたとき、$-14.76$ eV のピークの高さはいくらになるか。(2) $\sigma$ を変えてもピークの面積が変わらないことを、Gauss関数の規格化から示せ。(3) $-14.76$ eV の3本の軌道は厳密には $-14.76147$, $-14.76090$, $-14.76075$ eV とわずかに異なる。この分裂を図の上で見分けるには $\sigma$ をどこまで小さくする必要があるか。それは現実的か。</p>
+<p><em>ヒント：</em>(1) 高さは $6/(\sigma\sqrt{2\pi})$。(2) $\int_{-\infty}^{\infty}\frac{1}{\sigma\sqrt{2\pi}}e^{-(E-\epsilon)^2/2\sigma^2}\dd E=1$ が $\sigma$ によらないことを使う。(3) 分裂の大きさは $10^{-3}$ eV 以下。この分裂は数値誤差によるもので、対称性からは厳密に縮退しているはずである(第12章)。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.4 CH$_4$の分子軌道表を読む</p>
+<p>コード10.10の出力について、次を答えよ。</p>
+<p>(1) 全電子数を占有数の合計から求め、C原子とH原子4個の電子数の和と一致することを確かめよ。(2) MO 2 と MO 6 は、ともに $s$ 成分100%である。この2つの違いは何か。(3) Koopmansの定理を使って、CH$_4$の第2のイオン化エネルギー(2番目に浅い準位からの電離)を予言し、図10.5の実験スペクトルと比べよ。(4) MO 3–5 の $p$ 成分が 0.5725 であることから、$t_2$ 軌道におけるC-$2p$とH-$1s$の寄与の比を述べよ。</p>
+<p><em>ヒント：</em>(2) 図10.6と例題10.7を参照。結合性と反結合性、節面の有無で答える。(3) $-\epsilon$ が2番目に小さいのは $a_1$($-25.71$ eV)。実験の $A_1$ バンドは 23 eV 付近。(4) $t_2$ にはC-$2s$は対称性のため入れない。したがって $s$ 成分 0.4275 はすべてH-$1s$由来と考えてよい。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.5 振動の力の定数と同位体効果</p>
+<p>(1) CH$_4$の反対称伸縮(実験値 $3019\ \mathrm{cm^{-1}}$)を局所的なC–H振動子とみなし、力の定数 $k$ を求めよ($m_{\mathrm{C}}=12.000$, $m_{\mathrm{H}}=1.008$)。</p>
+<p>(2) 水の重水素置換体 D$_2$O のO–D伸縮振動の波数を、力の定数が同位体置換で変わらないと仮定して予言せよ($m_{\mathrm{D}}=2.014$)。</p>
+<p>(3) CH$_4$の9個の振動モード(表10.4の計算値、縮退度も込み)から、零点エネルギーの合計を eV と kJ mol$^{-1}$ で求めよ。表10.1の振動エンタルピー 119.28 kJ mol$^{-1}$ と桁が合うことを確かめよ(基底が違うので完全一致はしない)。</p>
+<p><em>ヒント：</em>(1) 例題10.8と同じ手順。$\mu=12\times1.008/13.008=0.9298$ u。答えは約 $500\ \mathrm{N\,m^{-1}}$。(2) 力の定数が同じなら $\omega\propto1/\sqrt{\mu}$ なので $\tilde\nu_{\mathrm{OD}}=\tilde\nu_{\mathrm{OH}}\sqrt{\mu_{\mathrm{OH}}/\mu_{\mathrm{OD}}}$。$\mu_{\mathrm{OH}}=0.948$ u、$\mu_{\mathrm{OD}}=1.789$ u なので比は $0.728$、答えは約 $2660\ \mathrm{cm^{-1}}$(実測 $2671\ \mathrm{cm^{-1}}$)。(3) $\sum_{\text{modes}}\frac12 hc\tilde\nu$ を式 \eqref{eq:10-ev-cm} で eV に直し、$96.485$ を掛けて kJ mol$^{-1}$ にする。縮退したモードは縮退度の回数だけ足すこと。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.6 自分で分子を1つ選んで計算する</p>
+<p>PubChemから好きな分子(原子数10〜30程度)を選び、次の手順を実行してレポートにまとめよ。</p>
+<p>(1) CIDを記録し、SDFをダウンロードして <code>SDF_{物質名}.sdf</code> と命名する。(2) xyzに変換し、VESTAで結合長・結合角を2か所以上測る。(3) 6-31Gで構造緩和し、緩和前後の全エネルギー差を eV と kJ mol$^{-1}$ で示す。(4) DOSとPDOSを描き、HOMO付近がどの元素のどの軌道でできているかを述べる。(5) HOMOとLUMOのcubeを出し、結合性・反結合性を読み取る。(6) 振動数を計算し、実験の赤外スペクトル(文献値)と比較して、スケーリング因子を推定する。</p>
+<p><em>ヒント：</em>原子数が増えると計算時間は急激に伸びる。まず10原子程度で全手順を通してから大きな分子に進むこと。(3)では基底を変えても結論が変わらないかを確認するとなおよい。(6)では実験値が見つからなければ、同じ官能基をもつ別の分子の値(たとえばO–H伸縮 $3200$〜$3600\ \mathrm{cm^{-1}}$、C=O伸縮 $1700\ \mathrm{cm^{-1}}$ 付近)と比べるだけでも十分な議論になる。</p>
+</div>
+
+<h3>10.10.3 参考文献</h3>
+
+<div class="refs">
+<ol>
+<li>原田 義也『量子化学(上巻)』裳華房。——分子軌道法の基礎、CH$_4$やH$_2$Oの分子軌道の扱いが丁寧。</li>
+<li>A. Szabo, N. S. Ostlund『新しい量子化学 — 電子構造の理論入門(上)』東京大学出版会(原著:<em>Modern Quantum Chemistry</em>, Dover)。——Hartree–Fock法と基底関数、Koopmansの定理(本章10.6節の導出)の標準的な文献。</li>
+<li>P. Atkins, J. de Paula, <em>Atkins' Physical Chemistry</em>, Oxford University Press。——分子振動、赤外・ラマン分光、光電子分光の基礎。</li>
+<li>F. A. Cotton, <em>Chemical Applications of Group Theory</em>, Wiley。——CH$_4$の光電子スペクトルと分子軌道の対応(図10.5の出典)。第12章の主教材でもある。</li>
+<li>今野 豊彦『物質の対称性と群論』共立出版。——振動モードの分類と赤外活性・ラマン活性の判定。</li>
+<li>Q. Sun <em>et al.</em>, "PySCF: the Python-based simulations of chemistry framework", <em>WIREs Comput. Mol. Sci.</em> <strong>8</strong>, e1340 (2018).——本章のスクリプトが内部で使っているソフトウェア。</li>
+<li>J. H. Jensen <em>et al.</em>, Molcalc — <a href="https://molcalc.org/">https://molcalc.org/</a>。——10.1節のWebアプリケーション。</li>
+<li>Y. Mochizuki <em>et al.</em>, "Chemical bonding analysis...", <em>J. Phys. Chem. C</em> <strong>125</strong>, 7959 (2021).——重なり密度・COHP/COBIによる結合解析(10.7節で触れた道具の実例)。</li>
+<li>Y. Mochizuki <em>et al.</em>, <em>Phys. Rev. Materials</em> <strong>4</strong>, 044601 (2020).——計算による新規半導体探索。計算の「相対的な傾向は信頼できる」という10.9節の主張の実例。</li>
+<li>L.-P. Wang and C. Song, "Geometry optimization made simple with translation and rotation coordinates", <em>J. Chem. Phys.</em> <strong>144</strong>, 214108 (2016).——10.3節の構造緩和で使われるgeomeTRICの原論文。</li>
+<li>A. W. Potts and W. C. Price, "The photoelectron spectra of methane, silane, germane and stannane", <em>Proc. R. Soc. London A</em> <strong>326</strong>, 165 (1972).——図10.5の実験データの出典。</li>
+<li>S. Kim <em>et al.</em>, "PubChem 2023 update", <em>Nucleic Acids Res.</em> <strong>51</strong>, D1373 (2023).——10.2節で使った構造データベース。</li>
+<li>K. Momma and F. Izumi, "VESTA 3 for three-dimensional visualization of crystal, volumetric and morphology data", <em>J. Appl. Crystallogr.</em> <strong>44</strong>, 1272 (2011).——可視化ソフトVESTAの原論文。</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch09_exchange_energy.html">← 第9章:交換エネルギーの登場</a>
+  <span class="spacer"></span>
+  <a href="ch11_secular_bonding.html">第11章:永年方程式と共有結合 →</a>
+</nav>
+</main>
+</body>
+</html>

@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<script src="assets/access-guard.js"></script>
+<title>第6章 Gauss基底による近似解と厳密解の比較 — マテリアル計算科学入門</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      rr: "\\bm{r}",
+      RR: "\\bm{R}",
+      xx: "\\bm{x}",
+      abs: ["\\left|#1\\right|", 1],
+      braket: ["\\langle #1 \\rangle", 1],
+      ket: ["\\left| #1 \\right\\rangle", 1],
+      bra: ["\\left\\langle #1 \\right|", 1],
+      Ham: "\\hat{\\mathcal{H}}",
+      ee: "e_0",
+      eps: "\\varepsilon_0"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">マテリアル計算科学入門 — 目次</a>
+  <span class="series">第II部 近似解を求める道具 / 第6章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第6章</span>Gauss基底による近似解と厳密解の比較</h1>
+
+<div class="lead">
+  <p>第3章で変分原理を、第5章で基底関数（Slater型軌道・Gauss型軌道・STO-3G）を学んだ。道具はそろった。本章ではその道具で、<strong>水素原子の基底状態エネルギーを、厳密解を知らないふりをして、たった1個のGauss関数から手計算で求める</strong>。水素原子は厳密解が分かっている数少ない系であり、「近似がどれくらい当たるのか」を答え合わせできる、またとない練習台になる。結果は $E_{\min}=\dfrac{8}{3\pi}\epsilon_{1s}=-11.55\ \mathrm{eV}$、厳密値 $-13.606\ \mathrm{eV}$ より15%も高い。この15%はどこから来たのか——原点でのカスプと遠方の減衰という2つの欠陥を図で確かめる。そして「分かりきった面倒な単純作業は機械にやらせるべき」という方針でSTO-3GをPySCFに任せ、誤差が6.69%まで縮むことを見る。最後に、計算機が黙って選んでいる RHF・UHF・ROHF の違いを、Li原子とLi$^+$イオンの実計算で確かめる。</p>
+  <div class="goals">
+    <strong>この章で学ぶこと</strong>
+    <ul>
+      <li>球対称な試行関数に対する動径ラプラシアン $\nabla^2=\dfrac{1}{r^2}\dfrac{\dd}{\dd r}\!\left(r^2\dfrac{\dd}{\dd r}\right)$ の使い方と、$\nabla^2\phi_T=(-6a+4a^2r^2)\phi_T$ の導出</li>
+      <li>Gauss積分公式 $\displaystyle\int_0^\infty x^{2n}e^{-cx^2}\dd x$ を微分でつくる方法と、運動エネルギー・Coulomb項・規格化積分の完全な手計算</li>
+      <li>$E(\alpha)=A\alpha-B\sqrt{\alpha}$ の最小化から $\alpha_{\mathrm{opt}}=\dfrac{8}{9\pi}=0.2829$、$E_{\min}=\dfrac{8}{3\pi}\epsilon_{1s}=-11.55\ \mathrm{eV}$ を得ること</li>
+      <li>核カスプ条件 $\left.\dfrac{1}{\psi}\dfrac{\dd\psi}{\dd r}\right|_{r\to0}=-\dfrac{Z}{a_0}$ の導出と、Gauss関数が原点で必ず平らになるという構造的欠陥</li>
+      <li>遠方の減衰 $e^{-\alpha r^2}$ と $e^{-r/a_0}$ の違い、変分最適な $\alpha$ と重なり最大の $\alpha$ がずれる理由</li>
+      <li>PySCFによるSTO-3G計算の実行と出力の読み方、STO-1G／STO-3G／6-31G／厳密解の定量比較</li>
+      <li>閉殻と開殻、$\bm{\alpha}$スピンと$\bm{\beta}$スピン、RHF・UHF・ROHFの違いと使い分け</li>
+      <li>Li原子・Li$^+$イオンの計算例、電荷を変えると準位が下がる理由、Koopmansの定理の芽</li>
+    </ul>
+  </div>
+  <div class="prereq"><strong>前提：</strong>第3章（変分原理と試行関数）、第5章（Slater型軌道・Gauss型軌道・STO-3G・重なり積分）、第2章（水素原子の厳密解と $\epsilon_{1s}$）。Gauss積分・極座標のラプラシアン・体積要素は付録A、PySCFの導入は付録Bを参照。</div>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec6-1">6.1 厳密解を知らないつもりで水素原子を解く</a></li>
+    <li><a href="#sec6-2">6.2 ラプラシアンの動径部分と運動エネルギー項</a></li>
+    <li><a href="#sec6-3">6.3 Coulomb引力の項</a></li>
+    <li><a href="#sec6-4">6.4 規格化積分（分母）</a></li>
+    <li><a href="#sec6-5">6.5 $E(\alpha)=A\alpha-B\sqrt{\alpha}$ の最小化</a></li>
+    <li><a href="#sec6-6">6.6 なぜ15%も外れるのか — カスプ条件と遠方の減衰</a></li>
+    <li><a href="#sec6-7">6.7 STO-3Gを機械にやらせる</a></li>
+    <li><a href="#sec6-8">6.8 RHF・UHF・ROHFの違い</a></li>
+    <li><a href="#sec6-9">6.9 まとめと演習</a></li>
+  </ol>
+</nav>
+
+<h2 id="sec6-1">6.1 厳密解を知らないつもりで水素原子を解く</h2>
+
+<h3>6.1.1 なぜ答えを知っている問題を解き直すのか</h3>
+
+<p>第2章で、水素原子のSchrödinger方程式は厳密に解けること、そのエネルギー準位が</p>
+$$
+\begin{equation}
+E_n=\frac{\epsilon_{1s}}{n^2},\qquad
+\epsilon_{1s}=-\frac{m\ee^4}{8\eps^2h^2}=-13.606\ \mathrm{eV}
+\label{eq:6-exact-level}
+\end{equation}
+$$
+<p>となることを学んだ。基底状態（$n=1$）の波動関数も</p>
+$$
+\begin{equation}
+\psi_{1s}(r)=\frac{1}{\sqrt{\pi a_0^3}}\,e^{-r/a_0},\qquad
+a_0=\frac{\eps h^2}{\pi m\ee^2}=0.529\times10^{-10}\ \mathrm{m}
+\label{eq:6-exact-1s}
+\end{equation}
+$$
+<p>という簡単な形をしている。答えが分かっている問題を、わざわざ近似で解き直すのはなぜか。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：答え合わせのできる練習台が要る</p>
+<p>実際に計算したい系——ヘリウム原子、メタン分子、SrTiO$_3$結晶——は、どれも厳密には解けない。解けないから近似する。ところが近似計算には、「その答えが本当はどれくらい正しいのか」を教えてくれる仕組みが<strong>ない</strong>。変分原理（第3章）が保証してくれるのは「真の基底状態エネルギー以上である」という不等式だけで、どれだけ上にいるのかは分からない。</p>
+<p>そこで、厳密解が分かっている水素原子を使って、同じ近似法を走らせてみる。誤差が何%出るのか、どんな形で誤るのかを一度身体で覚えておけば、答えの分からない系に対しても「この基底関数ならこの程度」という感覚が持てる。<em class="term">ベンチマーク</em>（benchmark）と呼ばれるこの発想は、計算科学の基本作法である。</p>
+</div>
+
+<h3>6.1.2 問題設定：ハミルトニアンと試行関数</h3>
+
+<p>水素原子の電子1個に対するハミルトニアンは、原子核（陽子）を原点に固定して</p>
+$$
+\begin{equation}
+\Ham=-\frac{\hbar^2}{2m}\nabla^2-\frac{\ee^2}{4\pi\eps}\frac{1}{r}
+\label{eq:6-hamiltonian}
+\end{equation}
+$$
+<p>である。第1項が電子の運動エネルギー、第2項が原子核との Coulomb 引力エネルギーである。原子核を止めてよいという断りは Born–Oppenheimer 近似と呼ばれ、第8章できちんと正当化する。</p>
+
+<p>試行関数として、第5章で導入したGauss型軌道（Gaussian-type orbital, GTO）を1個だけ使う。</p>
+
+<div class="box def">
+<p class="box-title">定義：本章で使う試行関数（1個のGauss関数）</p>
+$$
+\begin{equation}
+\phi_T(r)=N\exp\!\left[-\alpha\left(\frac{r}{a_0}\right)^{\!2}\right]
+=N e^{-ar^2},
+\qquad a\equiv\frac{\alpha}{a_0^2}
+\label{eq:6-trial}
+\end{equation}
+$$
+<p>ここで $\alpha$ は<strong>無次元</strong>の変分パラメータ、$a=\alpha/a_0^2$ は長さ$^{-2}$の次元をもつ量、$N$ は規格化定数である。$\phi_T$ は $\theta,\varphi$ に依存しない、すなわち球対称であることに注意してほしい。1s軌道を狙っているのだから、これでよい。</p>
+</div>
+
+<p>やることは、変分原理（第3章）そのままである。エネルギー期待値</p>
+$$
+\begin{equation}
+\braket{E}(\alpha)=\frac{\bra{\phi_T}\Ham\ket{\phi_T}}{\braket{\phi_T|\phi_T}}
+\label{eq:6-energy-def}
+\end{equation}
+$$
+<p>を $\alpha$ の関数として求め、これを最小にする $\alpha$ を探す。変分原理により、どんな $\alpha$ を選んでも $\braket{E}(\alpha)\ge \epsilon_{1s}$ であるから、$\braket{E}$ を小さくすればするほど真の基底状態に近づく。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：分母で割るのを忘れてはいけない</p>
+<p>式\eqref{eq:6-energy-def}の分母 $\braket{\phi_T|\phi_T}$ は「規格化されていない試行関数を使うための保険」である。$\phi_T$ をあらかじめ規格化しておけば分母は 1 になるが、そのためには $N$ を $\alpha$ の関数として先に決めておかねばならず、$\alpha$ 微分のときに $N(\alpha)$ の微分まで面倒を見る羽目になる。分母を残したまま計算すると、最後に $N^2$ が分子・分母で綺麗に約分されて消える。<strong>規格化定数を決めずに済む</strong>のが、比の形にしておく実利である。</p>
+</div>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="水素原子の座標設定とCoulombポテンシャルの井戸"><defs><marker id="f1arw" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#566573"/></marker><marker id="f1arwR" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#b03a2e"/></marker></defs><rect x="15" y="20" width="345" height="290" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/><text x="187" y="44" text-anchor="middle" font-size="14" font-weight="bold" fill="#14684a">(a) 座標の設定</text><!-- axes --><line x1="80" y1="230" x2="330" y2="230" stroke="#566573" stroke-width="1.2" marker-end="url(#f1arw)"/><line x1="80" y1="230" x2="80" y2="70" stroke="#566573" stroke-width="1.2" marker-end="url(#f1arw)"/><line x1="80" y1="230" x2="35" y2="285" stroke="#566573" stroke-width="1.2" marker-end="url(#f1arw)"/><text x="336" y="234" font-size="12" fill="#566573">y</text><text x="74" y="66" font-size="12" fill="#566573">z</text><text x="30" y="296" font-size="12" fill="#566573">x</text><!-- nucleus --><circle cx="80" cy="230" r="11" fill="#b03a2e"/><text x="80" y="235" text-anchor="middle" font-size="13" font-weight="bold" fill="#fff">+</text><text x="60" y="256" font-size="12" fill="#b03a2e">原子核(陽子)</text><!-- electron --><line x1="80" y1="230" x2="240" y2="120" stroke="#1a5276" stroke-width="2" marker-end="url(#f1arw)"/><circle cx="248" cy="115" r="8" fill="#1a5276"/><text x="262" y="112" font-size="12" fill="#1a5276">電子</text><text x="150" y="164" font-size="14" fill="#1a5276" font-style="italic">r</text><!-- angle theta --><path d="M 80 190 A 40 40 0 0 1 105 199" fill="none" stroke="#14684a" stroke-width="1.4"/><text x="94" y="188" font-size="12" fill="#14684a">θ</text><!-- sphere hint --><circle cx="80" cy="230" r="80" fill="none" stroke="#14684a" stroke-dasharray="4 3"/><text x="150" y="292" font-size="12" fill="#14684a">体積要素 r² sinθ dr dθ dφ</text><!-- right panel --><rect x="375" y="20" width="370" height="290" rx="10" fill="#eef4f9" stroke="#1a5276" stroke-width="1.5"/><text x="560" y="44" text-anchor="middle" font-size="14" font-weight="bold" fill="#1a5276">(b) Coulomb井戸と1s準位</text><line x1="410" y1="290" x2="735" y2="290" stroke="#566573" /><line x1="573" y1="290" x2="573" y2="70" stroke="#566573" stroke-dasharray="3 3"/><text x="740" y="294" text-anchor="end" font-size="11" fill="#566573">r</text><!-- potential curves --><polyline fill="none" stroke="#b03a2e" stroke-width="2.2" points="597,280 601,248 606,226 614,200 623,184 634,171 644,162 666,151 687,145 709,141 730,138"/><polyline fill="none" stroke="#b03a2e" stroke-width="2.2" points="549,280 545,248 540,226 532,200 523,184 512,171 502,162 480,151 459,145 437,141 416,138"/><text x="700" y="132" text-anchor="end" font-size="12" fill="#b03a2e">V(r) = −e₀²/(4πε₀ r)</text><!-- 1s level --><line x1="494" y1="151" x2="652" y2="151" stroke="#14684a" stroke-width="2.5"/><text x="658" y="155" font-size="12" fill="#14684a">ε₁ₛ = −13.6 eV</text><!-- trial function sketch --><polyline fill="none" stroke="#1a5276" stroke-width="2" stroke-dasharray="5 3" points="463,246 478,242 493,232 508,218 523,203 538,190 553,182 573,179 593,182 608,190 623,203 638,218 653,232 668,242 683,246"/><text x="573" y="270" text-anchor="middle" font-size="12" fill="#1a5276">試行関数 φ_T(r) = N e^(−a r²)</text><text x="573" y="62" text-anchor="middle" font-size="11" fill="#566573">エネルギー</text></svg>
+<figcaption>図6.1 (a) 水素原子の座標設定。試行関数が球対称なので、角度積分は $4\pi$ を出すだけで済む。(b) Coulombポテンシャルの井戸と厳密な1s準位、そして本章で使うGauss型試行関数の概形。Gauss関数は原点で「丸い山」になっており、厳密解のような尖りがない。この差が本章の主題である。</figcaption>
+</figure>
+
+<h3>6.1.3 角度積分を先に済ませる</h3>
+
+<p>ブラケットを積分に書き戻す。3次元の体積要素は極座標で $\dd^3r=r^2\sin\theta\,\dd r\,\dd\theta\,\dd\varphi$ である（付録A）。分子は</p>
+$$
+\begin{align}
+\bra{\phi_T}\Ham\ket{\phi_T}
+&=\int_0^{2\pi}\!\!\int_0^{\pi}\!\!\int_0^{\infty}\phi_T(r)\,\Ham\,\phi_T(r)\,r^2\sin\theta\,\dd r\,\dd\theta\,\dd\varphi \nonumber\\
+&=\int_0^{2\pi}\dd\varphi\int_0^{\pi}\sin\theta\,\dd\theta\int_0^{\infty}\phi_T(r)\,\Ham\,\phi_T(r)\,r^2\,\dd r \nonumber\\
+&=2\pi\cdot 2\cdot\int_0^{\infty}\phi_T(r)\,\Ham\,\phi_T(r)\,r^2\,\dd r
+=4\pi\int_0^{\infty}\phi_T(r)\,\Ham\,\phi_T(r)\,r^2\,\dd r
+\label{eq:6-angular}
+\end{align}
+$$
+<p>となる。$\phi_T$ が実関数なので複素共役は書かなくてよい。$\int_0^{2\pi}\dd\varphi=2\pi$、$\int_0^{\pi}\sin\theta\,\dd\theta=[-\cos\theta]_0^{\pi}=1-(-1)=2$ を使った。以後、この $4\pi$ は分子にも分母にも共通に現れるので、実は最後に約分される。それでも律儀に書いておく。</p>
+
+<p>ハミルトニアン\eqref{eq:6-hamiltonian}を代入すると、計算すべきものは</p>
+$$
+4\pi N^2\int_0^{\infty}e^{-ar^2}
+\underbrace{\left(-\frac{\hbar^2}{2m}\nabla^2\right)}_{\text{第1項：運動エネルギー}}
+\!\!\!e^{-ar^2}\,r^2\dd r
+\;+\;
+4\pi N^2\int_0^{\infty}e^{-ar^2}
+\underbrace{\left(-\frac{\ee^2}{4\pi\eps}\frac{1}{r}\right)}_{\text{第2項：Coulomb引力}}
+\!\!\!e^{-ar^2}\,r^2\dd r
+$$
+<p>の2つと、分母の規格化積分の合計3つである。ここからは面倒だが、一歩ずつ確実にやれば必ず終わる。順に片づけよう。</p>
+
+<div class="box ex">
+<p class="box-title">例題6.1　規格化定数 $N$</p>
+<p>試行関数\eqref{eq:6-trial}を規格化する定数 $N$ を求めよ。ただし $\displaystyle\int_0^\infty r^2e^{-cr^2}\dd r=\frac{1}{4}\sqrt{\frac{\pi}{c^3}}$ を用いてよい。</p>
+<p><strong>解答</strong>　規格化条件は $\displaystyle\int\abs{\phi_T}^2\dd^3r=1$ である。角度積分を先に済ませると</p>
+$$
+1=4\pi N^2\int_0^\infty e^{-2ar^2}r^2\,\dd r
+=4\pi N^2\cdot\frac{1}{4}\sqrt{\frac{\pi}{(2a)^3}}
+=\pi N^2\frac{\sqrt{\pi}}{(2a)^{3/2}} .
+$$
+<p>したがって $N^2=(2a)^{3/2}/\pi^{3/2}=(2a/\pi)^{3/2}$、すなわち</p>
+$$
+N=\left(\frac{2a}{\pi}\right)^{3/4}
+=\left(\frac{2\alpha}{\pi a_0^2}\right)^{3/4}.
+$$
+<p>これは第5章でGauss型軌道の規格化定数として求めたものと同じである。ただし本章の本計算では、6.1.2で述べたとおり $N$ を決めずに比の形で押し通す。$N$ が必要になるのは、最後に波動関数の形を図示するときだけである。</p>
+</div>
+
+<h2 id="sec6-2">6.2 ラプラシアンの動径部分と運動エネルギー項</h2>
+
+<h3>6.2.1 球対称関数に働くラプラシアン</h3>
+
+<p>直交座標でのラプラシアンは $\nabla^2=\dfrac{\partial^2}{\partial x^2}+\dfrac{\partial^2}{\partial y^2}+\dfrac{\partial^2}{\partial z^2}$ である。極座標に変換すると（付録A）</p>
+$$
+\nabla^2=\frac{1}{r^2}\frac{\partial}{\partial r}\left(r^2\frac{\partial}{\partial r}\right)
++\frac{1}{r^2\sin\theta}\frac{\partial}{\partial\theta}\left(\sin\theta\frac{\partial}{\partial\theta}\right)
++\frac{1}{r^2\sin^2\theta}\frac{\partial^2}{\partial\varphi^2}
+$$
+<p>となるが、$\phi_T$ は $\theta,\varphi$ に依存しないので後ろの2項は消える。残るのは動径部分だけである。</p>
+
+<div class="box note">
+<p class="box-title">数学ノート：動径ラプラシアンの2つの書き方</p>
+<p>球対称な関数 $f(r)$ に対して</p>
+$$
+\begin{equation}
+\nabla^2 f=\frac{1}{r^2}\frac{\dd}{\dd r}\left(r^2\frac{\dd f}{\dd r}\right)
+=\frac{\dd^2f}{\dd r^2}+\frac{2}{r}\frac{\dd f}{\dd r}
+\label{eq:6-laplacian-radial}
+\end{equation}
+$$
+<p>が成り立つ。等号の確認は積の微分をするだけである：</p>
+$$
+\frac{1}{r^2}\frac{\dd}{\dd r}\left(r^2\frac{\dd f}{\dd r}\right)
+=\frac{1}{r^2}\left(2r\frac{\dd f}{\dd r}+r^2\frac{\dd^2 f}{\dd r^2}\right)
+=\frac{2}{r}\frac{\dd f}{\dd r}+\frac{\dd^2 f}{\dd r^2}.
+$$
+<p>右辺の形（$\dd^2/\dd r^2+ (2/r)\dd/\dd r$）のほうが具体的な関数に作用させるときは使いやすい。以後こちらを使う。</p>
+</div>
+
+<h3>6.2.2 $\nabla^2\phi_T$ を求める</h3>
+
+<p>$\phi_T=Ne^{-ar^2}$ に\eqref{eq:6-laplacian-radial}を作用させる。まず1階微分は、合成関数の微分により</p>
+$$
+\frac{\dd\phi_T}{\dd r}=N\cdot e^{-ar^2}\cdot(-2ar)=-2ar\,N e^{-ar^2}
+$$
+<p>である。次に2階微分は、$-2ar$ と $e^{-ar^2}$ の積の微分だから</p>
+$$
+\frac{\dd^2\phi_T}{\dd r^2}
+=N\left[(-2a)e^{-ar^2}+(-2ar)\cdot(-2ar)e^{-ar^2}\right]
+=\left(-2a+4a^2r^2\right)Ne^{-ar^2}.
+$$
+<p>また</p>
+$$
+\frac{2}{r}\frac{\dd\phi_T}{\dd r}=\frac{2}{r}\cdot(-2ar)Ne^{-ar^2}=-4a\,Ne^{-ar^2}
+$$
+<p>である（$r$ が約分されるので、$r\to0$ でも発散しない）。両者を足すと</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\nabla^2\phi_T=\left(-2a+4a^2r^2-4a\right)Ne^{-ar^2}
+=\left(-6a+4a^2r^2\right)\phi_T .
+\label{eq:6-lap-phi}
+\end{equation}
+$$
+</div>
+
+
+<h3>6.2.3 必要なGauss積分をつくる</h3>
+
+<p>これから $\int_0^\infty r^2e^{-2ar^2}\dd r$ と $\int_0^\infty r^4e^{-2ar^2}\dd r$ が要る。第5章で使った基本形</p>
+$$
+I_0(c)\equiv\int_0^\infty e^{-cx^2}\dd x=\frac{1}{2}\sqrt{\frac{\pi}{c}}
+$$
+<p>から、<strong>パラメータ $c$ で微分する</strong>という一手で全部つくれる。</p>
+
+<div class="box note">
+<p class="box-title">数学ノート：Gauss積分を微分で増やす</p>
+<p>$I_0(c)=\dfrac{1}{2}\sqrt{\pi}\,c^{-1/2}$ の両辺を $c$ で微分する。左辺では積分記号の下で微分してよく（被積分関数は $c\gt0$ で十分速く減衰する）、</p>
+$$
+\frac{\dd I_0}{\dd c}=\int_0^\infty\frac{\partial}{\partial c}e^{-cx^2}\dd x
+=-\int_0^\infty x^2e^{-cx^2}\dd x,
+\qquad
+\frac{\dd}{\dd c}\left(\frac{\sqrt{\pi}}{2}c^{-1/2}\right)=-\frac{\sqrt{\pi}}{4}c^{-3/2}
+$$
+<p>だから</p>
+$$
+\begin{equation}
+\int_0^\infty x^2e^{-cx^2}\dd x=\frac{\sqrt{\pi}}{4}c^{-3/2}=\frac{1}{4}\sqrt{\frac{\pi}{c^3}} .
+\label{eq:6-gauss-2}
+\end{equation}
+$$
+<p>もう一度微分すれば</p>
+$$
+\begin{equation}
+\int_0^\infty x^4e^{-cx^2}\dd x=\frac{3\sqrt{\pi}}{8}c^{-5/2}=\frac{3}{8}\sqrt{\frac{\pi}{c^5}} .
+\label{eq:6-gauss-4}
+\end{equation}
+$$
+<p>一般には $\displaystyle\int_0^\infty x^{2n}e^{-cx^2}\dd x=\frac{(2n-1)!!}{2(2c)^{n}}\sqrt{\frac{\pi}{c}}$ である（$(2n-1)!!=1\cdot3\cdot5\cdots(2n-1)$、$(-1)!!=1$）。</p>
+<p>奇数乗のほうは置換 $t=x^2$ で初等的に出る。$\dd t=2x\,\dd x$ より</p>
+$$
+\begin{equation}
+\int_0^\infty x^{2m+1}e^{-cx^2}\dd x=\frac{1}{2}\int_0^\infty t^{m}e^{-ct}\dd t=\frac{m!}{2c^{m+1}} .
+\label{eq:6-gauss-odd}
+\end{equation}
+$$
+<p>特に $m=0$ のとき $\displaystyle\int_0^\infty xe^{-cx^2}\dd x=\frac{1}{2c}$ である。講義スライドで「各自、試してご覧」と書かれていたのは、この\eqref{eq:6-gauss-odd}のことである。</p>
+</div>
+
+<p>本章で使うのは $c=2a$ の場合である。書き下しておこう。</p>
+$$
+\begin{align}
+\int_0^\infty r^2e^{-2ar^2}\dd r&=\frac{1}{4}\sqrt{\frac{\pi}{(2a)^3}}=\frac{\sqrt{\pi}}{8\sqrt{2}\,a^{3/2}},
+\label{eq:6-int-r2}\\[4pt]
+\int_0^\infty r^4e^{-2ar^2}\dd r&=\frac{3}{8}\sqrt{\frac{\pi}{(2a)^5}}=\frac{3\sqrt{\pi}}{32\sqrt{2}\,a^{5/2}},
+\label{eq:6-int-r4}\\[4pt]
+\int_0^\infty r\,e^{-2ar^2}\dd r&=\frac{1}{4a}.
+\label{eq:6-int-r1}
+\end{align}
+$$
+<p>ここで $(2a)^{3/2}=2\sqrt{2}\,a^{3/2}$、$(2a)^{5/2}=4\sqrt{2}\,a^{5/2}$ を使った。$4\cdot2\sqrt2=8\sqrt2$、$8\cdot4\sqrt2=32\sqrt2$ である。</p>
+
+<h3>6.2.4 運動エネルギーの期待値（規格化前）</h3>
+
+<p>いよいよ第1項を計算する。\eqref{eq:6-lap-phi}を代入して</p>
+$$
+\begin{align}
+\bra{\phi_T}\frac{\hat{p}^2}{2m}\ket{\phi_T}
+&=4\pi N^2\int_0^\infty e^{-ar^2}\left(-\frac{\hbar^2}{2m}\nabla^2\right)e^{-ar^2}\,r^2\dd r \nonumber\\
+&=4\pi N^2\int_0^\infty e^{-ar^2}\left(-\frac{\hbar^2}{2m}\right)\left(-6a+4a^2r^2\right)e^{-ar^2}\,r^2\dd r \nonumber\\
+&=4\pi N^2\left(-\frac{\hbar^2}{2m}\right)\int_0^\infty\left(-6a+4a^2r^2\right)e^{-2ar^2}\,r^2\dd r \nonumber\\
+&=\frac{4\pi\hbar^2N^2}{m}\int_0^\infty\left(3a-2a^2r^2\right)e^{-2ar^2}\,r^2\dd r .
+\label{eq:6-kin-1}
+\end{align}
+$$
+<p>最後の行では $-\dfrac{\hbar^2}{2m}\times(-6a+4a^2r^2)=\dfrac{\hbar^2}{m}(3a-2a^2r^2)$ と整理した（符号を2回反転させているので、ここは特に慎重に）。</p>
+
+<p>積分を\eqref{eq:6-int-r2}\eqref{eq:6-int-r4}で置き換える。</p>
+$$
+\begin{align}
+\int_0^\infty\left(3a-2a^2r^2\right)e^{-2ar^2}r^2\dd r
+&=3a\int_0^\infty r^2e^{-2ar^2}\dd r-2a^2\int_0^\infty r^4e^{-2ar^2}\dd r \nonumber\\
+&=3a\cdot\frac{\sqrt{\pi}}{8\sqrt2\,a^{3/2}}-2a^2\cdot\frac{3\sqrt{\pi}}{32\sqrt2\,a^{5/2}} \nonumber\\
+&=\frac{3\sqrt{\pi}}{8\sqrt2\,a^{1/2}}-\frac{6\sqrt{\pi}}{32\sqrt2\,a^{1/2}} \nonumber\\
+&=\frac{\sqrt{\pi}}{\sqrt{a}}\left(\frac{3}{8\sqrt2}-\frac{3}{16\sqrt2}\right)
+=\frac{\sqrt{\pi}}{\sqrt{a}}\cdot\frac{3}{16\sqrt2}
+=\frac{3\sqrt2}{32}\sqrt{\frac{\pi}{a}} .
+\label{eq:6-kin-2}
+\end{align}
+$$
+<p>括弧の中は $\dfrac{3}{8\sqrt2}-\dfrac{3}{16\sqrt2}=\dfrac{6-3}{16\sqrt2}=\dfrac{3}{16\sqrt2}$ であり、分母を有理化して $\dfrac{3}{16\sqrt2}=\dfrac{3\sqrt2}{32}$ とした。したがって</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\bra{\phi_T}\frac{\hat{p}^2}{2m}\ket{\phi_T}
+=\frac{4\pi\hbar^2N^2}{m}\cdot\frac{3\sqrt2}{32}\sqrt{\frac{\pi}{a}}
+=\frac{3\sqrt2\,\pi\hbar^2N^2}{8m}\sqrt{\frac{\pi}{a}} .
+\label{eq:6-kin-result}
+\end{equation}
+$$
+</div>
+<p>係数は $4\pi\cdot\dfrac{3\sqrt2}{32}=\dfrac{12\sqrt2\,\pi}{32}=\dfrac{3\sqrt2\,\pi}{8}$ である。運動エネルギーは正（$a\gt0$）であり、$a$ を大きくする（波動関数を狭くする）と $\sqrt{1/a}$ が小さくなる……ように見えるが、これは規格化していない量であることに注意してほしい。分母で割った後の振る舞いは6.5節で見る。</p>
+
+<div class="box ex">
+<p class="box-title">例題6.2　積分公式の使い方の確認</p>
+<p>$\displaystyle\int_0^\infty r^4e^{-2ar^2}\dd r$ を、\eqref{eq:6-gauss-4}を使わずに、\eqref{eq:6-int-r2}を $a$ で微分することによって求めよ。</p>
+<p><strong>解答</strong>　\eqref{eq:6-int-r2}の両辺を $a$ で微分する。左辺は</p>
+$$
+\frac{\dd}{\dd a}\int_0^\infty r^2e^{-2ar^2}\dd r=\int_0^\infty r^2(-2r^2)e^{-2ar^2}\dd r=-2\int_0^\infty r^4e^{-2ar^2}\dd r .
+$$
+<p>右辺は $\dfrac{\sqrt\pi}{8\sqrt2}\dfrac{\dd}{\dd a}a^{-3/2}=\dfrac{\sqrt\pi}{8\sqrt2}\left(-\dfrac{3}{2}\right)a^{-5/2}=-\dfrac{3\sqrt\pi}{16\sqrt2}a^{-5/2}$。したがって</p>
+$$
+\int_0^\infty r^4e^{-2ar^2}\dd r=\frac{1}{2}\cdot\frac{3\sqrt\pi}{16\sqrt2}a^{-5/2}=\frac{3\sqrt{\pi}}{32\sqrt2\,a^{5/2}} ,
+$$
+<p>となり\eqref{eq:6-int-r4}と一致する。<strong>ひとつのGauss積分を覚えておけば、あとは微分で無限に作れる</strong>——これがGauss型基底が計算に強い理由の一端である。</p>
+</div>
+
+<h2 id="sec6-3">6.3 Coulomb引力の項</h2>
+
+<p>第2項は原子核との Coulomb 引力である。角度積分を済ませた形から出発する。</p>
+$$
+\begin{align}
+\bra{\phi_T}\left(-\frac{\ee^2}{4\pi\eps}\frac{1}{r}\right)\ket{\phi_T}
+&=4\pi N^2\int_0^\infty e^{-ar^2}\left(-\frac{\ee^2}{4\pi\eps}\frac{1}{r}\right)e^{-ar^2}\,r^2\dd r \nonumber\\
+&=4\pi N^2\left(-\frac{\ee^2}{4\pi\eps}\right)\int_0^\infty e^{-2ar^2}\,\frac{r^2}{r}\,\dd r \nonumber\\
+&=-\frac{N^2\ee^2}{\eps}\int_0^\infty r\,e^{-2ar^2}\dd r .
+\label{eq:6-coul-1}
+\end{align}
+$$
+<p>ここで $4\pi\times\dfrac{1}{4\pi\eps}=\dfrac{1}{\eps}$ となって $4\pi$ が綺麗に消えたことに注目してほしい。SI単位系の $1/(4\pi\eps)$ という一見わずらわしい係数は、球対称な積分の $4\pi$ とちょうど打ち消し合うために置かれているのである。</p>
+
+<p>残った積分は\eqref{eq:6-int-r1}そのもの、あるいは直接</p>
+$$
+\int_0^\infty r\,e^{-2ar^2}\dd r
+=\left[-\frac{1}{4a}e^{-2ar^2}\right]_0^\infty
+=0-\left(-\frac{1}{4a}\right)=\frac{1}{4a}
+$$
+<p>である（$\dfrac{\dd}{\dd r}e^{-2ar^2}=-4ar\,e^{-2ar^2}$ を使えば、原始関数が $-\dfrac{1}{4a}e^{-2ar^2}$ であることは一目で分かる）。したがって</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\bra{\phi_T}\left(-\frac{\ee^2}{4\pi\eps}\frac{1}{r}\right)\ket{\phi_T}
+=-\frac{N^2\ee^2}{4\eps\,a} .
+\label{eq:6-coul-result}
+\end{equation}
+$$
+</div>
+
+<h2 id="sec6-4">6.4 規格化積分（分母）</h2>
+
+<p>最後に式\eqref{eq:6-energy-def}の分母を計算する。角度積分は分子と全く同じで $4\pi$ が出る。</p>
+$$
+\begin{align}
+\braket{\phi_T|\phi_T}
+&=\int_0^{2\pi}\!\!\int_0^\pi\!\!\int_0^\infty \phi_T(r)\phi_T(r)\,r^2\sin\theta\,\dd r\,\dd\theta\,\dd\varphi
+=4\pi\int_0^\infty N^2e^{-2ar^2}r^2\,\dd r \nonumber\\
+&=4\pi N^2\cdot\frac{\sqrt\pi}{8\sqrt2\,a^{3/2}}
+=\frac{\pi^{3/2}N^2}{2\sqrt2\,a^{3/2}}
+=\frac{\sqrt2}{4}\left(\frac{\pi}{a}\right)^{3/2}N^2 .
+\label{eq:6-norm-result}
+\end{align}
+$$
+<p>ここで $\dfrac{4\pi}{8\sqrt2}=\dfrac{\pi}{2\sqrt2}$ を使い、さらに $\dfrac{1}{2\sqrt2}=\dfrac{\sqrt2}{4}$ と有理化した。$\pi\cdot\sqrt\pi=\pi^{3/2}$ である。</p>
+
+<h2 id="sec6-5">6.5 $E(\alpha)=A\alpha-B\sqrt{\alpha}$ の最小化</h2>
+
+<h3>6.5.1 期待値を組み立てる</h3>
+
+<p>\eqref{eq:6-kin-result}\eqref{eq:6-coul-result}\eqref{eq:6-norm-result}を式\eqref{eq:6-energy-def}に入れる。</p>
+$$
+\braket{E}=
+\dfrac{\dfrac{3\sqrt2\,\pi\hbar^2}{8m}\sqrt{\dfrac{\pi}{a}}\,N^2-\dfrac{\ee^2}{4\eps a}N^2}
+{\dfrac{\sqrt2}{4}\left(\dfrac{\pi}{a}\right)^{3/2}N^2}
+$$
+<p>まず $N^2$ が分子・分母で約分される。予告どおり、規格化定数は決めなくてよかったのである。次に2つの項を別々に処理する。</p>
+
+<p><strong>運動エネルギー項：</strong></p>
+$$
+\begin{align}
+\frac{\dfrac{3\sqrt2\,\pi\hbar^2}{8m}\left(\dfrac{\pi}{a}\right)^{1/2}}{\dfrac{\sqrt2}{4}\left(\dfrac{\pi}{a}\right)^{3/2}}
+&=\frac{3\sqrt2\,\pi\hbar^2}{8m}\cdot\frac{4}{\sqrt2}\cdot\left(\frac{\pi}{a}\right)^{1/2-3/2} \nonumber\\
+&=\frac{3\pi\hbar^2}{2m}\cdot\left(\frac{\pi}{a}\right)^{-1}
+=\frac{3\pi\hbar^2}{2m}\cdot\frac{a}{\pi}
+=\frac{3\hbar^2}{2m}\,a .
+\label{eq:6-T-final}
+\end{align}
+$$
+<p><strong>Coulomb項：</strong></p>
+$$
+\begin{align}
+\frac{-\dfrac{\ee^2}{4\eps a}}{\dfrac{\sqrt2}{4}\left(\dfrac{\pi}{a}\right)^{3/2}}
+&=-\frac{\ee^2}{4\eps a}\cdot\frac{4}{\sqrt2}\cdot\left(\frac{a}{\pi}\right)^{3/2}
+=-\frac{\ee^2}{\sqrt2\,\eps}\cdot\frac{a^{3/2}}{a\,\pi^{3/2}}
+=-\frac{\ee^2}{\sqrt2\,\pi^{3/2}\eps}\sqrt{a} .
+\label{eq:6-V-final}
+\end{align}
+$$
+<p>まとめると、次元付きの $a$ を使った表式は</p>
+$$
+\begin{equation}
+\braket{E}(a)=\frac{3\hbar^2}{2m}\,a-\frac{\ee^2}{\sqrt2\,\pi^{3/2}\eps}\sqrt{a}
+\label{eq:6-energy-a}
+\end{equation}
+$$
+<p>である。ここに $a=\alpha/a_0^2$ を代入すれば、無次元パラメータ $\alpha$ の関数として</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\braket{E}(\alpha)=A\,\alpha-B\sqrt{\alpha},
+\qquad
+A=\frac{3\hbar^2}{2ma_0^2},
+\qquad
+B=\frac{1}{a_0}\cdot\frac{\ee^2}{\eps}\cdot\frac{1}{\sqrt2\,\pi^{3/2}}
+\label{eq:6-energy-alpha}
+\end{equation}
+$$
+</div>
+<p>を得る。$\sqrt{a}=\sqrt{\alpha}/a_0$ であることに注意（$a_0$ が1乗で $B$ の分母に入る）。</p>
+
+<h3>6.5.2 $A$ と $B$ を $\epsilon_{1s}$ で表す</h3>
+
+<p>$A$ と $B$ には物理定数が山ほど入っていて見通しが悪い。ここで一手間かけると、驚くほど綺麗になる。使うのはBohr半径と1s準位の定義（第2章）である。</p>
+$$
+a_0=\frac{4\pi\eps\hbar^2}{m\ee^2},
+\qquad
+\epsilon_{1s}=-\frac{\ee^2}{8\pi\eps a_0}
+\quad\Longleftrightarrow\quad
+\abs{\epsilon_{1s}}=\frac{\ee^2}{8\pi\eps a_0}=13.606\ \mathrm{eV}
+$$
+
+<div class="box derive">
+<p class="box-title">導出：$A=3\abs{\epsilon_{1s}}$、$B=\dfrac{8}{\sqrt{2\pi}}\abs{\epsilon_{1s}}$</p>
+<p><strong>(i) $A$ について。</strong>Bohr半径の定義を $\hbar^2/m$ について解くと</p>
+$$
+a_0=\frac{4\pi\eps\hbar^2}{m\ee^2}
+\quad\Longrightarrow\quad
+\frac{\hbar^2}{m}=\frac{a_0\ee^2}{4\pi\eps}
+\quad\Longrightarrow\quad
+\frac{\hbar^2}{ma_0^2}=\frac{\ee^2}{4\pi\eps a_0}=2\abs{\epsilon_{1s}} .
+$$
+<p>最後の等号は $\abs{\epsilon_{1s}}=\ee^2/(8\pi\eps a_0)$ の2倍が $\ee^2/(4\pi\eps a_0)$ であることによる。したがって</p>
+$$
+A=\frac{3}{2}\cdot\frac{\hbar^2}{ma_0^2}=\frac{3}{2}\cdot2\abs{\epsilon_{1s}}=3\abs{\epsilon_{1s}} .
+$$
+<p><strong>(ii) $B$ について。</strong>$\dfrac{\ee^2}{\eps a_0}=8\pi\abs{\epsilon_{1s}}$ だから</p>
+$$
+B=\frac{8\pi\abs{\epsilon_{1s}}}{\sqrt2\,\pi^{3/2}}
+=\frac{8\abs{\epsilon_{1s}}}{\sqrt2\,\sqrt\pi}
+=\frac{8}{\sqrt{2\pi}}\abs{\epsilon_{1s}}
+=4\sqrt{\frac{2}{\pi}}\,\abs{\epsilon_{1s}} .
+$$
+<p>（$\dfrac{8}{\sqrt2\sqrt\pi}=\dfrac{8}{\sqrt{2\pi}}$、また $\dfrac{8}{\sqrt{2\pi}}=\dfrac{8}{\sqrt2\sqrt\pi}=\dfrac{8\sqrt2}{2\sqrt\pi}=4\sqrt{\dfrac{2}{\pi}}$。）</p>
+</div>
+
+<p>数値を入れておこう。$\abs{\epsilon_{1s}}=13.606\ \mathrm{eV}$ として</p>
+$$
+\begin{equation}
+A=3\times13.606=40.82\ \mathrm{eV},
+\qquad
+B=\frac{8}{\sqrt{2\pi}}\times13.606=3.1915\times13.606=43.42\ \mathrm{eV}.
+\label{eq:6-AB-num}
+\end{equation}
+$$
+<p>（$\sqrt{2\pi}=2.50663$、$8/2.50663=3.19154$。）以後は</p>
+$$
+\begin{equation}
+\braket{E}(\alpha)=3\abs{\epsilon_{1s}}\,\alpha-\frac{8}{\sqrt{2\pi}}\abs{\epsilon_{1s}}\sqrt{\alpha}
+\label{eq:6-energy-eps}
+\end{equation}
+$$
+<p>という、$\abs{\epsilon_{1s}}$ を単位にした形で扱う。物理定数がすべて $\abs{\epsilon_{1s}}$ ひとつに押し込められた。</p>
+
+<h3>6.5.3 最小値を求める</h3>
+
+<p>$\braket{E}(\alpha)=A\alpha-B\sqrt\alpha$ を $\alpha$ で微分する。$\dfrac{\dd}{\dd\alpha}\sqrt\alpha=\dfrac{1}{2\sqrt\alpha}$ だから</p>
+$$
+\begin{equation}
+\frac{\dd\braket{E}}{\dd\alpha}=A-\frac{B}{2}\frac{1}{\sqrt\alpha} .
+\label{eq:6-dEda}
+\end{equation}
+$$
+<p>これがゼロになる条件は $A=\dfrac{B}{2\sqrt\alpha}$、すなわち $\sqrt\alpha=\dfrac{B}{2A}$ である。両辺を2乗して</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\alpha_{\mathrm{opt}}=\frac{B^2}{4A^2} .
+\label{eq:6-alpha-opt}
+\end{equation}
+$$
+</div>
+<p>この点が最小値であることは、2階微分 $\dfrac{\dd^2\braket{E}}{\dd\alpha^2}=\dfrac{B}{4}\alpha^{-3/2}\gt0$（$B\gt0$、$\alpha\gt0$）から分かる。$\alpha\to0$ でも $\alpha\to\infty$ でも $\braket{E}$ は上がるので、これが唯一の最小点である。</p>
+
+<p>最小値そのものは、$\alpha_{\mathrm{opt}}$ を代入して</p>
+$$
+\begin{align}
+E_{\min}=\braket{E}(\alpha_{\mathrm{opt}})
+&=A\cdot\frac{B^2}{4A^2}-B\cdot\sqrt{\frac{B^2}{4A^2}}
+=\frac{B^2}{4A}-B\cdot\frac{B}{2A} \nonumber\\
+&=\frac{B^2}{4A}-\frac{B^2}{2A}
+=\frac{B^2-2B^2}{4A}
+=-\frac{B^2}{4A} .
+\label{eq:6-emin}
+\end{align}
+$$
+
+<h3>6.5.4 数値を入れて検算する</h3>
+
+<p>ここが本章のヤマである。丁寧に代入しよう。$A=3\abs{\epsilon_{1s}}$、$B=\dfrac{8}{\sqrt{2\pi}}\abs{\epsilon_{1s}}$ だから、まず</p>
+$$
+B^2=\frac{64}{2\pi}\abs{\epsilon_{1s}}^2=\frac{32}{\pi}\abs{\epsilon_{1s}}^2,
+\qquad
+4A^2=4\cdot9\abs{\epsilon_{1s}}^2=36\abs{\epsilon_{1s}}^2 .
+$$
+<p>したがって</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\alpha_{\mathrm{opt}}=\frac{B^2}{4A^2}
+=\frac{(32/\pi)\abs{\epsilon_{1s}}^2}{36\abs{\epsilon_{1s}}^2}
+=\frac{32}{36\pi}=\frac{8}{9\pi}=0.28294 .
+\label{eq:6-alpha-num}
+\end{equation}
+$$
+</div>
+<p>$\abs{\epsilon_{1s}}$ が完全に消えて、<strong>純粋な数</strong>が残った。$9\pi=28.2743$、$8/28.2743=0.282942$ である。次元付きに戻せば $a_{\mathrm{opt}}=\dfrac{8}{9\pi a_0^2}$ となる。</p>
+
+<p>エネルギーの最小値は</p>
+<div class="keyeq">
+$$
+\begin{equation}
+E_{\min}=-\frac{B^2}{4A}
+=-\frac{(32/\pi)\abs{\epsilon_{1s}}^2}{12\abs{\epsilon_{1s}}}
+=-\frac{32}{12\pi}\abs{\epsilon_{1s}}
+=-\frac{8}{3\pi}\abs{\epsilon_{1s}}
+=\frac{8}{3\pi}\epsilon_{1s} .
+\label{eq:6-emin-eps}
+\end{equation}
+$$
+</div>
+<p>最後の等号は $\epsilon_{1s}=-\abs{\epsilon_{1s}}$（負の量）だから、マイナス符号を $\epsilon_{1s}$ に吸わせたものである。数値は</p>
+$$
+\begin{equation}
+\frac{8}{3\pi}=\frac{8}{9.42478}=0.848826,
+\qquad
+E_{\min}=0.848826\times(-13.606)=-11.549\ \mathrm{eV}.
+\label{eq:6-emin-num}
+\end{equation}
+$$
+
+<div class="box thm">
+<p class="box-title">定理：1個のGauss関数で解いた水素原子</p>
+<p>試行関数 $\phi_T=N\exp[-\alpha(r/a_0)^2]$ を用いた変分計算の結果は</p>
+$$
+\alpha_{\mathrm{opt}}=\frac{8}{9\pi}=0.28294\ \ (\text{無次元}),
+\qquad
+E_{\min}=\frac{8}{3\pi}\epsilon_{1s}=0.8488\,\epsilon_{1s}=-11.549\ \mathrm{eV}.
+$$
+<p>厳密解 $\epsilon_{1s}=-13.606\ \mathrm{eV}$ に対する誤差は</p>
+$$
+\frac{\abs{\epsilon_{1s}}-\abs{E_{\min}}}{\abs{\epsilon_{1s}}}=1-\frac{8}{3\pi}=1-0.8488=0.1512
+\quad\Longrightarrow\quad \textbf{15.1\%}
+$$
+<p>である。変分原理の予告どおり $E_{\min}\gt\epsilon_{1s}$（真の基底状態より上）になっていることを確認しておこう。</p>
+</div>
+
+<div class="box note">
+<p class="box-title">数学ノート：原子単位系で書くと2行で終わる</p>
+<p>本書はSI単位系で通すが、原子単位系（Hartree単位系。$\hbar=m=\ee=4\pi\eps=1$、長さの単位が $a_0$、エネルギーの単位が $1\ \mathrm{Hartree}=27.2114\ \mathrm{eV}$）を使うと、\eqref{eq:6-energy-a}は</p>
+$$
+E(a)=\frac{3}{2}a-2\sqrt{\frac{2a}{\pi}}
+$$
+<p>と書ける。$\dfrac{\dd E}{\dd a}=\dfrac32-\sqrt{\dfrac{2}{\pi}}\dfrac{1}{\sqrt a}=0$ より $\sqrt a=\dfrac23\sqrt{\dfrac2\pi}$、よって $a=\dfrac49\cdot\dfrac2\pi=\dfrac{8}{9\pi}\ [a_0^{-2}]$。エネルギーは</p>
+$$
+E=\frac32\cdot\frac{8}{9\pi}-2\sqrt{\frac2\pi}\cdot\frac23\sqrt{\frac2\pi}
+=\frac{4}{3\pi}-\frac{8}{3\pi}=-\frac{4}{3\pi}=-0.42441\ \mathrm{Hartree}.
+$$
+<p>$-0.42441\times27.2114=-11.549\ \mathrm{eV}$。厳密解は $\epsilon_{1s}=-0.5\ \mathrm{Hartree}=-13.606\ \mathrm{eV}$ であり、比は $0.42441/0.5=0.84883=8/(3\pi)$ で一致する。SI単位系の計算がどこかで間違っていないかを確かめるときには、この原子単位系の短い計算が心強い検算になる。</p>
+</div>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="エネルギー期待値のalpha依存性"><rect x="90" y="40" width="620" height="320" fill="#fdfdfc" stroke="none"/><!-- grid --><!-- axes --><line x1="90" y1="40" x2="90" y2="360" stroke="#566573" stroke-width="1.5"/><line x1="90" y1="360" x2="710" y2="360" stroke="#566573" stroke-width="1.5"/><!-- y ticks --><text x="82" y="84" text-anchor="end" font-size="11" fill="#566573">0</text><text x="82" y="124" text-anchor="end" font-size="11" fill="#566573">−2</text><text x="82" y="164" text-anchor="end" font-size="11" fill="#566573">−4</text><text x="82" y="204" text-anchor="end" font-size="11" fill="#566573">−6</text><text x="82" y="244" text-anchor="end" font-size="11" fill="#566573">−8</text><text x="82" y="284" text-anchor="end" font-size="11" fill="#566573">−10</text><text x="82" y="324" text-anchor="end" font-size="11" fill="#566573">−12</text><text x="82" y="364" text-anchor="end" font-size="11" fill="#566573">−14</text><text x="30" y="200" font-size="13" fill="#566573" transform="rotate(-90 30 200)">⟨E⟩ (eV)</text><!-- x ticks --><text x="90" y="378" text-anchor="middle" font-size="11" fill="#566573">0</text><text x="193" y="378" text-anchor="middle" font-size="11" fill="#566573">0.2</text><text x="297" y="378" text-anchor="middle" font-size="11" fill="#566573">0.4</text><text x="400" y="378" text-anchor="middle" font-size="11" fill="#566573">0.6</text><text x="503" y="378" text-anchor="middle" font-size="11" fill="#566573">0.8</text><text x="607" y="378" text-anchor="middle" font-size="11" fill="#566573">1</text><text x="710" y="378" text-anchor="middle" font-size="11" fill="#566573">1.2</text><text x="400" y="400" text-anchor="middle" font-size="13" fill="#566573">変分パラメータ α (無次元)</text><!-- exact level --><line x1="90" y1="352.1" x2="710" y2="352.1" stroke="#b03a2e" stroke-width="2" stroke-dasharray="7 4"/><text x="704" y="346" text-anchor="end" font-size="12" fill="#b03a2e">厳密解 ε₁ₛ = −13.6 eV</text><!-- minimum guides --><line x1="90" y1="311" x2="236.2" y2="311" stroke="#1a5276" stroke-width="1.2" stroke-dasharray="4 3"/><line x1="236.2" y1="311" x2="236.2" y2="360" stroke="#1a5276" stroke-width="1.2" stroke-dasharray="4 3"/><!-- curve --><polyline fill="none" stroke="#14684a" stroke-width="2.6" points="90,80 100.3,186.5 115.8,233.4 141.7,273 167.5,293.9 193.3,305.1 219.2,310.1 236.2,311 270.8,308.1 296.7,302.7 348.3,285.9 400,262.9 451.7,235.2 503.3,203.7 555,169.2 606.7,132.1 658.3,92.9 710,51.7"/><circle cx="236.2" cy="311" r="5.5" fill="#b03a2e"/><text x="250" y="336" font-size="12" fill="#b03a2e">α_opt = 8/(9π) = 0.3</text><text x="250" y="352" font-size="12" fill="#b03a2e">E_min = −11.5 eV</text><text x="560" y="120" font-size="12" fill="#14684a">⟨E⟩ = Aα − B√α</text><text x="560" y="138" font-size="11" fill="#14684a">A = 40.8 eV, B = 43.4 eV</text></svg>
+<figcaption>図6.2 エネルギー期待値 $\braket{E}(\alpha)=A\alpha-B\sqrt\alpha$ の $\alpha$ 依存性。$\alpha\to0$（波動関数が無限に広がる）では $-B\sqrt\alpha$ が効いて $0$ に近づき、$\alpha$ が大きい（細くなる）と運動エネルギー $A\alpha$ が勝って正になる。両者が釣り合う $\alpha_{\mathrm{opt}}=8/(9\pi)$ で最小値 $-11.549\ \mathrm{eV}$ をとる。曲線は<strong>どこでも破線（厳密解）より上</strong>にあり、変分原理が守られている。最小点付近が平らであることにも注目してほしい（6.6.3項）。</figcaption>
+</figure>
+
+<div class="box phys">
+<p class="box-title">物理的意味：$A\alpha$ と $-B\sqrt\alpha$ のせめぎ合い</p>
+<p>$\alpha$ は波動関数の「細さ」を表す。$\alpha$ が大きいほど電子は核の近くに閉じ込められる。</p>
+<ul>
+<li><strong>運動エネルギー $A\alpha$（正、$\alpha$ の1乗）：</strong>閉じ込めると不確定性関係 $\Delta p\gtrsim\hbar/\Delta x$ により運動量のばらつきが増え、運動エネルギーが上がる。狭い箱に閉じ込められた粒子ほど激しく動く。</li>
+<li><strong>Coulomb引力 $-B\sqrt\alpha$（負、$\alpha$ の1/2乗）：</strong>核に近づくほど深い井戸の底に入れるので、エネルギーは下がる。</li>
+</ul>
+<p>$\alpha$ の<strong>べきが違う</strong>（1乗と1/2乗）ので、両者は必ずどこかで釣り合う。もし両方が $\alpha$ の1乗なら、係数の大小で「無限に潰れる」か「無限に広がる」かのどちらかになり、原子は存在できない。<em class="term">原子が有限の大きさを持つ</em>のは、この指数のずれのおかげである。第2章で $a_0$ を導いたときと同じ物理が、別の顔で現れている。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題6.3　運動エネルギーとポテンシャルエネルギーの内訳</p>
+<p>最適な $\alpha_{\mathrm{opt}}=8/(9\pi)$ における $\braket{T}$ と $\braket{V}$ をそれぞれ求め、$2\braket{T}=-\braket{V}$（ビリアル定理）が成り立つことを確かめよ。また厳密解の値と比べよ。</p>
+<p><strong>解答</strong>　\eqref{eq:6-energy-eps}の第1項と第2項がそのまま $\braket{T}$ と $\braket{V}$ である。</p>
+$$
+\braket{T}=A\alpha_{\mathrm{opt}}=3\abs{\epsilon_{1s}}\cdot\frac{8}{9\pi}=\frac{8}{3\pi}\abs{\epsilon_{1s}}
+=0.8488\times13.606=11.549\ \mathrm{eV},
+$$
+$$
+\braket{V}=-B\sqrt{\alpha_{\mathrm{opt}}}=-B\cdot\frac{B}{2A}=-\frac{B^2}{2A}
+=-\frac{16}{3\pi}\abs{\epsilon_{1s}}=-23.098\ \mathrm{eV}.
+$$
+<p>（$B^2/(2A)=(32/\pi)\abs{\epsilon_{1s}}^2/(6\abs{\epsilon_{1s}})=(16/3\pi)\abs{\epsilon_{1s}}$。）確かに $2\braket{T}=23.098=-\braket{V}$ であり、$\braket{T}+\braket{V}=11.549-23.098=-11.549=E_{\min}$ である。</p>
+<p>厳密解では $\braket{T}=13.606\ \mathrm{eV}$、$\braket{V}=-27.211\ \mathrm{eV}$（原子単位で $0.5$ と $-1.0$ Hartree）である。Gauss試行関数は<strong>運動エネルギーもCoulombエネルギーも、どちらも絶対値を15%ずつ過小評価している</strong>。ちなみに平均半径は $\braket{r}=\sqrt{2/(\pi a)}=\tfrac32a_0$ となり、厳密解と<strong>完全に一致する</strong>。ひとつの量が合っているからといって波動関数が正しいとは限らない。なおビリアル定理が成り立つのは偶然ではなく、$\alpha$ が波動関数の「スケール」を変えるパラメータであるとき、変分の停留条件がそのままビリアル定理になるからである。</p>
+</div>
+
+<h2 id="sec6-6">6.6 なぜ15%も外れるのか — カスプ条件と遠方の減衰</h2>
+
+<p>変分原理が約束するのは $E_{\min}\ge\epsilon_{1s}$ だけである。実際に得られた $-11.549\ \mathrm{eV}$ は厳密値より $2.06\ \mathrm{eV}$ も高い。化学結合1本が数 eV であることを思えば致命的な誤差である。原因は試行関数の形そのものにあり、Gauss関数には指数関数型の厳密解に対して<strong>2つの構造的な欠陥</strong>がある。</p>
+
+<h3>6.6.1 核カスプ条件：原点で尖っていなければならない</h3>
+
+<p>厳密な1s波動関数\eqref{eq:6-exact-1s}を原点近傍で展開すると</p>
+$$
+\psi_{1s}(r)=\frac{1}{\sqrt{\pi a_0^3}}\left(1-\frac{r}{a_0}+\frac{1}{2}\frac{r^2}{a_0^2}-\cdots\right)
+$$
+<p>となり、$r$ の1次の項が残る。すなわち $\dfrac{\dd\psi_{1s}}{\dd r}\Big|_{r=0}=-\dfrac{1}{a_0}\psi_{1s}(0)\ne0$ である。$r$ は正の量だから、原点を通って反対側へ抜ける直線に沿って見ると波動関数は<strong>V字を逆さにしたような尖り</strong>を持つ。これを<em class="term">核カスプ</em>（nuclear cusp）と呼ぶ。</p>
+
+<div class="box derive">
+<p class="box-title">導出：核カスプ条件はSchrödinger方程式が要求する</p>
+<p>カスプは経験則ではなく、方程式から必然的に出てくる。原点近傍で球対称な解を</p>
+$$
+\psi(r)=\psi(0)\left(1+br+O(r^2)\right)
+$$
+<p>と置く。これをSchrödinger方程式 $\left[-\dfrac{\hbar^2}{2m}\nabla^2-\dfrac{Z\ee^2}{4\pi\eps r}\right]\psi=E\psi$ に入れる。動径ラプラシアン\eqref{eq:6-laplacian-radial}を使うと</p>
+$$
+\nabla^2\psi=\frac{\dd^2\psi}{\dd r^2}+\frac{2}{r}\frac{\dd\psi}{\dd r}
+=\psi(0)\left[O(1)+\frac{2}{r}\left(b+O(r)\right)\right]
+=\psi(0)\frac{2b}{r}+O(1) .
+$$
+<p>左辺の $r\to0$ での発散項を集めると</p>
+$$
+-\frac{\hbar^2}{2m}\cdot\frac{2b\,\psi(0)}{r}-\frac{Z\ee^2}{4\pi\eps r}\psi(0)
+=-\frac{\psi(0)}{r}\left[\frac{\hbar^2 b}{m}+\frac{Z\ee^2}{4\pi\eps}\right] .
+$$
+<p>右辺 $E\psi$ は $r\to0$ で有限だから、$1/r$ の係数はゼロでなければならない。よって</p>
+$$
+\frac{\hbar^2b}{m}=-\frac{Z\ee^2}{4\pi\eps}
+\quad\Longrightarrow\quad
+b=-\frac{mZ\ee^2}{4\pi\eps\hbar^2}=-\frac{Z}{a_0}
+$$
+<p>（最後に $a_0=4\pi\eps\hbar^2/(m\ee^2)$ を使った）。すなわち</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\left.\frac{1}{\psi}\frac{\dd\psi}{\dd r}\right|_{r\to0}=-\frac{Z}{a_0}
+\qquad\text{(核カスプ条件、Katoの定理)}
+\label{eq:6-cusp}
+\end{equation}
+$$
+</div>
+<p>である。水素原子（$Z=1$）なら $-1/a_0$。この条件は加藤敏夫が1957年に一般の多電子系について厳密に証明した（文献[4]）。</p>
+</div>
+
+<div class="box why">
+<p class="box-title">なぜ？：尖っていないと何が困るのか</p>
+<p>カスプ条件は「$-1/r$ の発散を運動エネルギー項の $2b/r$ で打ち消す」ことを要求している。Gauss関数は $\dfrac{\dd}{\dd r}e^{-ar^2}=-2are^{-ar^2}$ より $r=0$ で導関数が<strong>必ずゼロ</strong>になり、$b=0$ である。つまりGauss関数は $1/r$ の発散を打ち消す手段を持たない。</p>
+<p>その結果どうなるか。核のすぐそばは Coulomb ポテンシャルが最も深い一等地なのに、Gauss関数はそこで「平ら」になってしまい、電子密度を十分に積み上げられない。エネルギーを稼ぎ損ねるのである。<strong>15%の誤差の主犯はここにある。</strong></p>
+</div>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="原点近傍における波動関数の比較(カスプ)"><!-- grid --><!-- axes --><line x1="90" y1="50" x2="90" y2="340" stroke="#566573" stroke-width="1.5"/><line x1="90" y1="340" x2="710" y2="340" stroke="#566573" stroke-width="1.5"/><text x="82" y="344" text-anchor="end" font-size="11" fill="#566573">0.2</text><text x="82" y="274" text-anchor="end" font-size="11" fill="#566573">0.3</text><text x="82" y="204" text-anchor="end" font-size="11" fill="#566573">0.4</text><text x="82" y="134" text-anchor="end" font-size="11" fill="#566573">0.5</text><text x="82" y="64" text-anchor="end" font-size="11" fill="#566573">0.6</text><text x="28" y="200" font-size="12" fill="#566573" transform="rotate(-90 28 200)">φ(r) (a₀^(−3/2))</text><text x="90" y="358" text-anchor="middle" font-size="11" fill="#566573">0</text><text x="240" y="358" text-anchor="middle" font-size="11" fill="#566573">0.2</text><text x="390" y="358" text-anchor="middle" font-size="11" fill="#566573">0.4</text><text x="540" y="358" text-anchor="middle" font-size="11" fill="#566573">0.6</text><text x="690" y="358" text-anchor="middle" font-size="11" fill="#566573">0.8</text><text x="400" y="382" text-anchor="middle" font-size="13" fill="#566573">r / a₀ （縦軸は 0.2 から。原点付近の拡大図）</text><!-- tangents --><line x1="90" y1="85.1" x2="390" y2="243" stroke="#b03a2e" stroke-width="1.3" stroke-dasharray="5 4"/><line x1="90" y1="286.5" x2="340" y2="286.5" stroke="#1a5276" stroke-width="1.3" stroke-dasharray="5 4"/><line x1="90" y1="161.5" x2="340" y2="161.5" stroke="#7d3c98" stroke-width="1.3" stroke-dasharray="5 4"/><!-- curves --><polyline fill="none" stroke="#b03a2e" stroke-width="2.6" points="90,85.1 127.5,104.3 165,122.6 202.5,140.1 240,156.7 315,187.4 390,215.3 465,240.5 540,263.3 615,283.9 690,302.5"/><polyline fill="none" stroke="#7d3c98" stroke-width="2.4" points="90,161.5 127.5,162.4 165,165.2 202.5,169.7 240,175.9 315,192.3 390,212.9 465,235.7 540,259 615,281.5 690,302.1"/><polyline fill="none" stroke="#1a5276" stroke-width="2.4" points="90,286.5 165,287 240,288.6 315,291.3 390,295 465,299.7 540,305.2 615,311.5 690,318.5"/><circle cx="90" cy="85.1" r="4" fill="#b03a2e"/><circle cx="90" cy="161.5" r="4" fill="#7d3c98"/><circle cx="90" cy="286.5" r="4" fill="#1a5276"/><!-- legend --><rect x="440" y="58" width="266" height="82" rx="6" fill="#fdfdfc" stroke="#d5dbdb"/><line x1="452" y1="76" x2="482" y2="76" stroke="#b03a2e" stroke-width="2.6"/><text x="490" y="80" font-size="12" fill="#b03a2e">厳密解 (Slater型) e^(−r/a₀)</text><line x1="452" y1="100" x2="482" y2="100" stroke="#7d3c98" stroke-width="2.4"/><text x="490" y="104" font-size="12" fill="#7d3c98">STO-3G (Gauss 3本)</text><line x1="452" y1="124" x2="482" y2="124" stroke="#1a5276" stroke-width="2.4"/><text x="490" y="128" font-size="12" fill="#1a5276">STO-1G (Gauss 1本)</text><text x="150" y="80" font-size="12" fill="#b03a2e">傾き −1/a₀（カスプ）</text><text x="200" y="277" font-size="12" fill="#1a5276">傾き 0（平ら）</text></svg>
+<figcaption>図6.3 原点近傍における波動関数の比較（縦軸は 0.20 から拡大）。厳密解（赤）は $r=0$ で傾き $-1/a_0$ の折れ点（カスプ）を持つ。Gauss関数を使う STO-1G（青）と STO-3G（紫）は導関数が必ずゼロになり、接線が水平である。Gauss関数を何本足しても、この平坦性は原理的に解消しない。</figcaption>
+</figure>
+
+<h3>6.6.2 遠方の減衰：Gauss関数は落ちるのが速すぎる</h3>
+
+<p>第2の欠陥は $r$ が大きい側にある。束縛状態の波動関数は、ポテンシャルが無視できる遠方では</p>
+$$
+-\frac{\hbar^2}{2m}\frac{\dd^2u}{\dd r^2}\simeq E\,u\quad(u=r\psi,\ E\lt0)
+\quad\Longrightarrow\quad
+u\propto e^{-\kappa r},\quad \kappa=\frac{\sqrt{2m\abs{E}}}{\hbar}
+$$
+<p>という<strong>単純指数関数</strong>で減衰する。水素の1s では $\kappa=1/a_0$ である。ところがGauss関数の減衰は $e^{-ar^2}$、すなわち指数の中身が $r$ の2乗である。$r$ が大きくなると</p>
+$$
+\begin{equation}
+\frac{e^{-ar^2}}{e^{-r/a_0}}=\exp\!\left[-ar^2+\frac{r}{a_0}\right]\xrightarrow[r\to\infty]{}0
+\label{eq:6-tail}
+\end{equation}
+$$
+<p>となり、Gauss関数のほうが圧倒的に速くゼロになる。第5章で「Gauss関数は裾が短い」と述べたことの定量的な意味がこれである。</p>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="波動関数の遠方での減衰(片対数プロット)"><line x1="90" y1="76.7" x2="710" y2="76.7" stroke="#d5dbdb" /><line x1="90" y1="113.3" x2="710" y2="113.3" stroke="#d5dbdb" /><line x1="90" y1="150" x2="710" y2="150" stroke="#d5dbdb" /><line x1="90" y1="186.7" x2="710" y2="186.7" stroke="#d5dbdb" /><line x1="90" y1="223.3" x2="710" y2="223.3" stroke="#d5dbdb" /><line x1="90" y1="260" x2="710" y2="260" stroke="#d5dbdb" /><line x1="90" y1="296.7" x2="710" y2="296.7" stroke="#d5dbdb" /><line x1="90" y1="333.3" x2="710" y2="333.3" stroke="#d5dbdb" /><line x1="90" y1="370" x2="710" y2="370" stroke="#d5dbdb" /><line x1="90" y1="40" x2="90" y2="380" stroke="#566573" stroke-width="1.5"/><line x1="90" y1="380" x2="710" y2="380" stroke="#566573" stroke-width="1.5"/><text x="82" y="44" text-anchor="end" font-size="11" fill="#566573">10⁰</text><text x="82" y="117" text-anchor="end" font-size="11" fill="#566573">10⁻²</text><text x="82" y="190" text-anchor="end" font-size="11" fill="#566573">10⁻⁴</text><text x="82" y="264" text-anchor="end" font-size="11" fill="#566573">10⁻⁶</text><text x="82" y="337" text-anchor="end" font-size="11" fill="#566573">10⁻⁸</text><text x="28" y="210" font-size="12" fill="#566573" transform="rotate(-90 28 210)">φ(r) （対数目盛）</text><text x="90" y="398" text-anchor="middle" font-size="11" fill="#566573">0</text><text x="245" y="398" text-anchor="middle" font-size="11" fill="#566573">2</text><text x="400" y="398" text-anchor="middle" font-size="11" fill="#566573">4</text><text x="555" y="398" text-anchor="middle" font-size="11" fill="#566573">6</text><text x="710" y="398" text-anchor="middle" font-size="11" fill="#566573">8</text><text x="400" y="420" text-anchor="middle" font-size="13" fill="#566573">r / a₀</text><polyline fill="none" stroke="#b03a2e" stroke-width="2.6" points="90,49.1 128.8,57.1 167.5,65 206.2,73 245,81 283.8,88.9 322.5,96.9 361.2,104.8 400,112.8 438.8,120.8 477.5,128.7 516.2,136.7 555,144.7 593.8,152.6 632.5,160.6 671.2,168.5 710,176.5"/><polyline fill="none" stroke="#7d3c98" stroke-width="2.4" points="90,52.5 128.8,56.8 167.5,65.2 206.2,72.9 245,80.8 283.8,89.1 322.5,97.2 361.2,104.8 400,112.2 438.8,120 477.5,128.4 516.2,137.6 555,147.6 593.8,158.6 632.5,170.4 671.2,183 710,196.6"/><polyline fill="none" stroke="#1a5276" stroke-width="2.4" points="90,60.5 128.8,61.6 167.5,65 206.2,70.6 245,78.5 283.8,88.6 322.5,101 361.2,115.7 400,132.6 438.8,151.7 477.5,173.1 516.2,196.8 555,222.7 593.8,250.8 632.5,281.3 671.2,314 710,348.9"/><rect x="430" y="290" width="276" height="82" rx="6" fill="#fdfdfc" stroke="#d5dbdb"/><line x1="442" y1="308" x2="472" y2="308" stroke="#b03a2e" stroke-width="2.6"/><text x="480" y="312" font-size="12" fill="#b03a2e">厳密解 e^(−r/a₀)：直線になる</text><line x1="442" y1="332" x2="472" y2="332" stroke="#7d3c98" stroke-width="2.4"/><text x="480" y="336" font-size="12" fill="#7d3c98">STO-3G</text><line x1="442" y1="356" x2="472" y2="356" stroke="#1a5276" stroke-width="2.4"/><text x="480" y="360" font-size="12" fill="#1a5276">STO-1G：下に曲がる</text></svg>
+<figcaption>図6.4 波動関数の遠方での減衰（片対数プロット）。縦軸が対数なので $e^{-r/a_0}$ の厳密解（赤）は<strong>直線</strong>、$e^{-\alpha r^2}$ の STO-1G（青）は<strong>放物線</strong>になり、$r\gtrsim2a_0$ から急速に下へ曲がる。$r=8a_0$ では厳密解より5桁も小さい。STO-3G（紫）は最も広がった成分（$\alpha_1=0.1098$）のおかげで $r\lesssim6a_0$ まで厳密解にほぼ重なる。分子間相互作用や負イオンなど裾が効く問題で基底関数を増やす必要があるのはこのためである。</figcaption>
+</figure>
+
+<h3>6.6.3 変分最適な $\alpha$ と重なり最大の $\alpha$ はなぜ違うのか</h3>
+
+<p>第5章では、Slater型軌道とGauss関数の<strong>重なり積分を最大にする</strong>という基準でSTO-1Gの指数を決め、$\alpha_S=0.27095$ を得た。本章では<strong>エネルギーを最小にする</strong>基準で $\alpha_E=8/(9\pi)=0.28294$ を得た。同じ「最良の1個のGauss関数」を求めているのに、答えが 4.4% ずれている。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：「最良」は基準によって変わる</p>
+<p>2つの基準は、$r$ 空間の<strong>どこを重視するか</strong>が違う。</p>
+<ul>
+<li><strong>重なり最大：</strong>$S=\int\psi_{1s}\phi_T\,\dd^3r=4\pi\int_0^\infty\psi_{1s}\phi_T r^2\dd r$。体積要素の $r^2$ の重みがあるので、$r\sim1$〜$2a_0$ の「電子が最も多くいる領域」で形が合っているかが効く。</li>
+<li><strong>エネルギー最小：</strong>Coulomb項 $\int\phi_T^2\,r^{-1}\,r^2\dd r$ の重みは $r^1$、運動エネルギー項は波動関数の曲率に敏感である。どちらも<strong>より内側</strong>を重視する。</li>
+</ul>
+<p>エネルギー基準のほうが原点近傍を重く見るので、少しでもカスプ側の損失を取り返そうとして、より<strong>収縮した</strong>（$\alpha$ の大きい）関数を選ぶ。$\alpha_E=0.28294\gt\alpha_S=0.27095$ という大小関係はこれで説明がつく。</p>
+</div>
+
+<p>では、どちらを使うと結果はどれだけ違うのか。実際に数値を入れてみる。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表6.1 STO-1G の指数 $\alpha$ を2つの基準で決めたときの比較。エネルギーは\eqref{eq:6-energy-eps}、重なりは厳密な1s軌道との $S=\braket{\psi_{1s}|\phi_T}$（両者とも規格化）。</caption>
+<thead>
+<tr><th>決め方</th><th>$\alpha$</th><th>$\braket{E}$ (Hartree)</th><th>$\braket{E}$ (eV)</th><th>重なり $S$</th></tr>
+</thead>
+<tbody>
+<tr><td>エネルギー最小（本章）</td><td>0.282942</td><td>$-0.424413$</td><td>$-11.5489$</td><td>0.97818</td></tr>
+<tr><td>重なり最大（第5章）</td><td>0.270950</td><td>$-0.424218$</td><td>$-11.5436$</td><td>0.97840</td></tr>
+<tr><td>差</td><td>4.4%</td><td>0.000195</td><td>0.0053</td><td>0.00022</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>$\alpha$ が 4.4% も違うのに、エネルギー差はわずか $0.005\ \mathrm{eV}$（誤差全体 $2.06\ \mathrm{eV}$ の 0.26%）である。図6.2で見たとおり<strong>最小点の近くで曲線が平ら</strong>だからである。停留条件 $\dd\braket{E}/\dd\alpha=0$ が成り立つ点のまわりでは、ずれ $\delta\alpha$ に対してエネルギーの変化は</p>
+$$
+\braket{E}(\alpha_{\mathrm{opt}}+\delta\alpha)-E_{\min}
+=\frac{1}{2}\left.\frac{\dd^2\braket{E}}{\dd\alpha^2}\right|_{\mathrm{opt}}(\delta\alpha)^2+\cdots
+$$
+<p>と<strong>2次</strong>でしか効かない。「試行関数が多少ずれていてもエネルギーはそこそこ当たる」という変分法の強みそのものである。裏を返せば、<strong>エネルギーが合っていても波動関数が正しいとは限らない</strong>。</p>
+
+
+<h3>6.6.4 それでもGauss関数を使い続ける理由</h3>
+
+<p>ここまで読むと「Slater型関数を使えばよいではないか」と思うだろう。実際、$\phi=Ne^{-\beta r}$ で同じ変分計算をすると $\beta=1/a_0$ で厳密解に到達する（演習6.1）。それが厳密解そのものなのだから当然である。</p>
+
+<p>それでも量子化学計算がGauss基底を採用するのは、第5章で学んだ<em class="term">Gauss積の定理</em>（Gaussian product theorem）があるからである。異なる中心 $\bm{R}_A,\bm{R}_B$ に置かれた2つのGauss関数の積は</p>
+$$
+e^{-a\abs{\bm{r}-\bm{R}_A}^2}e^{-b\abs{\bm{r}-\bm{R}_B}^2}
+=K\,e^{-(a+b)\abs{\bm{r}-\bm{R}_P}^2},
+\qquad
+\bm{R}_P=\frac{a\bm{R}_A+b\bm{R}_B}{a+b}
+$$
+<p>と、<strong>再び1個のGauss関数</strong>になる。Slater型関数ではこうはいかず、2中心・3中心・4中心の積分を解析的に処理できない。分子計算では4中心2電子積分が何百万個も必要になるから、この差は決定的である。</p>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Slater関数とSTO-1G,STO-3Gの全体比較"><line x1="80" y1="40" x2="80" y2="350" stroke="#566573" stroke-width="1.5"/><line x1="80" y1="350" x2="720" y2="350" stroke="#566573" stroke-width="1.5"/><text x="72" y="354" text-anchor="end" font-size="11" fill="#566573">0</text><text x="72" y="304" text-anchor="end" font-size="11" fill="#566573">0.1</text><text x="72" y="254" text-anchor="end" font-size="11" fill="#566573">0.2</text><text x="72" y="204" text-anchor="end" font-size="11" fill="#566573">0.3</text><text x="72" y="154" text-anchor="end" font-size="11" fill="#566573">0.4</text><text x="72" y="104" text-anchor="end" font-size="11" fill="#566573">0.5</text><text x="72" y="54" text-anchor="end" font-size="11" fill="#566573">0.6</text><text x="26" y="205" font-size="12" fill="#566573" transform="rotate(-90 26 205)">φ(r) (a₀^(−3/2))</text><text x="80" y="368" text-anchor="middle" font-size="11" fill="#566573">0</text><text x="235" y="368" text-anchor="middle" font-size="11" fill="#566573">1</text><text x="390" y="368" text-anchor="middle" font-size="11" fill="#566573">2</text><text x="545" y="368" text-anchor="middle" font-size="11" fill="#566573">3</text><text x="700" y="368" text-anchor="middle" font-size="11" fill="#566573">4</text><text x="400" y="390" text-anchor="middle" font-size="13" fill="#566573">r / a₀</text><polyline fill="none" stroke="#b03a2e" stroke-width="2.6" points="80,67.9 99.4,101.1 118.8,130.3 157.5,178.9 196.3,216.8 235,246.2 273.8,269.2 312.5,287.1 390,311.8 467.5,326.8 545,336 622.5,341.5 700,344.8"/><polyline fill="none" stroke="#7d3c98" stroke-width="2.4" points="80,122.5 118.8,138.2 157.5,175.5 196.3,215.8 235,247.5 273.8,270 312.5,286.8 390,311.4 467.5,327.1 545,336.2 622.5,341.5 700,344.6"/><polyline fill="none" stroke="#1a5276" stroke-width="2.4" points="80,211.8 118.8,214.2 157.5,221.2 196.3,232.1 235,245.8 273.8,261.2 312.5,276.9 351.3,291.9 390,305.4 467.5,326.4 545,339.2 622.5,345.7 700,348.5"/><rect x="430" y="58" width="284" height="82" rx="6" fill="#fdfdfc" stroke="#d5dbdb"/><line x1="442" y1="76" x2="472" y2="76" stroke="#b03a2e" stroke-width="2.6"/><text x="480" y="80" font-size="12" fill="#b03a2e">厳密解 ψ₁ₛ = (πa₀³)^(−1/2) e^(−r/a₀)</text><line x1="442" y1="100" x2="472" y2="100" stroke="#7d3c98" stroke-width="2.4"/><text x="480" y="104" font-size="12" fill="#7d3c98">STO-3G（S = 1）</text><line x1="442" y1="124" x2="472" y2="124" stroke="#1a5276" stroke-width="2.4"/><text x="480" y="128" font-size="12" fill="#1a5276">STO-1G, α = 0.3（S = 1）</text></svg>
+<figcaption>図6.5 水素1s軌道の厳密解と、STO-1G（Gauss 1本、$\alpha=8/(9\pi)$）・STO-3G（Gauss 3本の縮約）の比較。$r\gtrsim1a_0$ では STO-3G は厳密解とほとんど区別がつかず、差が目立つのは原点近傍だけである。そこがエネルギーを稼ぐ一等地であることが誤差の本質である。重なり積分 $S$ は STO-1G で 0.978、STO-3G で 0.99984。</figcaption>
+</figure>
+
+<h2 id="sec6-7">6.7 STO-3Gを機械にやらせる</h2>
+
+<h3>6.7.1 STO-3Gの試行関数</h3>
+
+<p>6.5節までで手計算した基底は、Gauss関数を1本しか使っていない。これは<strong>STO-1Gと本質的に同じもの</strong>である。第5章で導いたSTO-3Gなら、水素（$\zeta=1$）に対して</p>
+$$
+\begin{align}
+\phi_T^{\text{STO-3G}}(r)=\ &0.444635\left(\frac{2\times0.109818}{\pi}\right)^{3/4}e^{-0.109818\,(r/a_0)^2} \nonumber\\
+&+0.535328\left(\frac{2\times0.405771}{\pi}\right)^{3/4}e^{-0.405771\,(r/a_0)^2} \nonumber\\
+&+0.154329\left(\frac{2\times2.22766}{\pi}\right)^{3/4}e^{-2.22766\,(r/a_0)^2}
+\label{eq:6-sto3g}
+\end{align}
+$$
+<p>という3本のGauss関数の固定した線形結合（<em class="term">縮約</em>, contraction）を使う。3本の役割分担がはっきりしていることに注目してほしい。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表6.2 STO-3G（$\zeta=1$、水素）を構成する3本のGauss関数の役割。$\alpha$ は $a_0^{-2}$ 単位、$c_i=d_i(2\alpha_i/\pi)^{3/4}$ は規格化まで込みの係数。</caption>
+<thead>
+<tr><th>#</th><th>指数 $\alpha_i$</th><th>縮約係数 $d_i$</th><th>$c_i$</th><th>広がりの目安 $1/\sqrt{\alpha_i}$</th><th>役割</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>0.109818</td><td>0.444635</td><td>0.06045</td><td>$3.02\,a_0$</td><td>広がった裾を作る</td></tr>
+<tr><td>2</td><td>0.405771</td><td>0.535328</td><td>0.19397</td><td>$1.57\,a_0$</td><td>本体（電子の大半）</td></tr>
+<tr><td>3</td><td>2.22766</td><td>0.154329</td><td>0.20056</td><td>$0.67\,a_0$</td><td>原点近くの尖りを演出</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>3本目の $\alpha_3=2.23$ は $\alpha_1=0.110$ の20倍も鋭く、原点付近に「山」を積み増して図6.3の紫の曲線を $0.455$ まで持ち上げている。逆に緩やかな $\alpha_1$ は、図6.4で $r\lesssim6a_0$ まで裾を保つ働きをする。</p>
+
+<h3>6.7.2 面倒な単純作業は機械にやらせる</h3>
+
+<p>では、このSTO-3Gで6.2〜6.5節と同じ変分計算を手でやろう——と考えると、たちまち行き詰まる。3本×3本＝9通りのGauss関数の積について、運動エネルギー・Coulomb引力・重なりの3種類、合計27個の積分が要る。分子になれば中心の数も増える。</p>
+
+<div class="box phys">
+<p class="box-title">物理的意味：人間がやるべき仕事、機械がやるべき仕事</p>
+<p>望月先生は講義で次のように述べている。<strong>「そういう分かりきった面倒な単純作業は、機械にやらせるべきです。人間は、もっと creative なところに時間を使いましょう。」</strong></p>
+<p>ここで重要なのは、「面倒だから機械に投げる」のではなく、<strong>「分かりきっているから機械に投げる」</strong>という点である。6.2〜6.5節を自分の手で最後まで追い切った読者は、計算機の中で何が起きているかを知っている。その上で機械に任せるのと、何も分からずに任せるのとでは、出てきた数字の読み方がまるで違う。エラーが出たとき、答えが怪しいとき、頼れるのは手計算で身につけた感覚だけである。</p>
+</div>
+
+<h3>6.7.3 PySCFで水素原子を計算する</h3>
+
+<p>ここからは <em class="term">PySCF</em>（Python-based Simulations of Chemistry Framework、文献[6]）を使う。導入は付録Bにまとめてあるので、環境が整っていない読者は先にそちらを済ませてほしい。最低限、次の3つが確認できていればよい。</p>
+
+<pre><code><span class="prompt">$</span> which python3         <span class="cmt"># どこに python があるのか</span>
+/usr/local/bin/python3
+<span class="prompt">$</span> echo $SHELL           <span class="cmt"># Shell の種類は何か</span>
+/bin/zsh
+<span class="prompt">$</span> pip show pyscf        <span class="cmt"># Python module PySCF があるのか</span>
+Name: pyscf
+Version: 2.12.0
+Summary: PySCF: Python-based Simulations of Chemistry Framework</code></pre>
+<p class="codecap">コード6.1 計算環境の確認（付録B参照）</p>
+
+<p>講義配布の <code>pyscf_tutorial1.zip</code> を展開すると <code>calc_pyscf.py</code> と各種の <code>.xyz</code> ファイルが入っている。水素原子の計算は次の1行である。</p>
+
+<pre><code><span class="prompt">$</span> cd ~/Downloads/pyscf_tutorial1
+<span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_H.xyz --spin 1</code></pre>
+<p class="codecap">コード6.2 水素原子をSTO-3Gで計算する。<code>--xyz</code> は読み込む構造ファイル、<code>--spin</code> は系全体の $2S$（不対電子の数）を指定する。水素原子は電子1個なので $2S=1$。</p>
+
+<p>構造ファイル <code>.xyz</code> の中身はきわめて単純である。</p>
+
+<pre><code>1
+Hydrogen atom
+H       0.00000000      0.00000000      0.00000000</code></pre>
+<p class="codecap">コード6.3 <code>XYZ_H.xyz</code>。1行目は原子数、2行目はメモ（何を書いてもよい）、3行目以降が元素記号と $x,y,z$ 座標（単位はÅ）。分子構造は VESTA などの無料ソフトで可視化できる（付録B）。</p>
+
+<p>実行すると次のような出力が得られる。</p>
+
+<pre><code>=== PySCF Calculation ===
+XYZ file     : XYZ_H.xyz
+Basis        : sto-3g
+Charge       : 0
+Spin (2S)    : 1
+Method       : UHF
+Total Energy : -0.4665818496 Hartree
+             : -12.696339 eV
+&lt;S^2&gt;        : 0.750000
+Multiplicity : 2.0
+
+MO energies (Hartree / eV):
+  Alpha MO energies:
+  MO  1:  -0.466582     -12.6963
+  Beta  MO energies:
+  MO  1:  -0.466582     -12.6963</code></pre>
+<p class="codecap">コード6.4 水素原子・STO-3G の計算結果</p>
+
+<div class="box note">
+<p class="box-title">数学ノート：出力の読み方</p>
+<ul>
+<li><strong>Total Energy</strong>：系の全エネルギー。$1\ \mathrm{Hartree}=27.2114\ \mathrm{eV}$ で換算されている（$-0.4665818\times27.2114=-12.6963$）。電子1個の系なので、軌道エネルギーと全エネルギーが一致する。</li>
+<li><strong>Method: UHF</strong>：使われた計算手法。6.8節で説明する。</li>
+<li><strong>&lt;S^2&gt;</strong>：全スピン角運動量の2乗の期待値。理論値は $S(S+1)=\frac12\cdot\frac32=0.75$。ぴったり 0.750000 なので、スピンの状態が正しく2重項（doublet）になっている（第7章）。</li>
+<li><strong>Multiplicity</strong>：スピン多重度 $2S+1=2$。</li>
+<li><strong>MO energies</strong>：分子軌道（molecular orbital）のエネルギー。Alpha は上向きスピン、Beta は下向きスピンの軌道である。STO-3G では水素の基底関数が1個だけなので、軌道も1本しか出てこない。</li>
+</ul>
+</div>
+
+<h3>6.7.4 STO-1G と STO-3G の比較</h3>
+
+<p>結果が出そろった。手計算のSTO-1Gと、機械にやらせたSTO-3Gを並べてみよう。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表6.3 水素原子の基底状態エネルギー。誤差は厳密解 $\epsilon_{1s}=-0.5\ \mathrm{Hartree}=-13.606\ \mathrm{eV}$ に対する相対値 $1-\abs{E}/\abs{\epsilon_{1s}}$。6-31G以下はPySCFによる計算。</caption>
+<thead>
+<tr><th>基底関数</th><th>Gauss関数の本数</th><th>$E$ (Hartree)</th><th>$E$ (eV)</th><th>誤差</th></tr>
+</thead>
+<tbody>
+<tr><td>STO-1G（手計算、$\alpha=8/9\pi$）</td><td>1</td><td>$-0.424413$</td><td>$-11.549$</td><td><strong>15.1%</strong></td></tr>
+<tr><td>STO-3G</td><td>3（1本に縮約）</td><td>$-0.466582$</td><td>$-12.696$</td><td><strong>6.69%</strong></td></tr>
+<tr><td>6-31G</td><td>4（2本に縮約）</td><td>$-0.498233$</td><td>$-13.558$</td><td>0.35%</td></tr>
+<tr><td>6-311G</td><td>6（3本に縮約）</td><td>$-0.499810$</td><td>$-13.601$</td><td>0.04%</td></tr>
+<tr><td><strong>厳密解</strong></td><td>—</td><td>$-0.500000$</td><td>$-13.606$</td><td>0</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Gauss関数を1本から3本に増やしただけで誤差は 15.1% から 6.69% へ半減し、6-31G では 0.35% まで落ちる。<strong>基底関数を大きくすればエネルギーは単調に下がる</strong>——これは変分原理の直接の帰結である。基底の集合を広げれば試行関数の自由度が増え、最小値はより真値に近い側へ動くしかない。</p>
+
+<div class="box ex">
+<p class="box-title">例題6.4　誤差の見積もり</p>
+<p>表6.3から、STO-1G から STO-3G への改善で「取り戻せたエネルギー」を eV 単位で求めよ。また、STO-3G の残差 $0.910\ \mathrm{eV}$ が化学的にどの程度の大きさか論ぜよ。</p>
+<p><strong>解答</strong>　STO-1G の誤差は $13.606-11.549=2.057\ \mathrm{eV}$、STO-3G の誤差は $13.606-12.696=0.910\ \mathrm{eV}$。取り戻した分は $2.057-0.910=1.147\ \mathrm{eV}$ で、もとの誤差の 55.8% である。</p>
+<p>残差 $0.910\ \mathrm{eV}$ は $87.8\ \mathrm{kJ/mol}$ に相当する（$1\ \mathrm{eV}=96.485\ \mathrm{kJ/mol}$）。C–C単結合の結合エネルギーが約 $348\ \mathrm{kJ/mol}$、水素結合が $10$〜$40\ \mathrm{kJ/mol}$ であることを思えば、これは<strong>水素結合の数倍</strong>という無視できない大きさである。ただし救いがある。化学で問題になるのは絶対エネルギーではなく<strong>エネルギー差</strong>（反応熱、結合エネルギー、構造間の安定性の差）であり、似た系どうしで誤差が相殺されることが多い。この<em class="term">誤差相殺</em>（error cancellation）に頼るのが実践的な量子化学計算の作法である。第8章・第10章で具体的に見る。</p>
+</div>
+
+<h2 id="sec6-8">6.8 RHF・UHF・ROHFの違い</h2>
+
+<p>コード6.4の出力には <code>Method : UHF</code> と書かれていた。計算機は黙って「解き方」をひとつ選んでいたのである。理論的背景（Slater行列式・交換エネルギー）は第7章と第9章に譲り、ここでは<strong>準位図で見て分かる違い</strong>に絞る。</p>
+
+<h3>6.8.1 閉殻と開殻、$\bm{\alpha}$スピンと$\bm{\beta}$スピン</h3>
+
+<p>電子のスピンの $z$ 成分は $+\hbar/2$ か $-\hbar/2$ の2値しかとれない。前者を<em class="term">$\bm{\alpha}$スピン</em>（up spin）、後者を<em class="term">$\bm{\beta}$スピン</em>（down spin）と呼ぶ。Pauliの排他原理により、ひとつの空間軌道には $\bm{\alpha}$ と $\bm{\beta}$ が1個ずつ、合計2個までしか入れない。</p>
+
+<div class="box def">
+<p class="box-title">定義：閉殻と開殻</p>
+<p><em class="term">閉殻</em>（closed shell）：すべての占有軌道が電子2個で埋まっている状態。$\bm{\alpha}$ 電子の数と $\bm{\beta}$ 電子の数が等しい（$N_\alpha=N_\beta$）。例：He, Ne, N$_2$, CH$_4$, H$_2$O。全スピン $S=0$、多重度 $2S+1=1$（一重項）。</p>
+<p><em class="term">開殻</em>（open shell）：不対電子を持つ状態。$N_\alpha\ne N_\beta$。例：H, Li, O$_2$, ラジカル、多くの遷移金属化合物。$2S=N_\alpha-N_\beta$ が不対電子の数であり、これがPySCFの <code>--spin</code> オプションで指定する値である。</p>
+</div>
+
+<h3>6.8.2 3つの解き方</h3>
+
+<div class="box def">
+<p class="box-title">定義：RHF・UHF・ROHF</p>
+<ul>
+<li><strong>RHF</strong>（Restricted Hartree–Fock、制限Hartree–Fock法）：$\bm{\alpha}$ 電子と $\bm{\beta}$ 電子が<strong>同一の空間軌道</strong>を使うと制限する。軌道エネルギーも $\bm{\alpha}$・$\bm{\beta}$ で同じになる。閉殻系（He, N$_2$, CH$_4$ など）に使う。</li>
+<li><strong>UHF</strong>（Unrestricted Hartree–Fock、非制限Hartree–Fock法）：$\bm{\alpha}$ と $\bm{\beta}$ に<strong>別々の空間軌道</strong>を許す。軌道エネルギーも別々に出る。開殻系（H, Li, O$_2$ など）に使う。閉殻系にも使える。PySCFのチュートリアルスクリプトでは既定値。</li>
+<li><strong>ROHF</strong>（Restricted Open-shell Hartree–Fock、開殻制限Hartree–Fock法）：開殻でありながら、$\bm{\alpha}$ と $\bm{\beta}$ の空間軌道（したがってエネルギー準位）を<strong>等しくする拘束</strong>を課す。二重占有される軌道は共通、不対電子だけが片方のスピンに入る。</li>
+</ul>
+</div>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RHF UHF ROHF のエネルギー準位の違い"><defs><marker id="upA" markerWidth="8" markerHeight="8" refX="4" refY="1" orient="auto"><polygon points="0 6, 4 0, 8 6" fill="#b03a2e"/></marker><marker id="dnA" markerWidth="8" markerHeight="8" refX="4" refY="7" orient="auto"><polygon points="0 2, 4 8, 8 2" fill="#1a5276"/></marker><marker id="axA" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#566573"/></marker></defs><line x1="45" y1="340" x2="45" y2="55" stroke="#566573" stroke-width="1.4" marker-end="url(#axA)"/><text x="38" y="200" text-anchor="end" font-size="12" fill="#566573" transform="rotate(-90 38 200)">エネルギー</text><!-- ===== RHF ===== --><g stroke="#1a202c" stroke-width="2"><line x1="90" y1="300" x2="150" y2="300"/><line x1="165" y1="300" x2="225" y2="300"/><line x1="90" y1="262" x2="150" y2="262"/><line x1="165" y1="262" x2="225" y2="262"/><line x1="90" y1="224" x2="150" y2="224"/><line x1="165" y1="224" x2="225" y2="224"/><line x1="90" y1="176" x2="150" y2="176"/><line x1="165" y1="176" x2="225" y2="176"/><line x1="90" y1="138" x2="150" y2="138"/><line x1="165" y1="138" x2="225" y2="138"/></g><g stroke="#b03a2e" stroke-width="2" marker-end="url(#upA)"><line x1="120" y1="322" x2="120" y2="284"/><line x1="120" y1="284" x2="120" y2="246"/><line x1="120" y1="246" x2="120" y2="208"/></g><g stroke="#1a5276" stroke-width="2" marker-end="url(#dnA)"><line x1="195" y1="278" x2="195" y2="316"/><line x1="195" y1="240" x2="195" y2="278"/><line x1="195" y1="202" x2="195" y2="240"/></g><text x="120" y="348" text-anchor="middle" font-size="14" fill="#b03a2e">α</text><text x="195" y="348" text-anchor="middle" font-size="14" fill="#1a5276">β</text><text x="157" y="376" text-anchor="middle" font-size="15" font-weight="bold" fill="#14684a">RHF</text><text x="157" y="76" text-anchor="middle" font-size="12" fill="#566573">閉殻（6電子）</text><text x="157" y="94" text-anchor="middle" font-size="11" fill="#566573">α と β が同じ軌道</text><!-- ===== UHF ===== --><g stroke="#1a202c" stroke-width="2"><line x1="300" y1="306" x2="360" y2="306"/><line x1="300" y1="268" x2="360" y2="268"/><line x1="300" y1="230" x2="360" y2="230"/><line x1="300" y1="168" x2="360" y2="168"/><line x1="300" y1="126" x2="360" y2="126"/><line x1="375" y1="296" x2="435" y2="296"/><line x1="375" y1="258" x2="435" y2="258"/><line x1="375" y1="206" x2="435" y2="206"/><line x1="375" y1="152" x2="435" y2="152"/><line x1="375" y1="116" x2="435" y2="116"/></g><g stroke="#b03a2e" stroke-width="2" marker-end="url(#upA)"><line x1="330" y1="328" x2="330" y2="290"/><line x1="330" y1="290" x2="330" y2="252"/><line x1="330" y1="252" x2="330" y2="214"/></g><g stroke="#1a5276" stroke-width="2" marker-end="url(#dnA)"><line x1="405" y1="274" x2="405" y2="312"/><line x1="405" y1="236" x2="405" y2="274"/></g><text x="330" y="348" text-anchor="middle" font-size="14" fill="#b03a2e">α</text><text x="405" y="348" text-anchor="middle" font-size="14" fill="#1a5276">β</text><text x="367" y="376" text-anchor="middle" font-size="15" font-weight="bold" fill="#14684a">UHF</text><text x="367" y="76" text-anchor="middle" font-size="12" fill="#566573">開殻（5電子）</text><text x="367" y="94" text-anchor="middle" font-size="11" fill="#566573">α と β の準位がずれる</text><!-- ===== ROHF ===== --><g stroke="#1a202c" stroke-width="2"><line x1="510" y1="302" x2="570" y2="302"/><line x1="585" y1="302" x2="645" y2="302"/><line x1="510" y1="264" x2="570" y2="264"/><line x1="585" y1="264" x2="645" y2="264"/><line x1="510" y1="218" x2="570" y2="218"/><line x1="585" y1="218" x2="645" y2="218"/><line x1="510" y1="162" x2="570" y2="162"/><line x1="585" y1="162" x2="645" y2="162"/><line x1="510" y1="122" x2="570" y2="122"/><line x1="585" y1="122" x2="645" y2="122"/></g><g stroke="#b03a2e" stroke-width="2" marker-end="url(#upA)"><line x1="540" y1="324" x2="540" y2="286"/><line x1="540" y1="286" x2="540" y2="248"/><line x1="540" y1="240" x2="540" y2="202"/></g><g stroke="#1a5276" stroke-width="2" marker-end="url(#dnA)"><line x1="615" y1="280" x2="615" y2="318"/><line x1="615" y1="242" x2="615" y2="280"/></g><text x="540" y="348" text-anchor="middle" font-size="14" fill="#b03a2e">α</text><text x="615" y="348" text-anchor="middle" font-size="14" fill="#1a5276">β</text><text x="577" y="376" text-anchor="middle" font-size="15" font-weight="bold" fill="#14684a">ROHF</text><text x="577" y="76" text-anchor="middle" font-size="12" fill="#566573">開殻（5電子）</text><text x="577" y="94" text-anchor="middle" font-size="11" fill="#566573">準位を同一に拘束</text></svg>
+<figcaption>図6.6 RHF・UHF・ROHF のエネルギー準位の違い。RHFは閉殻系（6電子）を扱い、$\bm{\alpha}$ と $\bm{\beta}$ は同じ空間軌道・同じエネルギーを共有する。UHFは開殻系（5電子）で両者を独立に最適化するので準位がずれる。ROHFは同じ開殻系を扱いながら、準位が一致するよう拘束を課す。UHFのほうが自由度が大きいので、必ず $E_{\mathrm{UHF}}\le E_{\mathrm{ROHF}}$ となる。</figcaption>
+</figure>
+
+<div class="box why">
+<p class="box-title">なぜ？：UHFで $\bm{\alpha}$ の準位が下がるのはなぜか</p>
+<p>不対電子が $\bm{\alpha}$ 側にあるとき、$\bm{\alpha}$ 電子どうしは<strong>交換相互作用</strong>によって余分に安定化される。交換項は同じスピンの電子の間にしか働かない（第9章で完全に導出する）。$\bm{\alpha}$ 電子は「仲間が多い」ぶん得をし、$\bm{\beta}$ 電子は損をする。だからUHFでは $\bm{\alpha}$ の占有準位が $\bm{\beta}$ より低くなる。これは<em class="term">スピン分極</em>（spin polarization）と呼ばれ、磁性を持つ物質を記述するには絶対に必要な自由度である。望月先生の研究（文献[12]）のような遷移金属酸化物の計算では、スピン分極を許すかどうかで金属か絶縁体かの答えが変わることさえある。</p>
+<p>ROHFはこの自由度をわざと捨てる。捨てる代わりに、波動関数がスピン角運動量の固有関数であることが保証される（UHFでは一般に保証されない。これを<em class="term">スピン汚染</em>（spin contamination）と呼び、<code>&lt;S^2&gt;</code> の値が $S(S+1)$ からずれることで検知できる）。</p>
+</div>
+
+<h3>6.8.3 Li 原子を計算してみる</h3>
+
+<p>電子3個のLi原子（電子配置 $1s^2 2s^1$）は、不対電子が1個ある典型的な開殻系である。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_Li.xyz --spin 1</code></pre>
+<p class="codecap">コード6.5 Li原子をSTO-3G・UHFで計算する。「これだけでできるってすごくないっすか？」（講義より）</p>
+
+<pre><code>Method       : UHF
+Total Energy : -7.3155259813 Hartree
+             : -199.065601 eV
+&lt;S^2&gt;        : 0.750000
+Multiplicity : 2.0
+
+MO energies (Hartree / eV):
+  Alpha MO energies:            <span class="cmt"># α は up spin のこと</span>
+  MO  1:  -2.369171    -64.4684
+  MO  2:  -0.180124     -4.9014
+  MO 3-5:  0.130126      3.5409   <span class="cmt"># 2p、3重縮退</span>
+  Beta  MO energies:            <span class="cmt"># β は down spin のこと</span>
+  MO  1:  -2.337858    -63.6164
+  MO  2:   0.102253      2.7824
+  MO 3-5:  0.190916      5.1951</code></pre>
+<p class="codecap">コード6.6 Li原子・STO-3G・UHFの結果。MO 1 が 1s、MO 2 が 2s、MO 3–5 が3重に縮退した 2p である（STO-3Gの最小基底なので5本しかない）。</p>
+
+<p>読み取れることを並べてみよう。</p>
+<ul>
+<li>$\bm{\alpha}$ の 1s（$-64.4684\ \mathrm{eV}$）は $\bm{\beta}$ の 1s（$-63.6164\ \mathrm{eV}$）より $0.85\ \mathrm{eV}$ 低い。不対電子が $\bm{\alpha}$ 側にあるためのスピン分極である。</li>
+<li>$\bm{\alpha}$ の 2s は $-4.9014\ \mathrm{eV}$ で占有。$\bm{\beta}$ 側の対応する準位は $+2.7824\ \mathrm{eV}$ と大きく上にあり、空である。</li>
+<li>2p は3重に縮退している（$3.5409\ \mathrm{eV}$ が3つ）。原子は球対称なので $p_x,p_y,p_z$ が同じエネルギーになる。当然の結果だが、計算がそれを再現していることは、計算が正しく走っている良い証拠である。</li>
+</ul>
+
+<p>次に、同じ系をROHFで解いてみる。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_Li.xyz --spin 1 --method rohf</code></pre>
+<p class="codecap">コード6.7 Li原子をROHFで計算する</p>
+
+<pre><code>Method       : ROHF
+Total Energy : -7.3155259813 Hartree
+             : -199.065601 eV
+&lt;S^2&gt;        : 0.750000
+Multiplicity : 2.0
+
+MO energies (Hartree / eV):
+  MO  1:  -2.353491    -64.0417
+  MO  2:  -0.038960     -1.0601
+  MO 3-5:  0.160521      4.3680</code></pre>
+<p class="codecap">コード6.8 Li原子・STO-3G・ROHFの結果。$\bm{\alpha}$・$\bm{\beta}$ の区別がなくなり、準位が1組にまとまっている。</p>
+
+<div class="box warn">
+<p class="box-title">注意：全エネルギーは同じでも軌道エネルギーは違う</p>
+<p>UHF と ROHF の全エネルギーは $-7.3155259813$ Hartree で<strong>完全に一致</strong>している。これは STO-3G という最小基底では、Li のスピン分極を表現する余地が実質的にないためである（実際 <code>&lt;S^2&gt;</code> がぴったり 0.750000 で、スピン汚染がゼロ）。しかし軌道エネルギーは違う（UHFの 1s は $-64.47/-63.62$、ROHFは $-64.04$）。<strong>軌道エネルギーは計算手法に依存する補助的な量であり、観測量ではない</strong>ことをここで肝に銘じてほしい。基底関数を 6-31G に拡張すると、UHF は $-7.4312358$ Hartree、ROHF は $-7.4312350$ Hartree となり、わずかに UHF が低くなる（自由度が多いぶん必ずこうなる）。</p>
+</div>
+
+<h3>6.8.4 電荷を変える — Li$^+$ イオン</h3>
+
+<p>PySCFでは電荷も自由に指定できる。電子を1個取り去った Li$^+$（電子2個、閉殻）を計算してみよう。閉殻なので <code>--spin 0</code> とすると、スクリプトは自動的にRHFを選ぶ。</p>
+
+<pre><code><span class="prompt">$</span> python3 calc_pyscf.py --xyz XYZ_Li.xyz --spin 0 --charge 1</code></pre>
+<p class="codecap">コード6.9 Li$^+$ イオンの計算</p>
+
+<pre><code>Charge       : 1
+Spin (2S)    : 0
+Method       : RHF
+Total Energy : -7.1354476290 Hartree
+             : -194.165420 eV
+&lt;S^2&gt;        : 0.000000
+Multiplicity : 1.0
+
+MO energies (Hartree / eV):
+  MO  1:  -2.736765    -74.4712
+  MO  2:  -0.180035     -4.8990
+  MO 3-5: -0.094515     -2.5719</code></pre>
+<p class="codecap">コード6.10 Li$^+$・STO-3G・RHFの結果</p>
+
+<figure>
+<svg font-family="sans-serif" viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Li原子のUHF ROHF とLi+イオンの準位図"><defs><marker id="upB" markerWidth="8" markerHeight="8" refX="4" refY="1" orient="auto"><polygon points="0 6, 4 0, 8 6" fill="#b03a2e"/></marker><marker id="dnB" markerWidth="8" markerHeight="8" refX="4" refY="7" orient="auto"><polygon points="0 2, 4 8, 8 2" fill="#1a5276"/></marker></defs><line x1="70" y1="60" x2="70" y2="250" stroke="#566573" stroke-width="1.4"/><line x1="70" y1="300" x2="70" y2="400" stroke="#566573" stroke-width="1.4"/><!-- axis break --><path d="M 58 282 l 10 -8 l 10 8 M 58 272 l 10 -8 l 10 8" fill="none" stroke="#566573" stroke-width="1.4"/><text x="62" y="86" text-anchor="end" font-size="10" fill="#566573">+5</text><text x="62" y="151" text-anchor="end" font-size="10" fill="#566573">0</text><text x="62" y="215" text-anchor="end" font-size="10" fill="#566573">−5</text><text x="62" y="323" text-anchor="end" font-size="10" fill="#566573">−65</text><text x="62" y="355" text-anchor="end" font-size="10" fill="#566573">−70</text><text x="62" y="387" text-anchor="end" font-size="10" fill="#566573">−75</text><text x="22" y="230" font-size="12" fill="#566573" transform="rotate(-90 22 230)">軌道エネルギー (eV)</text><line x1="70" y1="147.1" x2="740" y2="147.1" stroke="#d5dbdb" stroke-dasharray="4 4"/><!-- ==== Li UHF alpha ==== --><g stroke="#1a202c" stroke-width="2.4"><line x1="105" y1="315.9" x2="185" y2="315.9"/><line x1="105" y1="210.2" x2="185" y2="210.2"/><line x1="105" y1="101.6" x2="127" y2="101.6"/><line x1="132" y1="101.6" x2="154" y2="101.6"/><line x1="159" y1="101.6" x2="181" y2="101.6"/></g><g stroke="#b03a2e" stroke-width="2" marker-end="url(#upB)"><line x1="145" y1="332" x2="145" y2="300"/><line x1="145" y1="226" x2="145" y2="194"/></g><text x="190" y="320" font-size="10" fill="#566573">−64.5</text><text x="102" y="203" font-size="10" fill="#566573">−4.9</text><text x="102" y="95" font-size="10" fill="#566573">+3.5</text><text x="145" y="425" text-anchor="middle" font-size="13" fill="#b03a2e">α</text><!-- ==== Li UHF beta ==== --><g stroke="#1a202c" stroke-width="2.4"><line x1="195" y1="310.4" x2="275" y2="310.4"/><line x1="195" y1="111.4" x2="275" y2="111.4"/><line x1="195" y1="80.3" x2="217" y2="80.3"/><line x1="222" y1="80.3" x2="244" y2="80.3"/><line x1="249" y1="80.3" x2="271" y2="80.3"/></g><g stroke="#1a5276" stroke-width="2" marker-end="url(#dnB)"><line x1="235" y1="294" x2="235" y2="326"/></g><text x="280" y="314" font-size="10" fill="#566573">−63.6</text><text x="278" y="115" font-size="10" fill="#566573">+2.8</text><text x="235" y="425" text-anchor="middle" font-size="13" fill="#1a5276">β</text><text x="190" y="450" text-anchor="middle" font-size="14" font-weight="bold" fill="#14684a">Li (UHF)</text><!-- ==== Li ROHF ==== --><g stroke="#1a202c" stroke-width="2.4"><line x1="330" y1="313.1" x2="450" y2="313.1"/><line x1="330" y1="160.8" x2="450" y2="160.8"/><line x1="330" y1="91" x2="364" y2="91"/><line x1="373" y1="91" x2="407" y2="91"/><line x1="416" y1="91" x2="450" y2="91"/></g><g stroke="#b03a2e" stroke-width="2" marker-end="url(#upB)"><line x1="378" y1="329" x2="378" y2="297"/><line x1="378" y1="177" x2="378" y2="145"/></g><g stroke="#1a5276" stroke-width="2" marker-end="url(#dnB)"><line x1="402" y1="297" x2="402" y2="329"/></g><text x="455" y="317" font-size="10" fill="#566573">−64</text><text x="455" y="164" font-size="10" fill="#566573">−1.1</text><text x="455" y="94" font-size="10" fill="#566573">+4.4</text><text x="378" y="425" text-anchor="middle" font-size="13" fill="#b03a2e">α</text><text x="402" y="425" text-anchor="middle" font-size="13" fill="#1a5276">β</text><text x="390" y="450" text-anchor="middle" font-size="14" font-weight="bold" fill="#14684a">Li (ROHF)</text><!-- ==== Li+ ==== --><g stroke="#1a202c" stroke-width="2.4"><line x1="570" y1="380.2" x2="690" y2="380.2"/><line x1="570" y1="210.1" x2="690" y2="210.1"/><line x1="570" y1="180.2" x2="604" y2="180.2"/><line x1="613" y1="180.2" x2="647" y2="180.2"/><line x1="656" y1="180.2" x2="690" y2="180.2"/></g><g stroke="#b03a2e" stroke-width="2" marker-end="url(#upB)"><line x1="618" y1="396" x2="618" y2="364"/></g><g stroke="#1a5276" stroke-width="2" marker-end="url(#dnB)"><line x1="642" y1="364" x2="642" y2="396"/></g><text x="695" y="384" font-size="10" fill="#566573">−74.5</text><text x="695" y="213" font-size="10" fill="#566573">−4.9</text><text x="695" y="177" font-size="10" fill="#566573">−2.6</text><text x="618" y="425" text-anchor="middle" font-size="13" fill="#b03a2e">α</text><text x="642" y="425" text-anchor="middle" font-size="13" fill="#1a5276">β</text><text x="630" y="450" text-anchor="middle" font-size="14" font-weight="bold" fill="#14684a">Li⁺ (RHF)</text><text x="500" y="360" font-size="12" fill="#b03a2e">1s が 10 eV も深く沈む</text><text x="120" y="66" font-size="11" fill="#566573">2p（3重縮退）</text></svg>
+<figcaption>図6.7 Li原子（UHF・ROHF）とLi$^+$イオン（RHF）の軌道エネルギー。縦軸は $-8$〜$+6\ \mathrm{eV}$ と $-76$〜$-62\ \mathrm{eV}$ の2区間に分けてある（途中を省略）。UHFでは $\bm{\alpha}$ と $\bm{\beta}$ の準位がずれ、ROHFでは一致する。Li$^+$ では遮蔽が弱まって全準位が下がり、1s は $-64.04\to-74.47\ \mathrm{eV}$ と $10\ \mathrm{eV}$ 以上沈む。</figcaption>
+</figure>
+
+<div class="box phys">
+<p class="box-title">物理的意味：なぜ電荷を＋にすると準位が下がるのか</p>
+<p>Li 原子では、2s 電子は 1s の2個の電子に核電荷 $Z=3$ を<strong>遮蔽</strong>されている。電子を1個取り去ると、残った電子から見た「実効的な核電荷」が増える。より強く引きつけられるので、軌道エネルギーはすべて下がる。図6.7で 1s が $10\ \mathrm{eV}$ 沈み、2s も $-1.06\to-4.90\ \mathrm{eV}$ と下がっているのはこの効果である。</p>
+<p><strong>しかし全エネルギーは上がる</strong>ことに注意してほしい。Li が $-199.066\ \mathrm{eV}$、Li$^+$ が $-194.165\ \mathrm{eV}$ で、$4.900\ \mathrm{eV}$ だけ高い。電子を1個引き剥がすにはエネルギーが要るのだから当然である。「準位が下がる」と「全エネルギーが上がる」は矛盾しない。<em class="term">軌道エネルギーの総和は全エネルギーではない</em>——第9章で詳しく扱う重要な事実である。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題6.5　Li のイオン化エネルギーとKoopmansの定理</p>
+<p>コード6.6とコード6.10から Li の第一イオン化エネルギー $I$ を求めよ。また、Li の $\bm{\alpha}$ 2s 軌道のエネルギー $\varepsilon_{2s}=-4.9014\ \mathrm{eV}$ と比較せよ。実験値は $5.392\ \mathrm{eV}$ である。</p>
+<p><strong>解答</strong>　イオン化エネルギーは「Li$^+$ と Li の全エネルギーの差」として定義される。</p>
+$$
+I=E(\mathrm{Li}^+)-E(\mathrm{Li})
+=(-7.1354476)-(-7.3155260)=0.1800784\ \mathrm{Hartree}=4.900\ \mathrm{eV}.
+$$
+<p>一方、占有最高軌道（HOMO）のエネルギーは $\varepsilon_{2s}=-0.180124\ \mathrm{Hartree}=-4.9014\ \mathrm{eV}$ であり、</p>
+$$
+\begin{equation}
+I\simeq-\varepsilon_{\mathrm{HOMO}}
+\label{eq:6-koopmans}
+\end{equation}
+$$
+<p>が $0.0013\ \mathrm{eV}$ の精度で成立している。この関係を<em class="term">Koopmansの定理</em>（Koopmans' theorem、文献[11]）という。「電子を1個抜いても残りの軌道は変わらない」と仮定すれば、抜いた軌道のエネルギー分だけ全エネルギーが上がる、という素朴な論理である。実際には残りの電子が緩和するので厳密には成り立たないが、この例のように最小基底では緩和の余地が小さく、ほぼぴったり合う。</p>
+<p>実験値 $5.392\ \mathrm{eV}$ と比べると STO-3G の $4.900\ \mathrm{eV}$ は 9% 低い。6-31G に拡張すると $I=5.327\ \mathrm{eV}$ となり、差は 1.2% まで縮む。<strong>基底関数を良くすれば実験に近づく</strong>という6.7節と同じ傾向がここでも見られる。</p>
+</div>
+
+<h3>6.8.5 基底関数を 6-31G に変えるとどうなるか</h3>
+
+<p>スクリプトのオプションで基底関数を切り替えられる（付録B）。Li について STO-3G と 6-31G を比べてみよう。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表6.4 Li原子・Li$^+$イオンの計算結果の基底関数依存性（PySCF）。基底関数の数 $M$ は空間軌道の本数。実験値はNIST。</caption>
+<thead>
+<tr><th>系・手法</th><th>基底</th><th>$M$</th><th>全エネルギー (Hartree)</th><th>$\varepsilon_{1s}^{\alpha}$ (eV)</th><th>$\varepsilon_{2s}^{\alpha}$ (eV)</th></tr>
+</thead>
+<tbody>
+<tr><td>Li, UHF</td><td>STO-3G</td><td>5</td><td>$-7.3155260$</td><td>$-64.468$</td><td>$-4.901$</td></tr>
+<tr><td>Li, ROHF</td><td>STO-3G</td><td>5</td><td>$-7.3155260$</td><td>$-64.042$</td><td>$-1.060$</td></tr>
+<tr><td>Li, UHF</td><td>6-31G</td><td>9</td><td>$-7.4312358$</td><td>$-67.416$</td><td>$-5.327$</td></tr>
+<tr><td>Li, ROHF</td><td>6-31G</td><td>9</td><td>$-7.4312350$</td><td>$-67.192$</td><td>$-2.063$</td></tr>
+<tr><td>Li$^+$, RHF</td><td>STO-3G</td><td>5</td><td>$-7.1354476$</td><td>$-74.471$</td><td>—</td></tr>
+<tr><td>Li$^+$, RHF</td><td>6-31G</td><td>9</td><td>$-7.2354800$</td><td>$-75.990$</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>読み取れる傾向は3つある。</p>
+<ol>
+<li><strong>全エネルギーは必ず下がる。</strong>Li で $-7.3155\to-7.4312$ Hartree（$3.15\ \mathrm{eV}$ の低下）。変分原理の帰結である。</li>
+<li><strong>UHF は必ず ROHF 以下。</strong>6-31G では $-7.4312358$（UHF）$\lt-7.4312350$（ROHF）。差はごく小さいが符号は理論どおりである。</li>
+<li><strong>イオン化エネルギーは実験に近づく。</strong>$I=E(\mathrm{Li}^+)-E(\mathrm{Li})$ は STO-3G で $4.900\ \mathrm{eV}$、6-31G で $5.327\ \mathrm{eV}$。実験値 $5.392\ \mathrm{eV}$ に対する誤差は 9.1% → 1.2% と改善する。</li>
+</ol>
+
+<div class="box why">
+<p class="box-title">なぜ？：全エネルギーは3 eVも動くのに、イオン化エネルギーは0.4 eVしか動かない</p>
+<p>STO-3G から 6-31G への拡張で、Li の全エネルギーは $3.15\ \mathrm{eV}$、Li$^+$ の全エネルギーは $2.72\ \mathrm{eV}$ 下がる。ところが差であるイオン化エネルギーの変化は $0.43\ \mathrm{eV}$ にすぎない。<strong>基底関数の不足による誤差の大半が、両者で同じ向きに効いて相殺している</strong>のである。これが例題6.4で触れた誤差相殺である。</p>
+<p>だからこそ量子化学計算では、比較する2つの系に<strong>必ず同じ基底関数・同じ手法</strong>を使わなければならない。片方をSTO-3G、もう片方を6-31Gで計算して差を取れば、その差は物理ではなく基底関数の違いを見ているだけになる。当たり前のことのようだが、実際の研究でも起きる事故である。</p>
+</div>
+
+<h2 id="sec6-9">6.9 まとめと演習</h2>
+
+<h3>6.9.1 この章のまとめ</h3>
+
+<p>本章では、厳密解を知らないふりをして水素原子を1個のGauss関数で解き、その答えを厳密解と突き合わせた。</p>
+
+<ol>
+<li><strong>設定：</strong>ハミルトニアン\eqref{eq:6-hamiltonian}と球対称なGauss試行関数\eqref{eq:6-trial}に対し、期待値\eqref{eq:6-energy-def}を比の形のまま扱えば規格化定数 $N$ は自動的に約分される。</li>
+<li><strong>運動エネルギー：</strong>動径ラプラシアン\eqref{eq:6-laplacian-radial}から $\nabla^2\phi_T=(-6a+4a^2r^2)\phi_T$（式\eqref{eq:6-lap-phi}）。$6=2\times3$ の $3$ は空間の次元。Gauss積分は基本形を $c$ で微分すればいくらでも作れる。</li>
+<li><strong>3つの積分：</strong>運動エネルギー\eqref{eq:6-kin-result}、Coulomb引力\eqref{eq:6-coul-result}、規格化\eqref{eq:6-norm-result}。SI単位系の $1/(4\pi\eps)$ は角度積分の $4\pi$ と打ち消し合う。</li>
+<li><strong>最小化：</strong>$\braket{E}(\alpha)=A\alpha-B\sqrt\alpha$（式\eqref{eq:6-energy-alpha}）。$A=3\abs{\epsilon_{1s}}$、$B=\dfrac{8}{\sqrt{2\pi}}\abs{\epsilon_{1s}}$ と書けば物理定数はすべて $\abs{\epsilon_{1s}}$ に押し込められ、$\dd\braket{E}/\dd\alpha=0$ から</li>
+</ol>
+<div class="keyeq">
+$$
+\alpha_{\mathrm{opt}}=\frac{B^2}{4A^2}=\frac{8}{9\pi}=0.28294,
+\qquad
+E_{\min}=-\frac{B^2}{4A}=\frac{8}{3\pi}\epsilon_{1s}=0.8488\,\epsilon_{1s}=-11.549\ \mathrm{eV}.
+$$
+</div>
+<ol start="5">
+<li><strong>誤差15.1%の正体：</strong>(i) 核カスプ条件\eqref{eq:6-cusp}をGauss関数は原理的に満たせない（原点で導関数が必ずゼロ）。(ii) 遠方で $e^{-\alpha r^2}$ は速く減衰しすぎる。孤立原子では (i) が支配的だが、分子・固体では (ii) も効く。</li>
+<li><strong>基準が違えば最適も違う：</strong>変分最適 $\alpha_E=0.28294$ と重なり最大 $\alpha_S=0.27095$ は 4.4% 違うが、エネルギー差は $0.005\ \mathrm{eV}$ にすぎない。停留点のまわりでエネルギーは2次でしか変わらないからである。<strong>エネルギーが合っていても波動関数が正しいとは限らない。</strong></li>
+<li><strong>機械にやらせる：</strong>分かりきった単純作業は計算機に任せ、人間は creative な部分に時間を使う。ただし<strong>中身を知った上で</strong>任せること。PySCFによるSTO-3Gの結果は $-12.696\ \mathrm{eV}$（誤差6.69%）、6-31Gなら $-13.558\ \mathrm{eV}$（誤差0.35%）。</li>
+<li><strong>RHF・UHF・ROHF：</strong>RHFは閉殻用、UHFは開殻用（スピン分極を許す）、ROHFは開殻だが準位を同一に拘束。$E_{\mathrm{UHF}}\le E_{\mathrm{ROHF}}$。Li$^+$ では遮蔽が弱まって全準位が下がるが全エネルギーは上がり、Koopmansの定理 $I\simeq-\varepsilon_{\mathrm{HOMO}}$ が良く成り立つ。</li>
+</ol>
+
+<div class="box phys">
+<p class="box-title">物理的意味：本章で身につけるべき「感覚」</p>
+<p>近似計算の結果を見たときに問うべきことは、「何%ずれているか」だけではない。<strong>どこがずれているか</strong>である。本章のGauss関数は、原点近傍という<em>ごく狭い領域</em>の形を間違えただけで、エネルギーを15%外した。逆に平均半径 $\braket{r}$ は完璧に当てた。近似の良し悪しは、<em class="term">求めたい物理量がどの領域の波動関数に敏感か</em>によって決まる。この視点は、密度汎関数法の汎関数を選ぶとき、擬ポテンシャルを選ぶとき、基底関数を選ぶとき——計算科学のあらゆる場面で効いてくる。</p>
+</div>
+
+<p><strong>次章への橋渡し：</strong>本章までは電子1個の系だけを扱った。第7章では電子を2個以上に増やす。そこでPauliの排他原理を波動関数のレベルで正しく書く道具——Slater行列式——が必要になり、$\bm{\alpha}$ と $\bm{\beta}$ が本章のような「別々の箱」ではなく反対称性を通じて絡み合っていることが分かる。本章で顔を出したスピン分極・$\braket{\hat{S}^2}$・交換相互作用は、すべて第7章と第9章で正面から扱う。</p>
+
+<h3>6.9.2 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習6.1　Slater型試行関数なら厳密解に到達する</p>
+<p>試行関数 $\phi_T(r)=Ne^{-\beta r}$（$\beta\gt0$ は長さ$^{-1}$の次元をもつ変分パラメータ）を使って、6.2〜6.5節と同じ変分計算を実行し、</p>
+$$
+\braket{E}(\beta)=\frac{\hbar^2\beta^2}{2m}-\frac{\ee^2\beta}{4\pi\eps}
+$$
+<p>となることを示せ。さらに $\dd\braket{E}/\dd\beta=0$ から $\beta_{\mathrm{opt}}=1/a_0$、$E_{\min}=\epsilon_{1s}$ を導け（厳密解に到達する）。</p>
+<p><em>ヒント：</em>$\nabla^2\phi_T=\left(\beta^2-\dfrac{2\beta}{r}\right)\phi_T$ をまず示す（$\dfrac{\dd\phi_T}{\dd r}=-\beta\phi_T$、$\dfrac{\dd^2\phi_T}{\dd r^2}=\beta^2\phi_T$、これに $\dfrac{2}{r}\dfrac{\dd\phi_T}{\dd r}=-\dfrac{2\beta}{r}\phi_T$ を足す）。積分は $\displaystyle\int_0^\infty r^ne^{-cr}\dd r=\dfrac{n!}{c^{n+1}}$ を $c=2\beta$、$n=0,1,2$ について使えばよい。分子・分母それぞれで $\int_0^\infty r^2e^{-2\beta r}\dd r=\dfrac{2}{(2\beta)^3}=\dfrac{1}{4\beta^3}$ などを丁寧に。最後に $\hbar^2/(ma_0^2)=2\abs{\epsilon_{1s}}$ と $\ee^2/(4\pi\eps a_0)=2\abs{\epsilon_{1s}}$ を使うと $E_{\min}=\abs{\epsilon_{1s}}-2\abs{\epsilon_{1s}}=-\abs{\epsilon_{1s}}$ が出る。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習6.2　水素様イオンへの拡張</p>
+<p>核電荷 $Ze_0$ をもつ水素様イオン（He$^+$, Li$^{2+}$, …）に対して、同じGauss試行関数\eqref{eq:6-trial}を使ったときの $\alpha_{\mathrm{opt}}$ と $E_{\min}$ を求めよ。厳密解は $E=Z^2\epsilon_{1s}$ である。誤差率は $Z$ に依存するか。</p>
+<p><em>ヒント：</em>ハミルトニアンの Coulomb 項が $-\dfrac{Z\ee^2}{4\pi\eps r}$ になるので、$B$ だけが $Z$ 倍になる（$A$ は変わらない）。\eqref{eq:6-alpha-opt}と\eqref{eq:6-emin}より $\alpha_{\mathrm{opt}}=\dfrac{(ZB)^2}{4A^2}=Z^2\cdot\dfrac{8}{9\pi}$、$E_{\min}=-\dfrac{(ZB)^2}{4A}=Z^2\cdot\dfrac{8}{3\pi}\epsilon_{1s}$。厳密解も $Z^2$ に比例するので、<strong>誤差率は $Z$ によらず 15.1% のまま</strong>である。$Z$ が大きいほど波動関数は収縮する（$\alpha\propto Z^2$）が、形の悪さは相似形のまま残る、と理解するとよい。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習6.3　最小点の平坦さを定量化する</p>
+<p>(a) $\braket{E}(\alpha)=A\alpha-B\sqrt\alpha$ の2階微分を求め、$\alpha=\alpha_{\mathrm{opt}}$ での値を $A$ で表せ。<br>
+(b) その結果を使い、$\alpha$ を最適値から $\delta$（相対値、たとえば $\delta=0.044$）だけずらしたときのエネルギー上昇を評価する式を作り、$\alpha_S=0.27095$（$\delta=-0.0424$）の場合の上昇量を求めて表6.1の $0.0053\ \mathrm{eV}$ と比べよ。</p>
+<p><em>ヒント：</em>(a) $\dfrac{\dd^2\braket{E}}{\dd\alpha^2}=\dfrac{B}{4}\alpha^{-3/2}$ に $\sqrt{\alpha_{\mathrm{opt}}}=\dfrac{B}{2A}$ を入れると $\dfrac{2A^3}{B^2}$。(b) Taylor展開の2次項 $\dfrac{A^3}{B^2}\alpha_{\mathrm{opt}}^2\delta^2$ に $\alpha_{\mathrm{opt}}=\dfrac{B^2}{4A^2}$ を入れると $\dfrac{\abs{E_{\min}}}{4}\delta^2$ と驚くほど簡単になる。$\delta=-0.0424$ なら $\dfrac{11.549}{4}\times0.0424^2=0.0052\ \mathrm{eV}$ で表6.1と一致する。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習6.4　STO-3G の原点での値</p>
+<p>表6.2の値を使って、STO-3Gの試行関数\eqref{eq:6-sto3g}の $r=0$ における値 $\phi_T^{\text{STO-3G}}(0)$ を計算し、図6.3の $0.455\,a_0^{-3/2}$ を再現せよ。また、これが厳密解の値 $\psi_{1s}(0)=1/\sqrt{\pi}=0.5642\,a_0^{-3/2}$ の何%かを求めよ。さらに、$\dfrac{\dd\phi_T^{\text{STO-3G}}}{\dd r}\Big|_{r=0}=0$ であることを確かめよ。</p>
+<p><em>ヒント：</em>$r=0$ では指数関数がすべて 1 になるので、$\phi_T(0)=\sum_i d_i(2\alpha_i/\pi)^{3/4}=\sum_i c_i$ である。表6.2の $c_i$ を足すだけでよい（$0.06045+0.19397+0.20056$）。導関数については、各成分が $-2\alpha_i r\,c_ie^{-\alpha_ir^2}$ で $r=0$ を代入するとすべてゼロ。<strong>何本足しても $r$ の1次の項は現れない</strong>——これがカスプを作れない理由である。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習6.5　誤差相殺を自分の手で確かめる</p>
+<p>Li と Li$^+$ を STO-3G と 6-31G の両方で計算し、(a) それぞれの全エネルギー、(b) イオン化エネルギー $I=E(\mathrm{Li}^+)-E(\mathrm{Li})$ を求めよ。全エネルギーの基底関数依存性と、$I$ の基底関数依存性の大きさを比較し、誤差相殺がどれだけ効いているかを%で述べよ。実験値は $I_{\exp}=5.392\ \mathrm{eV}$ である。</p>
+<p><em>ヒント：</em>表6.4に答えの一部が載っている。全エネルギーは Li で $3.15\ \mathrm{eV}$、Li$^+$ で $2.72\ \mathrm{eV}$ 下がるのに対し、$I$ の変化は $0.43\ \mathrm{eV}$ にすぎない。基底関数の改善による低下量のうち $2.72/3.15=86\%$ が両者で共通に効いて相殺している。<strong>絶対エネルギーの誤差が数 eV あっても、エネルギー差の誤差は0.1 eVのオーダーに収まりうる</strong>——量子化学計算が実用になる理由の核心をここで体感してほしい。</p>
+</div>
+
+<h3>6.9.3 参考文献</h3>
+
+<div class="refs">
+<ol>
+<li>原田 義也『量子化学（上巻）』裳華房（1992）</li>
+<li>A. Szabo, N. S. Ostlund『新しい量子化学 — 電子構造の理論入門（上）』大野公男・阪井健男・望月祐志 訳、東京大学出版会（1987）（原著：<i>Modern Quantum Chemistry: Introduction to Advanced Electronic Structure Theory</i>, Dover, 1996）— 第3章にSTO-$n$Gの図（本章の図6.5に対応）とRHF/UHFの詳しい定式化がある。</li>
+<li>W. J. Hehre, R. F. Stewart, J. A. Pople, "Self-Consistent Molecular-Orbital Methods. I. Use of Gaussian Expansions of Slater-Type Atomic Orbitals", <i>J. Chem. Phys.</i> <b>51</b>, 2657 (1969). — STO-$n$G の原論文。本章で使った縮約係数・指数の出典。</li>
+<li>T. Kato, "On the eigenfunctions of many-particle systems in quantum mechanics", <i>Commun. Pure Appl. Math.</i> <b>10</b>, 151 (1957). — 核カスプ条件\eqref{eq:6-cusp}の厳密な証明。</li>
+<li>S. F. Boys, "Electronic wave functions. I. A general method of calculation for the stationary states of any molecular system", <i>Proc. R. Soc. London A</i> <b>200</b>, 542 (1950). — Gauss型基底の提唱。</li>
+<li>Q. Sun <i>et al.</i>, "PySCF: the Python-based simulations of chemistry framework", <i>WIREs Comput. Mol. Sci.</i> <b>8</b>, e1340 (2018). — 本章で使った計算プログラム。</li>
+<li>R. Ditchfield, W. J. Hehre, J. A. Pople, "Self-Consistent Molecular-Orbital Methods. IX. An Extended Gaussian-Type Basis for Molecular-Orbital Studies of Organic Molecules", <i>J. Chem. Phys.</i> <b>54</b>, 724 (1971). — 6-31G 基底の原論文。</li>
+<li>J. A. Pople, R. K. Nesbet, "Self-Consistent Orbitals for Radicals", <i>J. Chem. Phys.</i> <b>22</b>, 571 (1954). — UHF の原論文。</li>
+<li>C. C. J. Roothaan, "Self-Consistent Field Theory for Open Shells of Electronic Systems", <i>Rev. Mod. Phys.</i> <b>32</b>, 179 (1960). — ROHF の定式化。</li>
+<li>T. Koopmans, "Über die Zuordnung von Wellenfunktionen und Eigenwerten zu den einzelnen Elektronen eines Atoms", <i>Physica</i> <b>1</b>, 104 (1934). — Koopmansの定理\eqref{eq:6-koopmans}。</li>
+<li>P. Atkins, J. de Paula, <i>Atkins' Physical Chemistry</i>, 11th ed., Oxford University Press (2018).</li>
+<li>Y. Mochizuki <i>et al.</i>, "Theoretical Exploration of the Chemical Bonding in Layered Perovskites by COHP/COBI Analysis", <i>J. Phys. Chem. C</i> <b>125</b>, 7959 (2021). — 局在基底への射影で固体の化学結合を解析する例。「基底関数の選択」は固体計算の解析にも直結する。</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch05_overlap_sto.html">← 第5章:重なり積分と基底関数</a>
+  <span class="spacer"></span>
+  <a href="ch07_manyelectron_spin.html">第7章:多電子原子とスピン →</a>
+</nav>
+</main>
+</body>
+</html>

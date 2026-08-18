@@ -1,0 +1,1461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<script src="assets/access-guard.js"></script>
+<title>第8章 Born–Oppenheimer近似と構造最適化 — マテリアル計算科学入門</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      rr: "\\bm{r}",
+      RR: "\\bm{R}",
+      xx: "\\bm{x}",
+      abs: ["\\left|#1\\right|", 1],
+      braket: ["\\langle #1 \\rangle", 1],
+      ket: ["\\left| #1 \\right\\rangle", 1],
+      bra: ["\\left\\langle #1 \\right|", 1],
+      Ham: "\\hat{\\mathcal{H}}",
+      ee: "e_0",
+      eps: "\\varepsilon_0"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">マテリアル計算科学入門 — 目次</a>
+  <span class="series">第III部 多電子系・スピン・全エネルギー / 第8章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第8章</span>Born–Oppenheimer近似と構造最適化</h1>
+
+<div class="lead">
+  <p>第7章までに、変分原理と摂動論を武器にして、水素原子やヘリウム原子の「エネルギー」を計算してきた。しかし、そこで求めた数値は<strong>いったい何のエネルギーだったのだろうか</strong>。電子だけのエネルギーなのか、原子核も含めた系全体のエネルギーなのか。ここをあいまいにしたままでは、これから扱う分子や固体の計算——結合長を求める、格子定数を求める、どちらの結晶構造が安定かを判定する——を正しく解釈できない。本章ではまず「全エネルギー」の中身を五つの項に分解して定義し、そのうち<strong>原子核の運動エネルギーだけを捨てる</strong>という大胆な近似、すなわち<em class="term">Born–Oppenheimer近似</em>を導入する。この近似は現代の量子化学計算・密度汎関数理論計算のほぼすべてが立脚する大前提であり、これによって初めて「ポテンシャルエネルギー曲面」という概念が生まれ、「原子に働く力」が定義でき、「構造最適化」というアルゴリズムが可能になる。後半では、実際に酸素分子 $\mathrm{O}_2$ の結合長を $0.9\ \text{Å}$ から $2.15\ \text{Å}$ まで変えながら全エネルギーを計算し、教科書に出てくるあの原子間ポテンシャル曲線を自分の手で描く。さらに Hellmann–Feynman の定理を完全に証明し、力の計算から構造緩和までを一本の線でつなぐ。</p>
+  <div class="goals">
+    <strong>この章で学ぶこと</strong>
+    <ul>
+      <li>分子系の全ハミルトニアンが五つの項($\hat{T}_{\mathrm{Nu}},\ \hat{T}_{\mathrm{el}},\ V_{\mathrm{Nu\text{-}el}},\ V_{\mathrm{Nu\text{-}Nu}},\ V_{\mathrm{el\text{-}el}}$)からなること</li>
+      <li>陽子・中性子は電子の約1836倍重いという事実から、$\Psi(\bm{r},\bm{R})\simeq\Psi_{\mathrm{el}}(\bm{r},\bm{R})\Psi_{\mathrm{Nu}}(\bm{R})$ という積の近似が導かれること</li>
+      <li>核座標 $\bm{R}$ が電子波動関数に<strong>変数ではなくパラメータ</strong>として入ること、そのため完全な変数分離はできないこと</li>
+      <li>全エネルギー $E\simeq\min_{\bm{R}}E_{\mathrm{el}}(\bm{R})$ が絶対零度($0\ \mathrm{K}$)の内部エネルギーであり、有限温度ではエントロピーが要ること</li>
+      <li>断熱近似=「イオンは電子基底状態のポテンシャルエネルギー曲面上のみを動く」という言い換えと、2段階の最小化</li>
+      <li>$\mathrm{O}_2$ の全エネルギー曲線を実際に計算する手順(xyzファイル・<code>sed</code>・<code>for</code>ループ・<code>grep</code>・<code>awk</code>・matplotlib)</li>
+      <li>三重項酸素がなぜ基底状態か、なぜ液体酸素が磁石に引かれるか</li>
+      <li>Hellmann–Feynmanの定理 $\bm{F}_I=-\bra{\Psi_{\mathrm{el}}}\nabla_I(\Ham_{\mathrm{el}}+V_{\mathrm{Nu\text{-}Nu}})\ket{\Psi_{\mathrm{el}}}$ の完全な証明とPulay力への注意</li>
+      <li>Hessian行列・力の定数・振動数、そして最急降下法と準Newton法(BFGS)による構造緩和</li>
+    </ul>
+  </div>
+  <div class="prereq"><strong>前提：</strong>変分原理(第3章)、多電子系のハミルトニアンとSlater行列式(第7章)、基底関数(第5章・第6章)。数学は勾配 $\nabla$ と多変数のTaylor展開、対称行列の対角化(付録A)。計算環境とPySCFの使い方は付録Bにまとめてある。</div>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec8-1">8.1 「全エネルギー」とは何のエネルギーか</a></li>
+    <li><a href="#sec8-2">8.2 Born–Oppenheimer近似</a></li>
+    <li><a href="#sec8-3">8.3 数式による定式化</a></li>
+    <li><a href="#sec8-4">8.4 断熱近似とポテンシャルエネルギー曲面</a></li>
+    <li><a href="#sec8-5">8.5 実践:O₂の結合長を系統的に変える</a></li>
+    <li><a href="#sec8-6">8.6 三重項酸素 — 高スピンと低スピン</a></li>
+    <li><a href="#sec8-7">8.7 Hellmann–Feynmanの定理と原子間力</a></li>
+    <li><a href="#sec8-8">8.8 構造緩和のアルゴリズム</a></li>
+    <li><a href="#sec8-9">8.9 まとめと演習</a></li>
+  </ol>
+</nav>
+
+<h2 id="sec8-1">8.1 「全エネルギー」とは何のエネルギーか</h2>
+
+<p>第2章から第7章まで、われわれは「エネルギー」という言葉をあまり吟味せずに使ってきた。水素原子の $1s$ 準位 $\epsilon_{1s}=-13.606\ \mathrm{eV}$、ヘリウム原子の基底状態エネルギー、Gauss基底で求めた近似値——これらは何のエネルギーだったのか。電子の内部エネルギーだろうか。それとも原子核まで含めた系全体の自由エネルギーだろうか。この問いにきちんと答えることが、本章の出発点である。</p>
+
+<h3>8.1.1 原子の場合:三つの項</h3>
+
+<p>原子番号 $Z$ の原子核ひとつのまわりに $n$ 個の電子がある系を考えよう。核は原点に固定してあるとする。この系のエネルギーに寄与する項は三つである。</p>
+
+<p>第一に、<em class="term">電子の運動エネルギー</em>(kinetic energy of electrons)。1個の電子の運動エネルギー演算子は $\hat{\bm{p}}^2/2m=-\hbar^2\nabla^2/2m$ だから、$n$ 個ぶんの和をとって</p>
+$$
+\hat{T}_{\mathrm{el}}=\sum_{i=1}^{n}\left(-\frac{\hbar^2}{2m}\nabla_i^2\right).
+$$
+<p>第二に、<em class="term">電子が原子核から受けるポテンシャルエネルギー</em>。電荷 $+Z\ee$ の核と電荷 $-\ee$ の電子の間のCoulombエネルギーは負(引力)で、</p>
+$$
+V_{\mathrm{Nu\text{-}el}}=-\sum_{i=1}^{n}\frac{Z\ee^{2}}{4\pi\eps\, r_i},\qquad r_i=\abs{\bm{r}_i}.
+$$
+<p>第三に、<em class="term">電子同士の反発</em>。これは正(斥力)で、</p>
+$$
+V_{\mathrm{el\text{-}el}}=\frac{1}{2}\sum_{i=1}^{n}\sum_{j\neq i}\frac{\ee^{2}}{4\pi\eps\abs{\bm{r}_i-\bm{r}_j}} .
+$$
+<p>三つを足したものが原子の全ハミルトニアンである:</p>
+$$
+\begin{equation}
+\Ham_{\text{原子}}
+=\sum_{i=1}^{n}\left(-\frac{\hbar^2}{2m}\nabla_i^2\right)
+-\sum_{i=1}^{n}\frac{Z\ee^{2}}{4\pi\eps\, r_i}
++\frac{1}{2}\sum_{i=1}^{n}\sum_{j\neq i}\frac{\ee^{2}}{4\pi\eps\abs{\bm{r}_i-\bm{r}_j}} .
+\label{eq:8-atom-hamiltonian}
+\end{equation}
+$$
+
+<div class="box note">
+<p class="box-title">数学ノート:二重和の $\tfrac12$ と $j\neq i$</p>
+<p>電子間反発の項でしばしば $\sum_j\sum_i$ とだけ書かれるが、これは記法の省略である。正しくは<strong>同じ電子どうしのペア($i=j$)を除き</strong>($\abs{\bm{r}_i-\bm{r}_i}=0$ で発散してしまう)、さらに $(i,j)$ と $(j,i)$ を二重に数えないように $\tfrac12$ を掛ける。$\tfrac12\sum_i\sum_{j\neq i}$ と $\sum_{i\lt j}$ は同じものである。$n=3$ なら和の項数は $\tfrac12\times3\times2=3$ 個、すなわち $(1,2),(1,3),(2,3)$ の3ペアで、確かに一致する。本書ではこの流儀に統一する。</p>
+</div>
+
+<h3>8.1.2 分子の場合:核と核の反発が加わる</h3>
+
+<p>式 \eqref{eq:8-atom-hamiltonian} は原子核が1個の場合であった。原子核が2個以上になると、核どうしのCoulomb反発が新たに現れる。核 $I$ の電荷は $+Z_I\ee$、位置は $\bm{R}_I$ だから、</p>
+$$
+V_{\mathrm{Nu\text{-}Nu}}=\frac{1}{2}\sum_{I=1}^{N}\sum_{J\neq I}\frac{Z_IZ_J\ee^{2}}{4\pi\eps\abs{\bm{R}_I-\bm{R}_J}} .
+$$
+<p>この項は<strong>電子座標をまったく含まない</strong>。核の位置 $\bm{R}=\{\bm{R}_1,\dots,\bm{R}_N\}$ さえ決めてしまえば、それはただの数(定数)である。あとで見るように、この「電子から見れば定数」という性質が本章の議論全体の鍵になる。</p>
+
+<p>さらに、核が動くならその運動エネルギーも要るはずである。核 $I$ の質量を $M_I$、運動量演算子を $\hat{\bm{P}}_I=-i\hbar\nabla_I$ とすれば</p>
+$$
+\hat{T}_{\mathrm{Nu}}=\sum_{I=1}^{N}\frac{\hat{\bm{P}}_I^{2}}{2M_I}=\sum_{I=1}^{N}\left(-\frac{\hbar^{2}}{2M_I}\nabla_I^{2}\right).
+$$
+<p>以上をすべて集めると、$N$ 個の原子核と $n$ 個の電子からなる系の<strong>厳密な</strong>ハミルトニアンが得られる。これが本章の出発点であり、以後何度も参照する式である。</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+\begin{aligned}
+\Ham=&\underbrace{\sum_{I=1}^{N}\frac{\hat{\bm{P}}_I^{2}}{2M_I}}_{\hat{T}_{\mathrm{Nu}}\ \text{(核の運動)}}
++\underbrace{\sum_{i=1}^{n}\frac{\hat{\bm{p}}_i^{2}}{2m}}_{\hat{T}_{\mathrm{el}}\ \text{(電子の運動)}}
+-\underbrace{\sum_{I=1}^{N}\sum_{i=1}^{n}\frac{Z_I\ee^{2}}{4\pi\eps\abs{\bm{R}_I-\bm{r}_i}}}_{V_{\mathrm{Nu\text{-}el}}\ \text{(核-電子引力)}}\\[4pt]
+&+\underbrace{\frac{1}{2}\sum_{I=1}^{N}\sum_{J\neq I}\frac{Z_IZ_J\ee^{2}}{4\pi\eps\abs{\bm{R}_I-\bm{R}_J}}}_{V_{\mathrm{Nu\text{-}Nu}}\ \text{(核-核反発)}}
++\underbrace{\frac{1}{2}\sum_{i=1}^{n}\sum_{j\neq i}\frac{\ee^{2}}{4\pi\eps\abs{\bm{r}_i-\bm{r}_j}}}_{V_{\mathrm{el\text{-}el}}\ \text{(電子-電子反発)}} .
+\end{aligned}
+\label{eq:8-full-hamiltonian}
+\end{equation}
+$$
+</div>
+
+<p>五つの項の意味を図8.1(a)に描いた。ここで注意してほしいのは、<strong>この式そのものには何の近似も入っていない</strong>ことである。相対論効果とスピン–軌道相互作用を無視した非相対論的な扱いという限定はあるが、その枠内では式 \eqref{eq:8-full-hamiltonian} は厳密である。にもかかわらず、この式をそのまま解いた計算というものを、われわれは第7章までに一度も行っていない。核の運動エネルギー $\hat{T}_{\mathrm{Nu}}$ が、いつのまにか消えていたのである。</p>
+
+<p>ん？　なぜ原子核の運動エネルギーは考えなくてよいのだろうか。</p>
+
+<figure>
+<svg viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="二原子分子における全ハミルトニアンの五つの項と、重い核・軽い電子の対比">
+  <defs>
+    <marker id="ar81" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0, 10 4, 0 8" fill="#566573"/>
+    </marker>
+  </defs>
+  <text x="225" y="30" text-anchor="middle" font-family="sans-serif" font-size="14.5" font-weight="bold" fill="#14684a">(a) 全ハミルトニアンの五つの項</text>
+  <rect x="15" y="42" width="420" height="285" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="2"/>
+  <line x1="150" y1="185" x2="95" y2="100" stroke="#14684a" stroke-width="1.4"/>
+  <line x1="150" y1="185" x2="205" y2="280" stroke="#14684a" stroke-width="1.4"/>
+  <line x1="310" y1="185" x2="255" y2="95" stroke="#14684a" stroke-width="1.4"/>
+  <line x1="310" y1="185" x2="370" y2="275" stroke="#14684a" stroke-width="1.4"/>
+  <line x1="95" y1="100" x2="255" y2="95" stroke="#7d3c98" stroke-width="1.4" stroke-dasharray="4,3"/>
+  <line x1="205" y1="280" x2="370" y2="275" stroke="#7d3c98" stroke-width="1.4" stroke-dasharray="4,3"/>
+  <line x1="176" y1="185" x2="284" y2="185" stroke="#a04000" stroke-width="2.8" stroke-dasharray="8,4"/>
+  <circle cx="150" cy="185" r="26" fill="#b03a2e"/>
+  <circle cx="310" cy="185" r="26" fill="#b03a2e"/>
+  <text x="150" y="191" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#fff">核A</text>
+  <text x="310" y="191" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#fff">核B</text>
+  <circle cx="95" cy="100" r="9" fill="#1a5276"/>
+  <circle cx="255" cy="95" r="9" fill="#1a5276"/>
+  <circle cx="205" cy="280" r="9" fill="#1a5276"/>
+  <circle cx="370" cy="275" r="9" fill="#1a5276"/>
+  <circle cx="70" cy="78" r="11" fill="#1a5276"/><text x="70" y="83" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">1</text>
+  <circle cx="112" cy="152" r="11" fill="#14684a"/><text x="112" y="157" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">2</text>
+  <circle cx="175" cy="76" r="11" fill="#7d3c98"/><text x="175" y="81" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">3</text>
+  <circle cx="230" cy="166" r="11" fill="#a04000"/><text x="230" y="171" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">4</text>
+  <circle cx="150" cy="232" r="11" fill="#566573"/><text x="150" y="237" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">5</text>
+  <text x="30" y="356" font-family="sans-serif" font-size="12.5" fill="#1a5276">1 電子の運動エネルギー(残す)</text>
+  <text x="30" y="378" font-family="sans-serif" font-size="12.5" fill="#14684a">2 核と電子の間の引力(残す)</text>
+  <text x="30" y="400" font-family="sans-serif" font-size="12.5" fill="#7d3c98">3 電子どうしの反発(残す)</text>
+  <text x="30" y="422" font-family="sans-serif" font-size="12.5" fill="#a04000">4 核どうしの反発(残す。R を決めれば定数)</text>
+  <text x="30" y="444" font-family="sans-serif" font-size="12.5" fill="#566573">5 核の運動エネルギー</text>
+  <text x="130" y="444" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#b03a2e">← これを 0 とおくのがBO近似</text>
+  <text x="597" y="30" text-anchor="middle" font-family="sans-serif" font-size="14.5" font-weight="bold" fill="#1a5276">(b) 重い核と軽い電子</text>
+  <rect x="450" y="42" width="295" height="285" rx="10" fill="#eef4f9" stroke="#1a5276" stroke-width="2"/>
+  <circle cx="530" cy="128" r="42" fill="#b03a2e"/>
+  <text x="530" y="135" text-anchor="middle" font-family="sans-serif" font-size="17" fill="#fff">核</text>
+  <text x="530" y="192" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333">酸素核 M ≈ 29200 m</text>
+  <circle cx="672" cy="128" r="11" fill="#1a5276"/>
+  <text x="672" y="100" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#333">電子</text>
+  <text x="672" y="192" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333">質量 m</text>
+  <line x1="502" y1="222" x2="558" y2="222" stroke="#b03a2e" stroke-width="3" marker-end="url(#ar81)"/>
+  <line x1="608" y1="222" x2="738" y2="222" stroke="#1a5276" stroke-width="3" marker-end="url(#ar81)"/>
+  <text x="530" y="246" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#b03a2e">遅い</text>
+  <text x="673" y="246" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#1a5276">速い</text>
+  <line x1="466" y1="266" x2="730" y2="266" stroke="#aebfcf" stroke-width="1"/>
+  <text x="597" y="290" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333">運動量が同程度なら v = P/M より</text>
+  <text x="597" y="312" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333">核の速さは電子の約 1/1836</text>
+  <text x="597" y="358" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#1a5276">時間スケールの比較</text>
+  <text x="597" y="382" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333">電子が原子を1周する時間:約 0.15 fs</text>
+  <text x="597" y="404" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#333">分子が1回振動する時間:約 21 fs</text>
+  <text x="597" y="430" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">電子から見れば核は止まっている</text>
+</svg>
+<figcaption>図8.1 (a) 二原子分子における全ハミルトニアン \eqref{eq:8-full-hamiltonian} の五つの項。丸数字は左下の凡例に対応する。(b) 核と電子の質量差。酸素核は電子の約 $2.9\times10^{4}$ 倍重く、同程度の運動量をもつなら速さは $M$ に反比例して小さい。時間スケールの数値は本文8.2節で見積もる。</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題8.1 水の分子でハミルトニアンの項数を数える</p>
+<p>水分子 $\mathrm{H_2O}$ について、式 \eqref{eq:8-full-hamiltonian} の五つの項がそれぞれ何個の和からなるか数えよ。また、波動関数 $\Psi$ は何個の実変数の関数か(スピンは除く)。</p>
+<p><strong>解答:</strong>原子核は O が1個と H が2個で $N=3$。電子数は $8+1+1=10$ で $n=10$。</p>
+<ul>
+<li>$\hat{T}_{\mathrm{Nu}}$:核ごとに1項なので $N=3$ 項。</li>
+<li>$\hat{T}_{\mathrm{el}}$:電子ごとに1項なので $n=10$ 項。</li>
+<li>$V_{\mathrm{Nu\text{-}el}}$:核と電子のすべての組で $N\times n=3\times10=30$ 項。</li>
+<li>$V_{\mathrm{Nu\text{-}Nu}}$:核のペアの数で $\dbinom{3}{2}=3$ 項。</li>
+<li>$V_{\mathrm{el\text{-}el}}$:電子のペアの数で $\dbinom{10}{2}=\dfrac{10\times9}{2}=45$ 項。</li>
+</ul>
+<p>合計 $3+10+30+3+45=91$ 項である。変数の数は、核が $3\times3=9$ 個、電子が $3\times10=30$ 個で、合わせて $39$ 個。たった3原子の分子でも39次元空間の偏微分方程式であり、まともに解けるはずがない。だからこそ、変数を減らす近似が必要になる。</p>
+</div>
+
+<h2 id="sec8-2">8.2 Born–Oppenheimer近似</h2>
+
+<h3>8.2.1 核は重い、という一言から</h3>
+
+<p>原子核をつくる陽子と中性子は、電子に比べて桁違いに重い。正確には</p>
+$$
+\begin{equation}
+\frac{m_{\mathrm{p}}}{m}=\frac{1.6726\times10^{-27}\ \mathrm{kg}}{9.1094\times10^{-31}\ \mathrm{kg}}=1836.15\simeq1840
+\label{eq:8-mass-ratio}
+\end{equation}
+$$
+<p>である。式 \eqref{eq:8-mass-ratio} の比は、質量数 $A$ の原子核ならさらに $A$ 倍になる。たとえば酸素($A=16$)の核は電子の約 $2.9\times10^{4}$ 倍も重い。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：重いものは「止まっている」とみなしてよいのか</p>
+<p>質量が大きいというだけでは「動かない」ことにはならない。重要なのは<strong>速さ</strong>である。核と電子はCoulomb力でつながっているから、やりとりする運動量 $P$ は同程度と考えてよい。すると速さは $v=P/M$ だから、質量に反比例して</p>
+$$\frac{v_{\text{核}}}{v_{\text{電子}}}\sim\frac{m}{M}\sim\frac{1}{1836}$$
+<p>となる。電子が原子のまわりを1周する間に、核は $1/1836$ 周ぶんしか動かない。つまり<strong>電子の立場から見れば、核は事実上その場に釘づけになっている</strong>。逆に核の立場から見ると、電子は速すぎて個々の位置を追えず、なめらかに広がった「電子雲」としてしか感じられない。この二つの見え方を別々の問題に分けてしまおう、というのがBorn–Oppenheimer近似の発想である。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題8.2 時間スケールを実際に見積もる</p>
+<p>(1) 水素原子の $1s$ 電子の速さは $v=\alpha c=2.19\times10^{6}\ \mathrm{m/s}$($\alpha$ は微細構造定数)である。Bohr半径 $a_0=0.529\times10^{-10}\ \mathrm{m}$ の円周を1周するのに要する時間を求めよ。<br>(2) 酸素分子の振動数は実測で $\tilde{\nu}=1580\ \mathrm{cm^{-1}}$ である。振動の周期を求め、(1)と比べよ。</p>
+<p><strong>解答:</strong>(1) 周回時間は</p>
+$$T_{\mathrm{el}}=\frac{2\pi a_0}{v}=\frac{2\pi\times0.529\times10^{-10}}{2.19\times10^{6}}=1.52\times10^{-16}\ \mathrm{s}=0.152\ \mathrm{fs}.$$
+<p>(2) 波数 $\tilde\nu$ の振動数は $\nu=c\tilde\nu=2.998\times10^{10}\ \mathrm{cm/s}\times1580\ \mathrm{cm^{-1}}=4.74\times10^{13}\ \mathrm{Hz}$ だから、周期は</p>
+$$T_{\mathrm{vib}}=\frac{1}{\nu}=2.11\times10^{-14}\ \mathrm{s}=21.1\ \mathrm{fs}.$$
+<p>比は $T_{\mathrm{vib}}/T_{\mathrm{el}}\simeq139$。核が1回伸び縮みするあいだに、電子は約140周もしている。電子は核の動きに<strong>瞬時に追随できる</strong>と考えてよい。</p>
+</div>
+
+<h3>8.2.2 波動関数を積の形に分ける</h3>
+
+<p>いま述べた描像を数式にしよう。核の座標をまとめて $\bm{R}=\{\bm{R}_1,\bm{R}_2,\dots,\bm{R}_N\}$、電子の座標をまとめて $\bm{r}=\{\bm{r}_1,\bm{r}_2,\dots,\bm{r}_n\}$ と書く。系全体の波動関数 $\Psi(\bm{r},\bm{R})$ を、電子の波動関数と核の波動関数の<strong>積</strong>で近似する。</p>
+
+<div class="box def">
+<p class="box-title">定義:Born–Oppenheimer近似</p>
+<p>核の波動関数を $\Psi_{\mathrm{Nu}}(\bm{R})$、電子の波動関数を $\Psi_{\mathrm{el}}(\bm{r},\bm{R})$ とするとき、系全体の波動関数を</p>
+$$
+\begin{equation}
+\Psi(\bm{r},\bm{R})\ \simeq\ \Psi_{\mathrm{el}}(\bm{r},\bm{R})\,\Psi_{\mathrm{Nu}}(\bm{R})
+\label{eq:8-bo-product}
+\end{equation}
+$$
+<p>と積の形に書く近似を<em class="term">Born–Oppenheimer近似</em>(Born–Oppenheimer approximation、BO近似)という。M. Born と J. R. Oppenheimer が1927年に提出した(文献[4])。</p>
+</div>
+
+<p>この式でいちばん大切なのは、$\Psi_{\mathrm{el}}$ が $\bm{r}$ だけでなく $\bm{R}$ にも依存していることである。核をどこに置くかによって電子の感じるポテンシャルが変わるのだから、電子状態が核配置に依存するのは当たり前である。しかしその依存のしかたが、$\bm{r}$ の場合とはまったく違う。</p>
+
+<div class="box warn">
+<p class="box-title">注意:「変数」と「パラメータ」を混同しないこと</p>
+<p>$\Psi_{\mathrm{el}}(\bm{r},\bm{R})$ において、$\bm{r}$ は<strong>変数</strong>だが $\bm{R}$ は<strong>パラメータ</strong>である。これは記法上の区別ではなく、次の二つの意味で本質的である。</p>
+<ol>
+<li>電子のSchrödinger方程式を解くとき、微分は $\bm{r}$ についてだけ行い、$\bm{R}$ は定数として扱う。</li>
+<li>規格化は $\bm{r}$ についてだけ行う:$\displaystyle\int\abs{\Psi_{\mathrm{el}}(\bm{r},\bm{R})}^{2}\dd\bm{r}=1$ が<strong>すべての $\bm{R}$ について</strong>成り立つ。</li>
+</ol>
+<p>$\bm{R}$ の値を一つ決めるごとに、電子の問題が一つ立ち上がって一つの答えが出る。$\bm{R}$ を少しずつ変えれば、答えの列 $E_{\mathrm{el}}(\bm{R})$ が得られる。この「$\bm{R}$ をずらしながら何度も解く」というのが、8.5節で $\mathrm{O}_2$ に対して実際にやることそのものである。</p>
+</div>
+
+<h2 id="sec8-3">8.3 数式による定式化</h2>
+
+<p>ここからは式 \eqref{eq:8-bo-product} を式 \eqref{eq:8-full-hamiltonian} に代入して、何が起こるかを一段ずつ確かめる。計算は長いが、一つひとつは高校数学の積の微分にすぎない。</p>
+
+<h3>8.3.1 記号を短くする</h3>
+
+<p>毎回すべての和を書くのは煩雑なので、式 \eqref{eq:8-full-hamiltonian} の五つの項をそれぞれ一つの記号で表す。Schrödinger方程式 $\Ham\Psi=E\Psi$ は</p>
+$$
+\begin{equation}
+\Bigl[\hat{T}_{\mathrm{Nu}}+\hat{T}_{\mathrm{el}}+V_{\mathrm{Nu\text{-}Nu}}(\bm{R})+V_{\mathrm{el\text{-}el}}(\bm{r})+V_{\mathrm{Nu\text{-}el}}(\bm{r},\bm{R})\Bigr]\Psi(\bm{r},\bm{R})=E\,\Psi(\bm{r},\bm{R})
+\label{eq:8-shorthand}
+\end{equation}
+$$
+<p>と書ける。括弧内の各項が何の変数に依存するかに注目してほしい。$V_{\mathrm{Nu\text{-}Nu}}$ は $\bm{R}$ だけ、$V_{\mathrm{el\text{-}el}}$ は $\bm{r}$ だけ、そして $V_{\mathrm{Nu\text{-}el}}$ だけが $\bm{r}$ と $\bm{R}$ の<strong>両方</strong>を含む。この最後の項が、これから見る「完全には変数分離できない」という事情の元凶である。</p>
+
+<h3>8.3.2 積を代入して、核の運動エネルギーを展開する</h3>
+
+<p>$\Psi=\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}$ を代入する。ポテンシャル項は掛け算するだけなので何も起こらない。$\hat{T}_{\mathrm{el}}$ は $\bm{r}$ について微分するので $\Psi_{\mathrm{Nu}}(\bm{R})$ を素通りする:</p>
+$$
+\hat{T}_{\mathrm{el}}\bigl[\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}\bigr]
+=\Psi_{\mathrm{Nu}}(\bm{R})\,\hat{T}_{\mathrm{el}}\Psi_{\mathrm{el}}(\bm{r},\bm{R}).
+$$
+<p>問題は $\hat{T}_{\mathrm{Nu}}$ である。$\nabla_I$ は核座標 $\bm{R}_I$ についての微分だから、$\Psi_{\mathrm{el}}$ も $\Psi_{\mathrm{Nu}}$ も両方とも微分されてしまう。積の微分法則を2回使うと</p>
+$$
+\begin{equation}
+\nabla_I^{2}\bigl[\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}\bigr]
+=\Psi_{\mathrm{el}}\,\nabla_I^{2}\Psi_{\mathrm{Nu}}
++2\bigl(\nabla_I\Psi_{\mathrm{el}}\bigr)\!\cdot\!\bigl(\nabla_I\Psi_{\mathrm{Nu}}\bigr)
++\Psi_{\mathrm{Nu}}\,\nabla_I^{2}\Psi_{\mathrm{el}}
+\label{eq:8-laplacian-product}
+\end{equation}
+$$
+<p>となる。念のため1次元で確かめておこう。$f(R)g(R)$ に対して $(fg)'=f'g+fg'$、もう一度微分して $(fg)''=f''g+2f'g'+fg''$。式 \eqref{eq:8-laplacian-product} は $f=\Psi_{\mathrm{Nu}}$、$g=\Psi_{\mathrm{el}}$ としたものにほかならない。</p>
+
+<p>したがって $\hat{T}_{\mathrm{Nu}}$ の作用は</p>
+$$
+\hat{T}_{\mathrm{Nu}}\bigl[\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}\bigr]
+=\Psi_{\mathrm{el}}\bigl[\hat{T}_{\mathrm{Nu}}\Psi_{\mathrm{Nu}}\bigr]
+\;\underbrace{-\sum_{I}\frac{\hbar^{2}}{M_I}\bigl(\nabla_I\Psi_{\mathrm{el}}\bigr)\!\cdot\!\bigl(\nabla_I\Psi_{\mathrm{Nu}}\bigr)
+-\sum_{I}\frac{\hbar^{2}}{2M_I}\Psi_{\mathrm{Nu}}\nabla_I^{2}\Psi_{\mathrm{el}}}_{\displaystyle \equiv\ \hat{\Lambda}\ \text{(非断熱項)}}
+$$
+<p>と書ける。第2項と第3項をまとめて<em class="term">非断熱項</em>(nonadiabatic coupling terms)あるいは微分結合項という。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：非断熱項を捨ててよい理由</p>
+<p>非断熱項 $\hat{\Lambda}$ には、どちらの項にも $1/M_I$ が掛かっている。核質量は電子質量の数千倍から数十万倍だから、これだけで係数が小さい。それに加えて、$\nabla_I\Psi_{\mathrm{el}}$ と $\nabla_I^{2}\Psi_{\mathrm{el}}$ は「核をわずかに動かしたとき電子波動関数がどれだけ変わるか」を表す量である。8.2節で見たように電子は核の動きに瞬時に追随して、なめらかに形を変えるだけだから、これらは大きな量にはならない。<strong>小さい係数 × 小さい量</strong>なので、$\hat{\Lambda}$ 全体を落としてよい、というのがBO近似の中身である。</p>
+<p>逆に言えば、二つの電子状態のエネルギーが接近する場所(<em class="term">円錐交差</em>、conical intersection)では $\Psi_{\mathrm{el}}$ が $\bm{R}$ のわずかな変化で激変するので、$\nabla_I\Psi_{\mathrm{el}}$ が発散的に大きくなり、BO近似は破綻する。光化学反応や無輻射失活はまさにその舞台である。</p>
+</div>
+
+<p>$\hat{\Lambda}$ を捨てると、式 \eqref{eq:8-shorthand} は</p>
+$$
+\begin{equation}
+\bigl[\hat{T}_{\mathrm{Nu}}\Psi_{\mathrm{Nu}}(\bm{R})\bigr]\Psi_{\mathrm{el}}(\bm{r},\bm{R})
++\Bigl[\hat{T}_{\mathrm{el}}\Psi_{\mathrm{el}}
++V_{\mathrm{Nu\text{-}el}}\Psi_{\mathrm{el}}
++V_{\mathrm{Nu\text{-}Nu}}\Psi_{\mathrm{el}}
++V_{\mathrm{el\text{-}el}}\Psi_{\mathrm{el}}\Bigr]\Psi_{\mathrm{Nu}}(\bm{R})
+=E\,\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}
+\label{eq:8-after-sub}
+\end{equation}
+$$
+<p>となる。</p>
+
+<h3>8.3.3 両辺を $\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}$ で割る</h3>
+
+<p>変数分離の常套手段どおり、式 \eqref{eq:8-after-sub} の両辺を $\Psi(\bm{r},\bm{R})=\Psi_{\mathrm{el}}\Psi_{\mathrm{Nu}}$ で割ってみる。第1項は $\Psi_{\mathrm{el}}$ が約分され、第2項は $\Psi_{\mathrm{Nu}}$ が約分されて</p>
+<div class="keyeq">
+$$
+\begin{equation}
+\underbrace{\frac{\hat{T}_{\mathrm{Nu}}\Psi_{\mathrm{Nu}}(\bm{R})}{\Psi_{\mathrm{Nu}}(\bm{R})}}_{\displaystyle E_{\mathrm{Nu}}(\bm{R})\ \text{:核の運動エネルギー}}
++\underbrace{\frac{\bigl[\hat{T}_{\mathrm{el}}+V_{\mathrm{Nu\text{-}el}}+V_{\mathrm{Nu\text{-}Nu}}+V_{\mathrm{el\text{-}el}}\bigr]\Psi_{\mathrm{el}}(\bm{r},\bm{R})}{\Psi_{\mathrm{el}}(\bm{r},\bm{R})}}_{\displaystyle E_{\mathrm{el}}(\bm{r},\bm{R})\ \text{:電子由来 + 核間反発}}
+\;=\;E
+\label{eq:8-divide}
+\end{equation}
+$$
+</div>
+
+<p>を得る。ここで第7章のヘリウム原子のときと同じ状況に出会う。<strong>この式は完全な変数分離形になっていない</strong>。第1項は $\bm{R}$ だけの関数だからよいが、第2項は $\bm{r}$ と $\bm{R}$ の両方を含んでいる。もし第2項が $\bm{r}$ だけの関数なら「$\bm{R}$ の関数 + $\bm{r}$ の関数 = 定数」となって、それぞれが定数に等しいと結論できたのだが、そうはならない。核由来のエネルギーは核の位置だけで決まるのに、電子由来のエネルギーは電子の位置だけでなく核の位置にも依存してしまう——これが分離を妨げている。</p>
+
+<h3>8.3.4 二つの方程式に分ける</h3>
+
+<p>それでもBO近似は使える。そのからくりは、<strong>$\bm{R}$ を固定した電子の固有値問題を先に解いてしまう</strong>ことにある。$\bm{R}$ を止めたときの電子のSchrödinger方程式を</p>
+$$
+\begin{equation}
+\Bigl[\hat{T}_{\mathrm{el}}+V_{\mathrm{Nu\text{-}el}}(\bm{r},\bm{R})+V_{\mathrm{el\text{-}el}}(\bm{r})+V_{\mathrm{Nu\text{-}Nu}}(\bm{R})\Bigr]\Psi_{\mathrm{el}}(\bm{r},\bm{R})
+=E_{\mathrm{el}}(\bm{R})\,\Psi_{\mathrm{el}}(\bm{r},\bm{R})
+\label{eq:8-el-eigen}
+\end{equation}
+$$
+<p>と書く。左辺の演算子は、$\bm{R}$ を定数とみなせば $\bm{r}$ だけの演算子である。だからこれは(第7章までに扱ってきたのとまったく同じ形の)電子だけの固有値問題であり、その固有値 $E_{\mathrm{el}}(\bm{R})$ は<strong>$\bm{r}$ を含まない、$\bm{R}$ だけの関数</strong>になる。積分してしまえば電子座標は消えるからである。</p>
+
+<p>これを式 \eqref{eq:8-divide} に戻すと第2項は $E_{\mathrm{el}}(\bm{R})$ そのものになり、両辺に $\Psi_{\mathrm{Nu}}$ を掛け直して</p>
+$$
+\begin{equation}
+\Bigl[\hat{T}_{\mathrm{Nu}}+E_{\mathrm{el}}(\bm{R})\Bigr]\Psi_{\mathrm{Nu}}(\bm{R})=E\,\Psi_{\mathrm{Nu}}(\bm{R})
+\label{eq:8-nuc-eigen}
+\end{equation}
+$$
+<p>という<strong>核だけのSchrödinger方程式</strong>が得られる。注目すべきは、電子系のエネルギー $E_{\mathrm{el}}(\bm{R})$ が、核にとっての<strong>ポテンシャルエネルギー</strong>の役割を果たしていることである。電子の詳細はすべて $E_{\mathrm{el}}(\bm{R})$ という一つの関数に押し込められた。分子振動論も、格子振動(フォノン)も、分子動力学法も、すべてこの式 \eqref{eq:8-nuc-eigen} から出発する。</p>
+
+<h3>8.3.5 全エネルギーとは何か</h3>
+
+<p>さて、量子化学計算やDFT計算が出力する「Total Energy(全エネルギー)」とは、式 \eqref{eq:8-nuc-eigen} の $E$ ではない。実際の計算では核の運動エネルギー $\hat{T}_{\mathrm{Nu}}$ をさらに $0$ とおいてしまう。すると $E=E_{\mathrm{el}}(\bm{R})$ となり、あとは核配置 $\bm{R}$ を動かしてこれを最小にすればよい。</p>
+
+<div class="box def">
+<p class="box-title">定義:全エネルギー(total energy)</p>
+<p>核の運動エネルギーを $0$ とみなしたうえで、電子系のエネルギーを変分原理によって最小化し、さらに核配置についても最小化して得られる値</p>
+$$
+\begin{equation}
+E\ \simeq\ \min_{\bm{R}}\ E_{\mathrm{el}}(\bm{R})
+\qquad\text{ただし}\quad
+E_{\mathrm{el}}(\bm{R})=\min_{\Psi_{\mathrm{el}}}\frac{\bra{\Psi_{\mathrm{el}}}\Ham_{\mathrm{el}}+V_{\mathrm{Nu\text{-}Nu}}\ket{\Psi_{\mathrm{el}}}}{\braket{\Psi_{\mathrm{el}}|\Psi_{\mathrm{el}}}}
+\label{eq:8-total-energy}
+\end{equation}
+$$
+<p>を<em class="term">全エネルギー</em>(total energy)という。内側の最小化は第3章の変分原理そのものである。</p>
+</div>
+
+<p>核の運動エネルギーをゼロとおくということは、核が熱運動もせず、零点振動すらしていないということである。つまり<strong>全エネルギーは絶対零度($0\ \mathrm{K}$)における系の内部エネルギー</strong>である。ここは学生がいちばん誤解しやすいところなので、強調しておきたい。</p>
+
+<div class="box warn">
+<p class="box-title">注意:全エネルギーは $0\ \mathrm{K}$ の量である</p>
+<p>第一原理計算で「この構造のほうが $0.1\ \mathrm{eV}$ 安定だ」と言うとき、それは $0\ \mathrm{K}$・零点振動なしという条件下での比較である。有限温度で物質がどちらの相を選ぶかを論じるには、自由エネルギー</p>
+$$F=E+E_{\mathrm{ZPE}}-TS$$
+<p>を比べなければならない。$E_{\mathrm{ZPE}}$ は零点振動エネルギー(8.7節のHessianから求まる)、$S$ には振動エントロピー・配置エントロピー・電子エントロピー・磁気エントロピーなどが含まれる。室温 $300\ \mathrm{K}$ では $k_{\mathrm{B}}T=0.0259\ \mathrm{eV}$ であり、$TS$ 項が $0.1\ \mathrm{eV}$ 程度の差をひっくり返すことは珍しくない。全エネルギーだけで相の安定性を断定してはいけない。</p>
+</div>
+
+<div class="box phys">
+<p class="box-title">物理的意味:なぜBO近似はここまで成功しているのか</p>
+<p>量子化学計算も密度汎関数理論計算も、ほぼ例外なくBO近似を大前提としている。「分子の形」「結合長」「格子定数」「フォノン分散」「反応経路」といった、われわれが物質を語るときに使うほとんどすべての概念は、$E_{\mathrm{el}}(\bm{R})$ という関数が存在することを前提にしている。BO近似がなければ、そもそも「分子の構造」という言葉すら定義できない——核の位置は電子と量子力学的にもつれ合ったままで、「原子がここにある」と言えなくなってしまうからである。BO近似は単なる計算の便法ではなく、<strong>化学の言葉そのものを可能にしている近似</strong>なのである。</p>
+</div>
+
+<h2 id="sec8-4">8.4 断熱近似とポテンシャルエネルギー曲面</h2>
+
+<h3>8.4.1 言い換えとしての断熱近似</h3>
+
+<p>前節の結論を、核の側から言い換えてみよう。核が従う方程式 \eqref{eq:8-nuc-eigen} を見ると、核は $E_{\mathrm{el}}(\bm{R})$ というポテンシャルの中を動く粒子にほかならない。しかもここで使った $E_{\mathrm{el}}(\bm{R})$ は、各 $\bm{R}$ における電子系の<strong>基底状態</strong>のエネルギーである。核がどれほどゆっくり動こうとも、電子はつねに基底状態に居続けて、励起状態に飛び移ったりはしない。</p>
+
+<div class="box def">
+<p class="box-title">定義:断熱近似</p>
+<p><em class="term">断熱近似</em>(adiabatic approximation)とは、<strong>イオン(原子核)は電子の基底状態のポテンシャルエネルギー曲面上のみを動く</strong>と考える近似のことである。BO近似は断熱近似とも呼ばれる。厳密には両者はイコールではない(BO近似では非断熱項 $\hat\Lambda$ を全部落とすが、断熱近似では対角成分 $\bra{\Psi_{\mathrm{el}}}\hat\Lambda\ket{\Psi_{\mathrm{el}}}$ を残す流儀もある)が、本質的には同じものと考えてよい。</p>
+</div>
+
+<div class="box def">
+<p class="box-title">定義:ポテンシャルエネルギー曲面</p>
+<p>核配置 $\bm{R}$ に対して電子基底状態のエネルギー $E_{\mathrm{el}}(\bm{R})$ を対応させる関数を、<em class="term">ポテンシャルエネルギー曲面</em>(potential energy surface, PES)という。$N$ 原子分子では、並進3自由度と回転3自由度(直線分子は2)を除いて $3N-6$ 次元(直線分子は $3N-5$ 次元)の曲面である。二原子分子なら $3\times2-5=1$ 次元、つまり結合長 $R$ 一つの関数になる。8.5節で描く曲線がまさにこれである。</p>
+</div>
+
+<h3>8.4.2 2段階の最小化</h3>
+
+<p>全エネルギーを求める手続きは、式 \eqref{eq:8-total-energy} が示すとおり<strong>二重の最小化</strong>である。</p>
+<ol>
+<li><strong>内側(電子の問題):</strong>核を $\bm{R}$ に固定したまま、変分原理によって電子系のエネルギー $E_{\mathrm{el}}(\bm{R})$ を最小化する。この段階では核間反発 $V_{\mathrm{Nu\text{-}Nu}}(\bm{R})$ は定数なので、まだ下げようがない。</li>
+<li><strong>外側(核の問題):</strong>核を動かして、$E_{\mathrm{el}}(\bm{R})$ そのものを最小にする $\bm{R}$ を探す。<strong>これが構造緩和である。</strong></li>
+</ol>
+<p>この入れ子構造を図8.2に示した。上段が各 $\bm{R}$ における電子の問題、下段がその答えを並べて得られるPESと、その上を転がる核である。</p>
+
+<figure>
+<svg viewBox="0 0 760 480" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="2段階の最小化。上段は各核間距離での電子状態計算、下段は得られたポテンシャルエネルギー曲面">
+  <defs>
+    <marker id="ar82" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0, 10 4, 0 8" fill="#566573"/>
+    </marker>
+  </defs>
+  <rect x="30" y="45" width="200" height="150" rx="8" fill="#eaf5f0" stroke="#14684a" stroke-width="1.8"/>
+  <rect x="280" y="45" width="200" height="150" rx="8" fill="#eaf5f0" stroke="#14684a" stroke-width="1.8"/>
+  <rect x="530" y="45" width="200" height="150" rx="8" fill="#eaf5f0" stroke="#14684a" stroke-width="1.8"/>
+  <ellipse cx="130" cy="122" rx="48" ry="27" fill="#bcd8ea" opacity="0.85"/>
+  <ellipse cx="380" cy="122" rx="56" ry="26" fill="#bcd8ea" opacity="0.85"/>
+  <ellipse cx="630" cy="122" rx="64" ry="23" fill="#bcd8ea" opacity="0.85"/>
+  <circle cx="107" cy="122" r="13" fill="#b03a2e"/><circle cx="153" cy="122" r="13" fill="#b03a2e"/>
+  <circle cx="352" cy="122" r="13" fill="#b03a2e"/><circle cx="408" cy="122" r="13" fill="#b03a2e"/>
+  <circle cx="593" cy="122" r="13" fill="#b03a2e"/><circle cx="667" cy="122" r="13" fill="#b03a2e"/>
+  <circle cx="48" cy="63" r="11" fill="#14684a"/><text x="48" y="68" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">1</text>
+  <circle cx="298" cy="63" r="11" fill="#14684a"/><text x="298" y="68" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">2</text>
+  <circle cx="548" cy="63" r="11" fill="#14684a"/><text x="548" y="68" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#fff">3</text>
+  <text x="140" y="68" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">R = 1.00 Å(固定)</text>
+  <text x="390" y="68" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">R = 1.20 Å(固定)</text>
+  <text x="640" y="68" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">R = 1.60 Å(固定)</text>
+  <text x="130" y="175" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#1a5276">E_el = −4066.43 eV</text>
+  <text x="380" y="175" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#1a5276">E_el = −4069.35 eV</text>
+  <text x="630" y="175" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#1a5276">E_el = −4065.92 eV</text>
+  <text x="380" y="222" text-anchor="middle" font-family="sans-serif" font-size="13.5" font-weight="bold" fill="#14684a">R をパラメータとして電子系を解き、答えを並べる</text>
+  <line x1="95" y1="255" x2="95" y2="430" stroke="#566573" stroke-width="1.6"/>
+  <line x1="95" y1="430" x2="720" y2="430" stroke="#566573" stroke-width="1.6"/>
+  <line x1="95" y1="408.5" x2="715" y2="408.5" stroke="#dfe6e9" stroke-width="1"/>
+  <line x1="95" y1="377.8" x2="715" y2="377.8" stroke="#dfe6e9" stroke-width="1"/>
+  <line x1="95" y1="347.1" x2="715" y2="347.1" stroke="#dfe6e9" stroke-width="1"/>
+  <line x1="95" y1="316.4" x2="715" y2="316.4" stroke="#dfe6e9" stroke-width="1"/>
+  <line x1="95" y1="285.7" x2="715" y2="285.7" stroke="#dfe6e9" stroke-width="1"/>
+  <text x="88" y="413" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4069</text>
+  <text x="88" y="382" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4068</text>
+  <text x="88" y="351" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4067</text>
+  <text x="88" y="320" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4066</text>
+  <text x="88" y="290" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4065</text>
+  <text x="192.9" y="448" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.0</text>
+  <text x="323.4" y="448" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.2</text>
+  <text x="453.9" y="448" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.4</text>
+  <text x="584.5" y="448" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.6</text>
+  <text x="715" y="448" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.8</text>
+  <text x="405" y="470" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#333">核間距離 R (Å)</text>
+  <text x="34" y="345" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#333" transform="rotate(-90 34 345)">E_el(R)  (eV)</text>
+  <polyline fill="none" stroke="#14684a" stroke-width="2.4" points="127.6,144.5 160.3,255.8 192.9,329.6 225.5,376.1 258.2,403.1 290.8,416.1 323.4,419.2 356.1,415.5 388.7,407.0 421.3,395.2 453.9,381.2 486.6,365.6 519.2,349.0 551.8,331.7 584.5,314.0 617.1,296.1 649.7,278.1 682.4,260.4"/>
+  <circle cx="192.9" cy="329.6" r="6" fill="#14684a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="584.5" cy="314.0" r="6" fill="#14684a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="323.4" cy="419.2" r="9" fill="#b03a2e" stroke="#fff" stroke-width="2"/>
+  <text x="205" y="322" font-family="sans-serif" font-size="12" fill="#14684a">1</text>
+  <text x="597" y="307" font-family="sans-serif" font-size="12" fill="#14684a">3</text>
+  <text x="336" y="414" font-family="sans-serif" font-size="12" fill="#b03a2e">2</text>
+  <line x1="495" y1="292" x2="340" y2="410" stroke="#b03a2e" stroke-width="1.6" marker-end="url(#ar82)"/>
+  <text x="588" y="278" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#b03a2e">核はこの曲面の上だけを動く</text>
+  <text x="588" y="296" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">(断熱近似)。最小点が安定構造</text>
+</svg>
+<figcaption>図8.2 2段階の最小化。上段:核間距離 $R$ をパラメータとして固定し、その配置で電子系のエネルギー $E_{\mathrm{el}}(\bm{R})$ を変分原理で最小化する(この段階では核間反発は定数)。下段:得られた $E_{\mathrm{el}}(\bm{R})$ を $R$ の関数として並べるとポテンシャルエネルギー曲面になり、その最小点が安定構造を与える。曲線は $\mathrm{O}_2$(三重項)の UHF/6-31G による実際の計算値(表8.1)である。</figcaption>
+</figure>
+
+<p>PESの上には、最小点(<em class="term">安定構造</em>)のほかにも、局所的な窪み(<em class="term">準安定構造</em>)や、二つの窪みを結ぶ峠(<em class="term">鞍点</em>、saddle point)がある。鞍点は化学反応の<em class="term">遷移状態</em>に対応し、その高さが活性化エネルギーを与える。第13章・第14章で扱う固体の構造安定性の議論も、すべてこのPESの上での話である。担当教員の研究でも、$\mathrm{SrTiO_3}$ 表面の多数の候補構造についてPESの局所最小点を網羅的に探索している(文献[12])。</p>
+
+<h2 id="sec8-5">8.5 実践:O₂の結合長を系統的に変える</h2>
+
+<p>理屈はここまでにして、実際に手を動かそう。酸素分子 $\mathrm{O}_2$ の結合長を $0.9\ \text{Å}$ から $2.15\ \text{Å}$ まで $0.05\ \text{Å}$ 刻みで変え、それぞれについて全エネルギーを計算して、ポテンシャルエネルギー曲線を描く。使うのは PySCF(文献[8])と、Unix系OSの標準的なコマンドだけである。作業ディレクトリの準備は付録Bを参照してほしい。</p>
+
+<h3>8.5.1 構造ファイルを作る</h3>
+
+<p>分子の構造は<em class="term">xyzファイル</em>という単純な書式で表す。1行目に原子数、2行目にコメント、3行目以降に「元素記号 $x$ $y$ $z$」を Å 単位で並べるだけである。<code>cat</code> コマンドでファイルの中身を表示してみよう。</p>
+
+<pre><code>$ cat XYZ_O2.xyz
+2
+Converted from SDF_O2.sdf (Angstrom)
+O    0.00000000    0.00000000    0.00000000
+O    1.20000000    0.00000000    0.00000000</code></pre>
+<p class="codecap">コード8.1 <code>cat</code> でxyzファイルを表示する。1個目の O が原点、2個目が $x$ 軸上 $1.2\ \text{Å}$ にある。</p>
+
+<p>結合長を変えるには、<code>1.20000000</code> という文字列を別の数値に置き換えればよい。文字列置換には <code>sed</code>(stream editor)を使う。書式は</p>
+<pre><code>sed -e 's/置換前/置換後/g' 入力ファイル名 &gt; 保存ファイル名</code></pre>
+<p class="codecap">コード8.2 <code>sed</code> の基本形。<code>s</code> は substitute(置換)、<code>g</code> は global(行内のすべて)を意味する。<code>&gt;</code> は出力をファイルに書き出すリダイレクトである。</p>
+
+<pre><code>$ sed -e 's/1.20000000/2.0000000/g' XYZ_O2.xyz &gt; XYZ_O2_2p0.xyz
+$ cat XYZ_O2_2p0.xyz
+2
+Converted from SDF_O2.sdf (Angstrom)
+O    0.00000000    0.00000000    0.00000000
+O    2.0000000     0.00000000    0.00000000</code></pre>
+<p class="codecap">コード8.3 結合長 $2.0\ \text{Å}$ の構造ファイルができた。ファイル名の <code>2p0</code> の <code>p</code> は小数点 <code>.</code> の代わりである(ファイル名に <code>.</code> を入れると拡張子と紛らわしいため)。</p>
+
+<h3>8.5.2 1点ずつ計算してみる</h3>
+
+<p>まずは2通りだけ計算する。付録Bで用意した <code>calc_pyscf.py</code> は、xyzファイル・スピン多重度・基底関数を指定して SCF 計算を実行するスクリプトである。</p>
+
+<pre><code>$ python3 calc_pyscf.py --xyz XYZ_O2.xyz --spin 2 --basis 6-31g
+========================================
+ PySCF Calculation
+========================================
+XYZ file     : XYZ_O2.xyz
+Basis        : 6-31g
+Charge       : 0
+Spin (2S)    : 2
+Theory       : scf
+----------------------------------------
+Method       : UHF
+Total Energy : -4069.348307 eV
+&lt;S^2&gt;        : 2.033075
+Multiplicity : 3.0</code></pre>
+<p class="codecap">コード8.4 結合長 $1.2\ \text{Å}$ の $\mathrm{O}_2$(高スピン)の計算。全エネルギーは $-4069.348\ \mathrm{eV}$。</p>
+
+<p>同じことを $2.0\ \text{Å}$ の構造に対して行うと $-4061.466\ \mathrm{eV}$ になる。$1.2\ \text{Å}$ のほうが $7.88\ \mathrm{eV}$ も低い。<code>--spin 2</code> の意味(なぜ $\mathrm{O}_2$ は $2S=2$ なのか)は8.6節で説明する。</p>
+
+<div class="box warn">
+<p class="box-title">注意:全エネルギーの絶対値そのものに意味はない</p>
+<p>$-4069\ \mathrm{eV}$ という値は、$\mathrm{O}_2$ の16個の電子をすべて核から無限遠まで引き離すのに必要なエネルギーに相当する巨大な量である。一方、化学結合の強さは数 $\mathrm{eV}$、構造の違いによるエネルギー差は $0.01\ \mathrm{eV}$ 程度のこともある。すなわち<strong>意味があるのはつねに差だけ</strong>であり、しかも $10^{-5}$ 以下の相対精度で差をとることになる。だからこそ、比較する二つの計算では基底関数・計算手法・収束条件をそろえなければならない。</p>
+</div>
+
+<h3>8.5.3 ループ処理で26通りの構造を一気に作る</h3>
+
+<p>26通りを手で打つのは苦行である。「同じ作業のくり返しは機械にやらせるべき」だ。シェルの <code>for</code> ループを使う。</p>
+
+<pre><code>$ for l in {0..25} ; do
+&gt;   bond_length=`printf "%.6f\n" $(( 0.9 + l * 0.05 ))`
+&gt;   rename=`echo "$bond_length" | tr '.' 'p'`
+&gt;   sed -e "s/1.20000000/$bond_length/g" XYZ_O2.xyz &gt; XYZ_O2_"$rename".xyz
+&gt; done</code></pre>
+<p class="codecap">コード8.5 結合長 $0.9,0.95,\dots,2.15\ \text{Å}$ の26個の構造ファイルを生成する。</p>
+
+<p>読み方を1行ずつ確認しよう。</p>
+<ul>
+<li><code>{0..25}</code> は $0,1,2,\dots,25$ という数の列に展開される。変数 <code>l</code> がこれらを順にとる。</li>
+<li>ドルマーク <code>$</code> は変数の値を取り出す記号である。<code>$(( ... ))</code> は算術演算を行う書き方で、<code>0.9 + l * 0.05</code> を計算する。<code>printf "%.6f\n"</code> で小数点以下6桁に整形する。</li>
+<li><code>tr '.' 'p'</code> は文字 <code>.</code> を <code>p</code> に置き換えるコマンド。$1.9 \to$ <code>1p900000</code> となり、これをファイル名に使う。</li>
+<li>最後の <code>sed</code> で、もとの <code>1.20000000</code> を新しい結合長に置換して保存する。</li>
+</ul>
+
+<div class="box warn">
+<p class="box-title">注意:シェルによって小数の扱いが違う</p>
+<p>コード8.5 の <code>$(( 0.9 + l * 0.05 ))</code> は、macOS の既定シェルである <strong>zsh</strong> では小数として計算される。しかし Linux でよく使われる <strong>bash</strong> の算術展開は整数しか扱えず、この行はエラーになる。bash を使う場合は</p>
+<pre><code>bond_length=`awk -v l=$l 'BEGIN{printf "%.6f", 0.9 + l*0.05}'`</code></pre>
+<p>のように <code>awk</code> や <code>bc</code> に計算させればよい。自分のシェルは <code>echo $SHELL</code> で確認できる。</p>
+</div>
+
+<p>実行後に <code>ls</code> すると、<code>XYZ_O2_0p900000.xyz</code> から <code>XYZ_O2_2p150000.xyz</code> まで26個のファイルができている。中身を確認すると、確かに座標が書き換わっている。</p>
+
+<pre><code>$ cat XYZ_O2_1p900000.xyz
+2
+Converted from SDF_O2.sdf (Angstrom)
+O    0.00000000    0.00000000    0.00000000
+O    1.900000      0.00000000    0.00000000</code></pre>
+<p class="codecap">コード8.6 $1.20000$ だったところが $1.900000$ に変わっている。</p>
+
+<h3>8.5.4 ループ処理で26通りの計算を回す</h3>
+
+<p>同じ要領で、26個の構造ファイルを順に PySCF に流し込む。出力は <code>output_0p900000</code> のようなファイルに保存する。</p>
+
+<pre><code>$ for l in {0..25} ; do
+&gt;   bond_length=`printf "%.6f\n" $(( 0.9 + l * 0.05 ))`
+&gt;   rename=`echo "$bond_length" | tr '.' 'p'`
+&gt;   python3 calc_pyscf.py --xyz XYZ_O2_"$rename".xyz --spin 2 --basis 6-31g &gt; output_"$rename"
+&gt; done</code></pre>
+<p class="codecap">コード8.7 26通りの電子状態計算を一括実行する。1点あたり数秒なので、全体でも1分程度で終わる。</p>
+
+<h3>8.5.5 出力から必要な数値だけ抜き出す(grep と awk)</h3>
+
+<p>26個の出力ファイルから全エネルギーだけを拾い出したい。文字列を含む行を抜き出すコマンドが <code>grep</code> である。ファイル名の <code>*</code> は「任意の文字列」を意味するワイルドカードである。</p>
+
+<pre><code>$ grep "Total Energy" output_*
+output_0p900000:Total Energy : -4060.401153 eV
+output_0p950000:Total Energy : -4064.025729 eV
+output_1p000000:Total Energy : -4066.428637 eV
+        (中略)
+output_2p150000:Total Energy : -4060.057679 eV</code></pre>
+<p class="codecap">コード8.8 <code>grep</code> で必要な行だけを抜き出す。</p>
+
+<p>数値だけがほしいので、さらに <code>awk</code>(オーク)につなぐ。<code>awk</code> は行をスペース区切りの「列」に分解し、<code>$4</code> と書けば4列目を取り出す。上の行を数えると、1列目 <code>Total</code>、2列目 <code>Energy</code>、3列目 <code>:</code>、4列目が数値である。縦棒 <code>|</code> は<em class="term">パイプ</em>で、左のコマンドの出力を右のコマンドの入力につなぐ。</p>
+
+<pre><code>$ grep "Total Energy" output_* | awk '{print $4}'
+-4060.401153
+-4064.025729
+-4066.428637
+        (中略)
+-4060.057679</code></pre>
+<p class="codecap">コード8.9 <code>awk</code> で4列目の数値だけを取り出す。</p>
+
+<p>プロットするには「1列目に結合長、2列目に全エネルギー」という2列のファイルがほしい。ここまでの道具を組み合わせればよい。</p>
+
+<pre><code>$ for l in {0..25} ; do
+&gt;   bond_length=`printf "%.6f\n" $(( 0.9 + l * 0.05 ))`
+&gt;   rename=`echo "$bond_length" | tr '.' 'p'`
+&gt;   total_energy=`grep "Total Energy" output_$rename | awk '{print $4}'`
+&gt;   echo $bond_length $total_energy
+&gt; done &gt; energies_O2.txt</code></pre>
+<p class="codecap">コード8.10 2列のデータファイル <code>energies_O2.txt</code> をつくる。<code>done</code> の後ろの <code>&gt;</code> でループ全体の出力をまとめてファイルに書き出している。</p>
+
+<h3>8.5.6 プロットする</h3>
+
+<p>Python に慣れているなら matplotlib、慣れていないなら Excel でよい。ここでは matplotlib のスクリプトを示す。</p>
+
+<pre><code>import numpy as np
+import matplotlib.pyplot as plt
+
+r, e = np.loadtxt("energies_O2.txt", unpack=True)
+
+fig, ax = plt.subplots(figsize=(5.0, 3.6))
+ax.plot(r, e, "o-", color="#14684a", markersize=4)
+ax.set_xlabel("Bond length (Angstrom)")
+ax.set_ylabel("Total energy (eV)")
+ax.grid(alpha=0.3)
+
+i = e.argmin()
+ax.annotate("min: %.2f A" % r[i], xy=(r[i], e[i]),
+            xytext=(r[i] + 0.35, e[i] + 2.0),
+            arrowprops=dict(arrowstyle="-&gt;"))
+
+fig.tight_layout()
+fig.savefig("O2_curve.png", dpi=200)</code></pre>
+<p class="codecap">コード8.11 <code>energies_O2.txt</code> を読み込んでプロットする Python スクリプト。<code>unpack=True</code> で列ごとに配列に分けられる。</p>
+
+<p>得られた数値を表8.1に、グラフを図8.3に示す。教科書によく出てくる、あの原子間ポテンシャルの曲線になっている。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表8.1 $\mathrm{O}_2$ の全エネルギー(6-31G基底)。高スピンは三重項($2S=2$、UHF)、低スピンは一重項($2S=0$、RHF)。高スピンの値は講義で実際に得られたものと一致する。</caption>
+<thead>
+<tr><th>$R$ (Å)</th><th>高スピン (eV)</th><th>低スピン (eV)</th><th>$R$ (Å)</th><th>高スピン (eV)</th><th>低スピン (eV)</th></tr>
+</thead>
+<tbody>
+<tr><td>0.90</td><td>−4060.401153</td><td>−4058.258513</td><td>1.55</td><td>−4066.497268</td><td>−4064.227915</td></tr>
+<tr><td>0.95</td><td>−4064.025729</td><td>−4061.839113</td><td>1.60</td><td>−4065.920407</td><td>−4063.659827</td></tr>
+<tr><td>1.00</td><td>−4066.428637</td><td>−4064.207275</td><td>1.65</td><td>−4065.337272</td><td>−4063.086134</td></tr>
+<tr><td>1.05</td><td>−4067.944972</td><td>−4065.697019</td><td>1.70</td><td>−4064.753701</td><td>−4062.512530</td></tr>
+<tr><td>1.10</td><td>−4068.823058</td><td>−4066.555558</td><td>1.75</td><td>−4064.174595</td><td>−4061.943789</td></tr>
+<tr><td>1.15</td><td>−4069.246134</td><td>−4066.965069</td><td>1.80</td><td>−4063.604065</td><td>−4061.383916</td></tr>
+<tr><td><strong>1.20</strong></td><td><strong>−4069.348307</strong></td><td><strong>−4067.058685</strong></td><td>1.85</td><td>−4063.045509</td><td>−4060.836211</td></tr>
+<tr><td>1.25</td><td>−4069.226505</td><td>−4066.932459</td><td>1.90</td><td>−4062.501654</td><td>−4060.303309</td></tr>
+<tr><td>1.30</td><td>−4068.949681</td><td>−4066.654577</td><td>1.95</td><td>−4061.974597</td><td>−4059.787227</td></tr>
+<tr><td>1.35</td><td>−4068.566101</td><td>−4066.272645</td><td>2.00</td><td>−4061.465863</td><td>−4059.289414</td></tr>
+<tr><td>1.40</td><td>−4068.109170</td><td>−4065.819518</td><td>2.05</td><td>−4060.976468</td><td>−4058.810817</td></tr>
+<tr><td>1.45</td><td>−4067.601987</td><td>−4065.317846</td><td>2.10</td><td>−4060.506997</td><td>−4058.351961</td></tr>
+<tr><td>1.50</td><td>−4067.060767</td><td>−4064.783486</td><td>2.15</td><td>−4060.057679</td><td>−4057.913023</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="酸素分子（三重項）の全エネルギー曲線">
+  <defs>
+    <marker id="ar83" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#b03a2e"/>
+    </marker>
+  </defs>
+  <line x1="95" y1="324.3" x2="725" y2="324.3" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="258.6" x2="725" y2="258.6" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="192.9" x2="725" y2="192.9" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="127.1" x2="725" y2="127.1" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="61.4" x2="725" y2="61.4" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="45" x2="95" y2="390" stroke="#566573" stroke-width="1.6"/>
+  <line x1="95" y1="390" x2="730" y2="390" stroke="#566573" stroke-width="1.6"/>
+  <text x="88" y="394" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4070</text>
+  <text x="88" y="328" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4068</text>
+  <text x="88" y="262" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4066</text>
+  <text x="88" y="197" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4064</text>
+  <text x="88" y="131" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4062</text>
+  <text x="88" y="65" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4060</text>
+  <text x="165" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.0</text>
+  <text x="258.3" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.2</text>
+  <text x="351.7" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.4</text>
+  <text x="445" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.6</text>
+  <text x="538.3" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.8</text>
+  <text x="631.7" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">2.0</text>
+  <text x="725" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">2.2</text>
+  <text x="410" y="437" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">結合長 R (Å)</text>
+  <text x="28" y="217" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333" transform="rotate(-90 28 217)">全エネルギー (eV)</text>
+  <polyline fill="none" stroke="#1a5276" stroke-width="2" points="118.3,74.6 141.7,193.7 165.0,272.7 188.3,322.5 211.7,351.3 235.0,365.2 258.3,368.6 281.7,364.6 305.0,355.5 328.3,342.9 351.7,327.9 375.0,311.2 398.3,293.4 421.7,274.9 445.0,256.0 468.3,236.8 491.7,217.6 515.0,198.6 538.3,179.8 561.7,161.5 585.0,143.6 608.3,126.3 631.7,109.6 655.0,93.5 678.3,78.1 701.7,63.3"/>
+  <circle cx="118.3" cy="74.6" r="3.6" fill="#1a5276"/><circle cx="141.7" cy="193.7" r="3.6" fill="#1a5276"/><circle cx="165.0" cy="272.7" r="3.6" fill="#1a5276"/><circle cx="188.3" cy="322.5" r="3.6" fill="#1a5276"/><circle cx="211.7" cy="351.3" r="3.6" fill="#1a5276"/><circle cx="235.0" cy="365.2" r="3.6" fill="#1a5276"/><circle cx="281.7" cy="364.6" r="3.6" fill="#1a5276"/><circle cx="305.0" cy="355.5" r="3.6" fill="#1a5276"/><circle cx="328.3" cy="342.9" r="3.6" fill="#1a5276"/><circle cx="351.7" cy="327.9" r="3.6" fill="#1a5276"/><circle cx="375.0" cy="311.2" r="3.6" fill="#1a5276"/><circle cx="398.3" cy="293.4" r="3.6" fill="#1a5276"/><circle cx="421.7" cy="274.9" r="3.6" fill="#1a5276"/><circle cx="445.0" cy="256.0" r="3.6" fill="#1a5276"/><circle cx="468.3" cy="236.8" r="3.6" fill="#1a5276"/><circle cx="491.7" cy="217.6" r="3.6" fill="#1a5276"/><circle cx="515.0" cy="198.6" r="3.6" fill="#1a5276"/><circle cx="538.3" cy="179.8" r="3.6" fill="#1a5276"/><circle cx="561.7" cy="161.5" r="3.6" fill="#1a5276"/><circle cx="585.0" cy="143.6" r="3.6" fill="#1a5276"/><circle cx="608.3" cy="126.3" r="3.6" fill="#1a5276"/><circle cx="631.7" cy="109.6" r="3.6" fill="#1a5276"/><circle cx="655.0" cy="93.5" r="3.6" fill="#1a5276"/><circle cx="678.3" cy="78.1" r="3.6" fill="#1a5276"/><circle cx="701.7" cy="63.3" r="3.6" fill="#1a5276"/>
+  <circle cx="258.3" cy="368.6" r="6.5" fill="#b03a2e" stroke="#fff" stroke-width="1.8"/>
+  <text x="400" y="80" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#333">計算(放物線内挿):R = 1.198 Å</text>
+  <text x="400" y="102" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#333">実験値:R = 1.2075 Å(文献[11])</text>
+  <line x1="330" y1="114" x2="270" y2="357" stroke="#b03a2e" stroke-width="1.5" marker-end="url(#ar83)"/>
+  <text x="400" y="378" font-family="sans-serif" font-size="13" font-weight="bold" fill="#b03a2e">格子上の最小:R = 1.20 Å,  E = −4069.348 eV</text>
+</svg>
+<figcaption>図8.3 $\mathrm{O}_2$(三重項、UHF/6-31G)の全エネルギー曲線。表8.1の26点をそのままプロットしたもので、模式図ではなく実際の計算値である。$0.05\ \text{Å}$ 刻みの格子上では $R=1.20\ \text{Å}$ が最小、放物線内挿では $R=1.198\ \text{Å}$ となり、実験値 $1.2075\ \text{Å}$ をよく再現している。</figcaption>
+</figure>
+
+<div class="box phys">
+<p class="box-title">物理的意味:曲線の形が語ること</p>
+<p>曲線の左側(短距離側)が急峻に立ち上がるのは、核どうしのCoulomb反発と、Pauliの排他原理による内殻電子の反発(第7章)のためである。右側(長距離側)がゆるやかなのは、結合が伸びるにつれて結合性軌道の重なり(第5章)が指数関数的に失われていくためである。この<strong>非対称な井戸</strong>が、熱膨張という日常的な現象の起源になっている。温度が上がって振動振幅が大きくなると、井戸が非対称なぶん平均の核間距離が長いほうへずれるのである。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題8.3 放物線内挿で平衡結合長・力の定数・振動数を求める</p>
+<p>表8.1の高スピンの値のうち $R=1.15,\ 1.20,\ 1.25\ \text{Å}$ の3点を使い、(1) 平衡結合長 $R_{\mathrm{e}}$、(2) 力の定数 $k$、(3) 振動の波数 $\tilde\nu$ を求めよ。酸素原子の質量は $M=15.995\ u$、$1\,u=1.6605\times10^{-27}\ \mathrm{kg}$ とする。</p>
+<p><strong>解答:</strong>刻み幅を $h=0.05\ \text{Å}$、中央の点を $R_0=1.20\ \text{Å}$ とし、$E_-=E(R_0-h)$、$E_0=E(R_0)$、$E_+=E(R_0+h)$ と書く。3点を通る2次関数 $E(R)=a(R-R_0)^2+b(R-R_0)+E_0$ の係数は、$E_\pm=ah^2\pm bh+E_0$ から</p>
+$$
+a=\frac{E_+-2E_0+E_-}{2h^{2}},\qquad b=\frac{E_+-E_-}{2h}
+$$
+<p>と決まる。数値を入れると</p>
+$$
+\begin{align}
+E_+-2E_0+E_-&=-4069.226505-2(-4069.348307)+(-4069.246134)=0.223975\ \mathrm{eV},\notag\\
+E_+-E_-&=-4069.226505-(-4069.246134)=0.019629\ \mathrm{eV}.\notag
+\end{align}
+$$
+<p>(1) 頂点の位置は $E'(R)=2a(R-R_0)+b=0$ より $R_{\mathrm{e}}=R_0-b/(2a)$。$b/(2a)=\dfrac{h}{2}\cdot\dfrac{E_+-E_-}{E_+-2E_0+E_-}$ だから</p>
+$$
+\begin{equation}
+R_{\mathrm{e}}=R_0-\frac{h}{2}\cdot\frac{E_+-E_-}{E_+-2E_0+E_-}
+=1.20-\frac{0.05}{2}\times\frac{0.019629}{0.223975}=1.20-0.00219=1.1978\ \text{Å}.
+\label{eq:8-parabola-vertex}
+\end{equation}
+$$
+<p>(2) 力の定数は $k=E''(R_{\mathrm{e}})=2a=(E_+-2E_0+E_-)/h^{2}$。単位をSIに直す。$h=0.05\ \text{Å}=5.0\times10^{-12}\ \mathrm{m}$、$1\ \mathrm{eV}=1.6022\times10^{-19}\ \mathrm{J}$ なので</p>
+$$
+k=\frac{0.223975\times1.6022\times10^{-19}\ \mathrm{J}}{(5.0\times10^{-12}\ \mathrm{m})^{2}}
+=\frac{3.5885\times10^{-20}}{2.50\times10^{-23}}=1.435\times10^{3}\ \mathrm{N/m}.
+$$
+<p>(3) 二原子分子の換算質量は $\mu=M_AM_B/(M_A+M_B)=M/2$ だから</p>
+$$
+\mu=\frac{15.995\times1.6605\times10^{-27}}{2}=1.3280\times10^{-26}\ \mathrm{kg}.
+$$
+<p>角振動数と波数は</p>
+$$
+\omega=\sqrt{\frac{k}{\mu}}=\sqrt{\frac{1435.4}{1.3280\times10^{-26}}}=3.288\times10^{14}\ \mathrm{rad/s},
+\qquad
+\tilde\nu=\frac{\omega}{2\pi c}=\frac{3.288\times10^{14}}{2\pi\times2.998\times10^{10}}=1.75\times10^{3}\ \mathrm{cm^{-1}} .
+$$
+<p>実験値は $R_{\mathrm{e}}=1.2075\ \text{Å}$、$k=1177\ \mathrm{N/m}$、$\tilde\nu=1580\ \mathrm{cm^{-1}}$(文献[11])である。結合長は $0.8\%$ の誤差でよく合っているが、力の定数は $22\%$、振動数は $10\%$ 過大評価している。これは Hartree–Fock 法が電子相関を無視しているために結合が硬くなりすぎることによる(第9章・第10章)。</p>
+</div>
+
+<div class="box note">
+<p class="box-title">数学ノート:格子の粗さがもたらす誤差</p>
+<p>例題8.3の放物線内挿の公式 \eqref{eq:8-parabola-vertex} は3階微分の効果を無視している。$h$ の2次まで展開すると、中心差分による1階微分には $\dfrac{h^{2}}{6}E'''$ の誤差が乗る。$\mathrm{O}_2$ の場合、表8.1から $E'''\simeq-6.6\times10^{2}\ \mathrm{eV/\text{Å}^{3}}$ と見積もられるので、この誤差は $0.28\ \mathrm{eV/\text{Å}}$ にもなる。実際、8.8節で行う構造緩和(解析的な微分を使う)では $R_{\mathrm{e}}=1.1948\ \text{Å}$ が得られ、放物線内挿の $1.1978\ \text{Å}$ とは $0.003\ \text{Å}$ ずれる。曲線を細かく刻めばこの差は縮まるが、それより解析的な力を使うほうが賢い。それが8.7節の主題である。</p>
+</div>
+
+<h2 id="sec8-6">8.6 三重項酸素 — 高スピンと低スピン</h2>
+
+<p>8.5節でさりげなく <code>--spin 2</code> と指定したが、これは何を意味しているのか。実は酸素分子は、化学を学ぶうえで極めて重要な例外的性質をもっている。</p>
+
+<h3>8.6.1 酸素原子と酸素分子の電子配置</h3>
+
+<p>酸素の原子番号は $8$、電子配置は $1s^{2}2s^{2}2p^{4}$ である。$2p$ 軌道は3本($2p_x,2p_y,2p_z$)あり、そこに4個の電子を入れる。Hundの規則(第7章)により、1本には対をつくって2個、残り2本には平行スピンで1個ずつ入る。したがって<strong>不対電子が2個</strong>あり、スピン量子数は $S=\tfrac12+\tfrac12=1$、多重度は $2S+1=3$ で三重項である(項記号 $^{3}\mathrm{P}$)。</p>
+
+<p>では $\mathrm{O}_2$ 分子ではどうか。2個の酸素原子から16個の電子が集まる。原子軌道が重なって分子軌道(molecular orbital, MO)をつくる様子を表8.2にまとめた。詳しい対称性の議論は第11章・第12章で行うので、ここでは結果だけを使う。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表8.2 $\mathrm{O}_2$ の分子軌道と基底状態の電子配置。$\sigma^{*}$ と $\pi^{*}$ は反結合性軌道を表す。$\pi_{2p}$ と $\pi^{*}_{2p}$ はそれぞれ2重に縮退している。</caption>
+<thead>
+<tr><th>分子軌道</th><th>性格</th><th>電子数</th><th>備考</th></tr>
+</thead>
+<tbody>
+<tr><td>$\sigma_{1s}$</td><td>結合性</td><td>2</td><td rowspan="2">内殻。結合性と反結合性が打ち消し合う</td></tr>
+<tr><td>$\sigma^{*}_{1s}$</td><td>反結合性</td><td>2</td></tr>
+<tr><td>$\sigma_{2s}$</td><td>結合性</td><td>2</td><td></td></tr>
+<tr><td>$\sigma^{*}_{2s}$</td><td>反結合性</td><td>2</td><td></td></tr>
+<tr><td>$\sigma_{2p}$</td><td>結合性</td><td>2</td><td></td></tr>
+<tr><td>$\pi_{2p}$(2重縮退)</td><td>結合性</td><td>4</td><td></td></tr>
+<tr><td>$\pi^{*}_{2p}$(2重縮退)</td><td>反結合性</td><td><strong>2</strong></td><td><strong>2本に1個ずつ、平行スピン</strong></td></tr>
+<tr><td>$\sigma^{*}_{2p}$</td><td>反結合性</td><td>0</td><td>空</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>ここが決定的である。最高被占軌道である $\pi^{*}_{2p}$ は2本が縮退しており、そこに入る電子は2個しかない。Hundの規則に従えば、2個の電子は<strong>別々の軌道に平行スピンで</strong>入る。したがって $\mathrm{O}_2$ の基底状態も</p>
+$$
+\begin{equation}
+S=\tfrac{1}{2}+\tfrac{1}{2}=1,\qquad \text{多重度}=2S+1=3
+\label{eq:8-multiplicity}
+\end{equation}
+$$
+<p>の<strong>三重項</strong>である。式 \eqref{eq:8-multiplicity} の $2S$ を PySCF は指定させるので、<code>--spin 2</code> となる。これが8.5節の指定の正体である。項記号は $^{3}\Sigma_{g}^{-}$ と書くが、この記号の読み方(なぜ $\Sigma$ で、なぜ $g$ で、なぜ $-$ なのか)は第12章で対称性と群論を学んでから説明する。</p>
+
+<p>ついでに結合次数も数えておこう。価電子だけで数えると、結合性軌道の電子は $\sigma_{2s}(2)+\sigma_{2p}(2)+\pi_{2p}(4)=8$ 個、反結合性軌道の電子は $\sigma^{*}_{2s}(2)+\pi^{*}_{2p}(2)=4$ 個だから</p>
+$$
+\text{結合次数}=\frac{8-4}{2}=2 .
+$$
+<p>$\mathrm{O}_2$ は二重結合である。$1s$ 由来の $\sigma_{1s}$ と $\sigma^{*}_{1s}$ は互いに打ち消し合うので数に入れても答えは変わらない。</p>
+
+<div class="box phys">
+<p class="box-title">物理的意味:なぜ液体酸素は磁石に引かれるのか</p>
+<p>高校化学で習うLewis構造式では、$\mathrm{O}_2$ は $\mathrm{O}\!=\!\mathrm{O}$ と書かれ、すべての電子が対をつくっている。この描像が正しければ酸素分子は反磁性で、磁石にはまったく反応しないはずである。ところが実際には、液体酸素を磁石の極の間に注ぐと、青い液体が磁極に吸い寄せられて留まる。これは酸素が<em class="term">常磁性</em>(paramagnetic)であることの、目で見える証拠である。</p>
+<p>その理由が表8.2の $\pi^{*}_{2p}$ にある。ここに2個の不対電子が平行スピンで入っているため、分子全体が正味のスピン磁気モーメント($S=1$)をもつ。<strong>Lewis構造式では説明できず、分子軌道法で初めて説明できた</strong>——この一点だけでも、分子軌道法が化学結合論に革命をもたらしたことがわかる。計算の <code>--spin 2</code> という一行は、この物理を反映しているのである。</p>
+</div>
+
+<h3>8.6.2 高スピンと低スピンを比べる</h3>
+
+<p>では、無理やり2個の電子を同じ $\pi^{*}_{2p}$ 軌道に押し込んで対にしたら(一重項、$S=0$、低スピン状態)、エネルギーはどうなるだろうか。8.5節とまったく同じ手順を <code>--spin 0</code> で繰り返せばよい。結果を表8.1の第3列と図8.4に示す。</p>
+
+<figure>
+<svg viewBox="0 0 760 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="酸素分子の高スピン状態と低スピン状態の全エネルギー曲線の比較">
+  <defs>
+    <marker id="ar84a" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#7d3c98"/>
+    </marker>
+    <marker id="ar84b" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto-start-reverse">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#7d3c98"/>
+    </marker>
+  </defs>
+  <line x1="95" y1="334.8" x2="725" y2="334.8" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="279.6" x2="725" y2="279.6" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="224.4" x2="725" y2="224.4" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="169.2" x2="725" y2="169.2" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="114.0" x2="725" y2="114.0" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="58.8" x2="725" y2="58.8" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="95" y1="45" x2="95" y2="390" stroke="#566573" stroke-width="1.6"/>
+  <line x1="95" y1="390" x2="730" y2="390" stroke="#566573" stroke-width="1.6"/>
+  <text x="88" y="394" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4070</text>
+  <text x="88" y="339" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4068</text>
+  <text x="88" y="284" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4066</text>
+  <text x="88" y="228" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4064</text>
+  <text x="88" y="173" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4062</text>
+  <text x="88" y="118" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4060</text>
+  <text x="88" y="63" text-anchor="end" font-family="sans-serif" font-size="11.5" fill="#566573">−4058</text>
+  <text x="165" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.0</text>
+  <text x="258.3" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.2</text>
+  <text x="351.7" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.4</text>
+  <text x="445" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.6</text>
+  <text x="538.3" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.8</text>
+  <text x="631.7" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">2.0</text>
+  <text x="725" y="410" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">2.2</text>
+  <text x="410" y="437" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">結合長 R (Å)</text>
+  <text x="28" y="217" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333" transform="rotate(-90 28 217)">全エネルギー (eV)</text>
+  <polyline fill="none" stroke="#b03a2e" stroke-width="1.8" points="118.3,65.9 141.7,164.8 165.0,230.1 188.3,271.2 211.7,294.9 235.0,306.2 258.3,308.8 281.7,305.3 305.0,297.7 328.3,287.1 351.7,274.6 375.0,260.8 398.3,246.0 421.7,230.7 445.0,215.0 468.3,199.2 491.7,183.3 515.0,167.6 538.3,152.2 561.7,137.1 585.0,122.4 608.3,108.1 631.7,94.4 655.0,81.2 678.3,68.5 701.7,56.4"/>
+  <circle cx="118.3" cy="65.9" r="3.4" fill="#b03a2e"/><circle cx="141.7" cy="164.8" r="3.4" fill="#b03a2e"/><circle cx="165.0" cy="230.1" r="3.4" fill="#b03a2e"/><circle cx="188.3" cy="271.2" r="3.4" fill="#b03a2e"/><circle cx="211.7" cy="294.9" r="3.4" fill="#b03a2e"/><circle cx="235.0" cy="306.2" r="3.4" fill="#b03a2e"/><circle cx="258.3" cy="308.8" r="3.4" fill="#b03a2e"/><circle cx="281.7" cy="305.3" r="3.4" fill="#b03a2e"/><circle cx="305.0" cy="297.7" r="3.4" fill="#b03a2e"/><circle cx="328.3" cy="287.1" r="3.4" fill="#b03a2e"/><circle cx="351.7" cy="274.6" r="3.4" fill="#b03a2e"/><circle cx="375.0" cy="260.8" r="3.4" fill="#b03a2e"/><circle cx="398.3" cy="246.0" r="3.4" fill="#b03a2e"/><circle cx="421.7" cy="230.7" r="3.4" fill="#b03a2e"/><circle cx="445.0" cy="215.0" r="3.4" fill="#b03a2e"/><circle cx="468.3" cy="199.2" r="3.4" fill="#b03a2e"/><circle cx="491.7" cy="183.3" r="3.4" fill="#b03a2e"/><circle cx="515.0" cy="167.6" r="3.4" fill="#b03a2e"/><circle cx="538.3" cy="152.2" r="3.4" fill="#b03a2e"/><circle cx="561.7" cy="137.1" r="3.4" fill="#b03a2e"/><circle cx="585.0" cy="122.4" r="3.4" fill="#b03a2e"/><circle cx="608.3" cy="108.1" r="3.4" fill="#b03a2e"/><circle cx="631.7" cy="94.4" r="3.4" fill="#b03a2e"/><circle cx="655.0" cy="81.2" r="3.4" fill="#b03a2e"/><circle cx="678.3" cy="68.5" r="3.4" fill="#b03a2e"/><circle cx="701.7" cy="56.4" r="3.4" fill="#b03a2e"/>
+  <polyline fill="none" stroke="#1a5276" stroke-width="1.8" points="118.3,125.1 141.7,225.1 165.0,291.4 188.3,333.3 211.7,357.5 235.0,369.2 258.3,372.0 281.7,368.7 305.0,361.0 328.3,350.4 351.7,337.8 375.0,323.8 398.3,308.9 421.7,293.3 445.0,277.4 468.3,261.3 491.7,245.2 515.0,229.2 538.3,213.5 561.7,198.1 585.0,183.0 608.3,168.5 631.7,154.5 655.0,141.0 678.3,128.0 701.7,115.6"/>
+  <circle cx="118.3" cy="125.1" r="3.4" fill="#1a5276"/><circle cx="141.7" cy="225.1" r="3.4" fill="#1a5276"/><circle cx="165.0" cy="291.4" r="3.4" fill="#1a5276"/><circle cx="188.3" cy="333.3" r="3.4" fill="#1a5276"/><circle cx="211.7" cy="357.5" r="3.4" fill="#1a5276"/><circle cx="235.0" cy="369.2" r="3.4" fill="#1a5276"/><circle cx="258.3" cy="372.0" r="3.4" fill="#1a5276"/><circle cx="281.7" cy="368.7" r="3.4" fill="#1a5276"/><circle cx="305.0" cy="361.0" r="3.4" fill="#1a5276"/><circle cx="328.3" cy="350.4" r="3.4" fill="#1a5276"/><circle cx="351.7" cy="337.8" r="3.4" fill="#1a5276"/><circle cx="375.0" cy="323.8" r="3.4" fill="#1a5276"/><circle cx="398.3" cy="308.9" r="3.4" fill="#1a5276"/><circle cx="421.7" cy="293.3" r="3.4" fill="#1a5276"/><circle cx="445.0" cy="277.4" r="3.4" fill="#1a5276"/><circle cx="468.3" cy="261.3" r="3.4" fill="#1a5276"/><circle cx="491.7" cy="245.2" r="3.4" fill="#1a5276"/><circle cx="515.0" cy="229.2" r="3.4" fill="#1a5276"/><circle cx="538.3" cy="213.5" r="3.4" fill="#1a5276"/><circle cx="561.7" cy="198.1" r="3.4" fill="#1a5276"/><circle cx="585.0" cy="183.0" r="3.4" fill="#1a5276"/><circle cx="608.3" cy="168.5" r="3.4" fill="#1a5276"/><circle cx="631.7" cy="154.5" r="3.4" fill="#1a5276"/><circle cx="655.0" cy="141.0" r="3.4" fill="#1a5276"/><circle cx="678.3" cy="128.0" r="3.4" fill="#1a5276"/><circle cx="701.7" cy="115.6" r="3.4" fill="#1a5276"/>
+  <line x1="258.3" y1="311.5" x2="258.3" y2="369.3" stroke="#7d3c98" stroke-width="2" marker-start="url(#ar84b)" marker-end="url(#ar84a)"/>
+  <text x="272" y="345" font-family="sans-serif" font-size="13" font-weight="bold" fill="#7d3c98">2.29 eV</text>
+  <rect x="440" y="330" width="278" height="52" rx="6" fill="#ffffff" stroke="#d5dbdb" stroke-width="1"/>
+  <circle cx="458" cy="346" r="4.5" fill="#b03a2e"/>
+  <text x="470" y="351" font-family="sans-serif" font-size="12.5" fill="#333">低スピン(一重項 S = 0, RHF)</text>
+  <circle cx="458" cy="368" r="4.5" fill="#1a5276"/>
+  <text x="470" y="373" font-family="sans-serif" font-size="12.5" fill="#333">高スピン(三重項 S = 1, UHF)</text>
+</svg>
+<figcaption>図8.4 $\mathrm{O}_2$ の高スピン状態(三重項)と低スピン状態(一重項)の全エネルギー曲線。ともに 6-31G 基底の実際の計算値(表8.1)である。曲線の形はほとんど平行に保たれたまま、低スピンのほうが全体に約 $2.3\ \mathrm{eV}$ 高い。平衡結合長は高スピン $1.198\ \text{Å}$、低スピン $1.196\ \text{Å}$ とほぼ同じである。</figcaption>
+</figure>
+
+<p>図8.4から読み取れることは三つある。</p>
+<ol>
+<li><strong>全体的にエネルギーが上昇した。</strong>平衡点での差は $-4067.059-(-4069.348)=2.290\ \mathrm{eV}$ である。三重項のほうが安定であり、$\mathrm{O}_2$ の基底状態は確かに三重項である。</li>
+<li><strong>曲線の形はほとんど変わらない。</strong>放物線内挿すると、低スピンの平衡結合長は $R_{\mathrm{e}}=1.196\ \text{Å}$ で、高スピンの $1.198\ \text{Å}$ とほぼ同じである。これは当然で、スピンの向きを変えても $\pi^{*}_{2p}$ に入る電子の<strong>総数</strong>は2個のままだから、結合次数は $2$ で変わらないのである。</li>
+<li><strong>したがって、結合長の違いは目で見てもわからない。</strong>「結合長はどうなっているのだろう」という問いに答えるには、曲線を26点も計算するのではなく、力を使って一気に最小点に落とす方法がほしい。それが次節以降の主題である。</li>
+</ol>
+
+<div class="box why">
+<p class="box-title">なぜ？：平行スピンのほうが安定になる理由(第9章の予告)</p>
+<p>2個の電子を「別々の軌道に平行スピンで置く」ほうが「同じ軌道に反平行スピンで置く」より安定になる理由は、二つある。第一に、同じ軌道に押し込むと2個の電子が空間的に重なり、Coulomb反発 $V_{\mathrm{el\text{-}el}}$ が増える。第二に、そしてこちらがより本質的だが、平行スピンの電子は Pauli の排他原理によって互いに近づけず、そのぶんCoulomb反発が下がる。この後者の効果を<em class="term">交換エネルギー</em>(exchange energy)という。Slater行列式(第7章)から交換エネルギーが自動的に出てくる仕組みは第9章で詳しく扱う。図8.4の $2.29\ \mathrm{eV}$ という差は、まさに交換エネルギーの大きさを目で見ているのである。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意:「低スピン計算」は真の一重項状態ではない</p>
+<p>ここで <code>--spin 0</code> として得た解は、閉殻の単一Slater行列式(RHF解)であって、実験でいう $\mathrm{O}_2$ の第一励起状態 $a^{1}\Delta_{g}$ とは別物である。実験値では $a^{1}\Delta_{g}$ は基底状態より $0.98\ \mathrm{eV}$ 高いだけで、計算の $2.29\ \mathrm{eV}$ とはかなり違う。$^{1}\Delta_{g}$ を正しく記述するには二つのSlater行列式の重ね合わせが必要で、単一行列式では原理的に表せないからである。</p>
+<p>また、UHF で <code>--spin 0</code> を指定すると、初期値によっては $\braket{\hat{S}^{2}}\simeq1$ という「スピン対称性の破れた解」に落ちることがあり、これも純粋な一重項ではない。単一行列式近似の限界を意識せずに数値を鵜呑みにしてはいけない。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意:Hartree–Fockは結合の解離をまったく再現できない</p>
+<p>図8.3の曲線は右端($2.15\ \text{Å}$)でもまだ急な傾きをもっており、解離極限に達していない。真の解離極限は、酸素原子を1個だけ計算して2倍すれば得られる。UHF/6-31G で計算すると $E(\mathrm{O})=-2034.876\ \mathrm{eV}$、すなわち $2E(\mathrm{O})=-4069.752\ \mathrm{eV}$ となる。ところが分子の最安定値は $-4069.350\ \mathrm{eV}$ であるから、</p>
+$$D_{\mathrm{e}}=2E(\mathrm{O})-E(\mathrm{O_2})=-0.40\ \mathrm{eV}\ \lt\ 0 .$$
+<p>なんと、この計算は<strong>$\mathrm{O}_2$ 分子は2個の酸素原子より不安定である</strong>と予言している。分極関数を加えた基底(6-31G* や cc-pVTZ)にすると $D_{\mathrm{e}}=+1.3\sim1.4\ \mathrm{eV}$ と正になるが、実験値 $5.21\ \mathrm{eV}$ には遠く及ばない。</p>
+<p>これは Hartree–Fock 法の有名な弱点で、原因は電子相関の欠如にある。平衡付近の曲線の<em>形</em>(結合長・曲率)はそこそこ再現できても、<em>深さ</em>(結合エネルギー)はまったく駄目なのである。この失敗をどう克服するかが、第9章以降で交換相関エネルギーを論じる動機になる。「よく再現できた」と喜ぶときは、何が再現できて何ができていないかを必ず点検してほしい。</p>
+</div>
+
+<h2 id="sec8-7">8.7 Hellmann–Feynmanの定理と原子間力</h2>
+
+<p>26通りの構造を計算して曲線を描くのは、二原子分子だからできたことである。$N$ 原子の分子では $3N-6$ 次元の曲面を格子状に走査しなければならず、$N=10$ でも24次元、各方向10点でも $10^{24}$ 回の計算になって完全に不可能である。必要なのは、<strong>1回の電子状態計算から「どちらに動けばエネルギーが下がるか」を直接知る方法</strong>である。それが原子間力の計算であり、理論的な支柱が Hellmann–Feynman の定理である。</p>
+
+<h3>8.7.1 電子系のエネルギーを核座標の関数とみる</h3>
+
+<p>変分原理に基づき、核の位置を $\bm{R}$ に固定したうえで電子系のエネルギーを最小化して、電子の波動関数 $\Psi_{\mathrm{el}}(\bm{r},\bm{R})$ が決まったとする。そのとき得られるエネルギーは</p>
+$$
+\begin{equation}
+\epsilon_{\mathrm{el}}(\bm{R})=\bra{\Psi_{\mathrm{el}}}\Ham_{\mathrm{el}}+V_{\mathrm{Nu\text{-}Nu}}\ket{\Psi_{\mathrm{el}}},
+\label{eq:8-eps-el}
+\end{equation}
+$$
+<p>ここで電子ハミルトニアンと核間反発は</p>
+$$
+\Ham_{\mathrm{el}}=\sum_{i=1}^{n}\frac{\hat{\bm{p}}_i^{2}}{2m}
+-\sum_{I}\sum_{i}\frac{Z_I\ee^{2}}{4\pi\eps\abs{\bm{R}_I-\bm{r}_i}}
++\frac{1}{2}\sum_{i}\sum_{j\neq i}\frac{\ee^{2}}{4\pi\eps\abs{\bm{r}_i-\bm{r}_j}},
+\qquad
+V_{\mathrm{Nu\text{-}Nu}}=\frac{1}{2}\sum_{I}\sum_{J\neq I}\frac{Z_IZ_J\ee^{2}}{4\pi\eps\abs{\bm{R}_I-\bm{R}_J}}
+$$
+<p>である。$\Psi_{\mathrm{el}}$ は規格化されている($\braket{\Psi_{\mathrm{el}}|\Psi_{\mathrm{el}}}=1$)としてよい。$\epsilon_{\mathrm{el}}(\bm{R})$ は、8.5節で $\mathrm{O}_2$ について実際に計算した「全エネルギー」そのものであり、核座標 $\bm{R}$ の関数である。</p>
+
+<p>式 \eqref{eq:8-eps-el} の $\epsilon_{\mathrm{el}}(\bm{R})$ こそが、核にとってのポテンシャルである。力学では、力はポテンシャルの勾配の符号を変えたもの、$\bm{F}=-\nabla U$ であった。核にとってのポテンシャルが $\epsilon_{\mathrm{el}}(\bm{R})$ なのだから、これを核の位置で微分すれば原子間力が得られそうである。</p>
+
+<div class="box why">
+<p class="box-title">なぜ？：$\bm{F}=-\nabla U$ がしっくり来ない人へ</p>
+<p>ばねを思い出そう。自然長からの伸びを $x$ とすると、ばねの弾性エネルギーは $U=\tfrac12kx^{2}$ である。このとき</p>
+$$F=-\frac{\dd U}{\dd x}=-\frac{\dd}{\dd x}\left(\frac{1}{2}kx^{2}\right)=-kx$$
+<p>となり、確かにHookeの法則が出てくる。マイナス符号は「力はエネルギーが減る方向を向く」ことを表している。$x\gt0$(伸びている)なら力は縮む向き($F\lt0$)、というわけである。図8.3の曲線を坂道だと思えば、ボールは坂を下る向きに力を受ける——それだけのことである。</p>
+</div>
+
+<h3>8.7.2 定理とその証明</h3>
+
+<p>問題は、$\epsilon_{\mathrm{el}}(\bm{R})$ の中で $\bm{R}$ に依存しているのがハミルトニアンだけでなく<strong>波動関数 $\Psi_{\mathrm{el}}$ も</strong>だ、という点である。$\bm{R}$ を動かせば電子分布も変わるのだから、素朴に微分すれば $\Psi_{\mathrm{el}}$ の微分の項が出てきてしまい、扱いが厄介になる。ところが、それらの項はきれいに消えてくれる。それが次の定理である。</p>
+
+<div class="box thm">
+<p class="box-title">定理:Hellmann–Feynmanの定理</p>
+<p>ハミルトニアン $\Ham(\lambda)$ がパラメータ $\lambda$ に依存し、その規格化された固有状態を $\ket{\psi(\lambda)}$、固有値を $E(\lambda)$ とする:</p>
+$$\Ham(\lambda)\ket{\psi(\lambda)}=E(\lambda)\ket{\psi(\lambda)},\qquad \braket{\psi(\lambda)|\psi(\lambda)}=1 .$$
+<p>このとき、固有値の $\lambda$ 微分は<strong>ハミルトニアンの微分の期待値だけ</strong>で与えられる:</p>
+$$
+\begin{equation}
+\frac{\dd E(\lambda)}{\dd\lambda}=\bra{\psi(\lambda)}\frac{\partial\Ham(\lambda)}{\partial\lambda}\ket{\psi(\lambda)} .
+\label{eq:8-hf-theorem}
+\end{equation}
+$$
+<p>波動関数の微分 $\partial\ket{\psi}/\partial\lambda$ は現れない。H. Hellmann(1937、文献[5])と R. P. Feynman(1939、文献[6])にちなむ。</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">導出:Hellmann–Feynmanの定理の証明</p>
+<p>固有値は期待値として $E(\lambda)=\bra{\psi}\Ham\ket{\psi}$ と書ける($\braket{\psi|\psi}=1$ を使った)。これを $\lambda$ で微分する。積が三つ($\bra{\psi}$、$\Ham$、$\ket{\psi}$)あるので、積の微分法則から3項が出る:</p>
+$$
+\begin{align}
+\frac{\dd E}{\dd\lambda}
+&=\left(\frac{\partial}{\partial\lambda}\bra{\psi}\right)\Ham\ket{\psi}
++\bra{\psi}\frac{\partial\Ham}{\partial\lambda}\ket{\psi}
++\bra{\psi}\Ham\left(\frac{\partial}{\partial\lambda}\ket{\psi}\right).
+\label{eq:8-hf-proof-1}
+\end{align}
+$$
+<p>第1項と第3項を処理する。$\Ham$ は Hermite 演算子なので、右に作用させても左に作用させても固有値 $E$ を出す:</p>
+$$\Ham\ket{\psi}=E\ket{\psi},\qquad \bra{\psi}\Ham=E\bra{\psi}.$$
+<p>これを使うと、第1項と第3項はどちらも $E$ を括り出せて</p>
+$$
+\begin{align}
+\left(\frac{\partial}{\partial\lambda}\bra{\psi}\right)\Ham\ket{\psi}
++\bra{\psi}\Ham\left(\frac{\partial}{\partial\lambda}\ket{\psi}\right)
+&=E\left[\left(\frac{\partial}{\partial\lambda}\bra{\psi}\right)\ket{\psi}
++\bra{\psi}\left(\frac{\partial}{\partial\lambda}\ket{\psi}\right)\right]\notag\\
+&=E\,\frac{\partial}{\partial\lambda}\braket{\psi|\psi}
+\label{eq:8-hf-proof-2}
+\end{align}
+$$
+<p>となる。ここで再び積の微分法則を(今度は逆向きに)使ったことに注意してほしい。ところが規格化条件から $\braket{\psi|\psi}=1$、すなわち $\lambda$ によらない定数である。定数を微分すればゼロだから</p>
+$$
+\begin{equation}
+\frac{\partial}{\partial\lambda}\braket{\psi|\psi}=\frac{\partial}{\partial\lambda}(1)=0 .
+\label{eq:8-hf-proof-3}
+\end{equation}
+$$
+<p>よって式 \eqref{eq:8-hf-proof-2} は式 \eqref{eq:8-hf-proof-3} によりゼロとなる。すなわち式 \eqref{eq:8-hf-proof-1} の第1項と第3項は<strong>合わせてゼロ</strong>になり、残るのは第2項だけである:</p>
+$$\frac{\dd E}{\dd\lambda}=\bra{\psi}\frac{\partial\Ham}{\partial\lambda}\ket{\psi}. \qquad\blacksquare$$
+<p>証明の急所は、波動関数の微分が<strong>個別にはゼロでない</strong>のに、規格化条件のおかげで<strong>足すとゼロになる</strong>ことである。$\psi$ が実関数なら $\partial\braket{\psi|\psi}/\partial\lambda=2\braket{\psi|\partial_\lambda\psi}$ なので、$\braket{\psi|\partial_\lambda\psi}=0$、つまり波動関数の変化はつねに自分自身と直交する方向に起きる、という幾何学的な意味づけもできる。</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">導出:変分的に最適化した近似波動関数でも成り立つ</p>
+<p>実際の計算では、$\Psi_{\mathrm{el}}$ は厳密な固有関数ではなく、有限個のパラメータ $\bm{c}=(c_1,c_2,\dots)$(たとえばLCAO係数)をもつ試行関数を変分的に最適化したものである。この場合でも定理は成り立つ。エネルギーを $E(\bm{c},\lambda)$ と書き、最適解を $\bm{c}^{*}(\lambda)$ とすると、全微分は連鎖律により</p>
+$$
+\frac{\dd E}{\dd\lambda}
+=\frac{\partial E}{\partial\lambda}\bigg|_{\bm{c}}
++\sum_{k}\underbrace{\frac{\partial E}{\partial c_k}}_{=\,0}\frac{\dd c_k}{\dd\lambda}
+=\frac{\partial E}{\partial\lambda}\bigg|_{\bm{c}}
+$$
+<p>となる。変分の停留条件 $\partial E/\partial c_k=0$ がすべての $k$ について成り立っているからである。したがって、<strong>変分的に完全に最適化された波動関数であれば</strong>、係数の変化を追わなくてよい。Hartree–Fock法やKohn–Sham法のSCF計算が収束していれば、この条件は満たされている。</p>
+</div>
+
+<h3>8.7.3 Hellmann–Feynman力</h3>
+
+<p>定理をわれわれの問題に適用しよう。パラメータ $\lambda$ を核 $I$ の座標 $\bm{R}_I$ の各成分とすればよい。力は $\bm{F}_I=-\nabla_I\epsilon_{\mathrm{el}}(\bm{R})$ だから</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+\bm{F}_I=-\nabla_I\epsilon_{\mathrm{el}}(\bm{R})
+=-\bra{\Psi_{\mathrm{el}}}\nabla_I\Ham_{\mathrm{el}}+\nabla_I V_{\mathrm{Nu\text{-}Nu}}\ket{\Psi_{\mathrm{el}}} .
+\label{eq:8-hf-force}
+\end{equation}
+$$
+</div>
+
+<p>これを<em class="term">Hellmann–Feynman力</em>(Hellmann–Feynman force)という。まるで電子系のエネルギーをポテンシャルエネルギーとして扱っているように見えるが、それがまさにBO近似(断熱近似)の意味するところなのである。</p>
+
+<p>式 \eqref{eq:8-hf-force} の中身を具体的に書き下してみよう。$\Ham_{\mathrm{el}}$ のうち $\bm{R}_I$ を含むのは核–電子引力の項だけである。$\nabla_I\dfrac{1}{\abs{\bm{R}_I-\bm{r}_i}}=-\dfrac{\bm{R}_I-\bm{r}_i}{\abs{\bm{R}_I-\bm{r}_i}^{3}}$ を使うと</p>
+$$
+\nabla_I\Ham_{\mathrm{el}}
+=-\sum_{i}\frac{Z_I\ee^{2}}{4\pi\eps}\left(-\frac{\bm{R}_I-\bm{r}_i}{\abs{\bm{R}_I-\bm{r}_i}^{3}}\right)
+=+\frac{Z_I\ee^{2}}{4\pi\eps}\sum_{i}\frac{\bm{R}_I-\bm{r}_i}{\abs{\bm{R}_I-\bm{r}_i}^{3}} .
+$$
+<p>この期待値をとるとき、$n$ 個の電子についての和 $\sum_i$ は、<em class="term">電子密度</em>(electron density)</p>
+$$
+\rho(\bm{r})=n\int\abs{\Psi_{\mathrm{el}}(\bm{r},\bm{r}_2,\dots,\bm{r}_n)}^{2}\,\dd^{3}r_2\cdots\dd^{3}r_n
+$$
+<p>による積分に置き換わる。$\rho(\bm{r})\dd^{3}r$ は「点 $\bm{r}$ のまわりの微小体積に電子が見つかる個数の期待値」であり、$\int\rho\,\dd^{3}r=n$ である。また核間反発の微分は</p>
+$$
+\nabla_I V_{\mathrm{Nu\text{-}Nu}}
+=-\sum_{J\neq I}\frac{Z_IZ_J\ee^{2}}{4\pi\eps}\frac{\bm{R}_I-\bm{R}_J}{\abs{\bm{R}_I-\bm{R}_J}^{3}}
+$$
+<p>である。以上をまとめると</p>
+$$
+\begin{equation}
+\bm{F}_I=
+\underbrace{\frac{Z_I\ee^{2}}{4\pi\eps}\int \rho(\bm{r})\,\frac{\bm{r}-\bm{R}_I}{\abs{\bm{r}-\bm{R}_I}^{3}}\,\dd^{3}r}_{\text{電子雲が核 }I\text{ を引く力}}
+\;+\;
+\underbrace{\frac{Z_I\ee^{2}}{4\pi\eps}\sum_{J\neq I}Z_J\,\frac{\bm{R}_I-\bm{R}_J}{\abs{\bm{R}_I-\bm{R}_J}^{3}}}_{\text{他の核が核 }I\text{ を押す力}}
+\label{eq:8-hf-electrostatic}
+\end{equation}
+$$
+<p>を得る。</p>
+
+<div class="box phys">
+<p class="box-title">物理的意味:Feynmanの静電定理</p>
+<p>式 \eqref{eq:8-hf-electrostatic} をよく見てほしい。右辺には $\hbar$ も $m$ も現れず、電子の運動エネルギーも電子間反発も出てこない。あるのは<strong>電荷分布がつくる古典的な静電気力だけ</strong>である。つまり、</p>
+<p style="text-align:center"><strong>核に働く力は、電子密度 $\rho(\bm{r})$ と他の核とがつくる静電気力にほかならない。</strong></p>
+<p>量子力学が必要なのは、正しい $\rho(\bm{r})$ を求めるためだけであって、いったん $\rho$ が求まれば、あとは高校物理のCoulombの法則で力が計算できる。Feynman は学部生のときにこれを見出し、卒業論文にした(文献[6])。「化学結合とは、核と核の間に電子密度がたまり、その電子雲が両側の核を内向きに引っ張っている状態である」という直感的な結合の描像は、この定理から自然に出てくる。</p>
+</div>
+
+<figure>
+<svg viewBox="0 0 760 350" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="核間距離に応じたHellmann-Feynman力の向き">
+  <defs>
+    <marker id="arB" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#1a5276"/></marker>
+    <marker id="arO" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><polygon points="0 0, 9 3.5, 0 7" fill="#a04000"/></marker>
+    <marker id="arG" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#14684a"/></marker>
+  </defs>
+  <rect x="15" y="50" width="232" height="240" rx="9" fill="#fdf3f1" stroke="#b03a2e" stroke-width="1.6"/>
+  <rect x="264" y="50" width="232" height="240" rx="9" fill="#eff7f3" stroke="#14684a" stroke-width="1.6"/>
+  <rect x="513" y="50" width="232" height="240" rx="9" fill="#eef4f9" stroke="#1a5276" stroke-width="1.6"/>
+  <text x="131" y="40" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#b03a2e">(i) R が短すぎる</text>
+  <text x="380" y="40" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#14684a">(ii) R = Re(平衡)</text>
+  <text x="629" y="40" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="bold" fill="#1a5276">(iii) R が長すぎる</text>
+  <ellipse cx="131" cy="130" rx="52" ry="26" fill="#bcd8ea" opacity="0.9"/>
+  <ellipse cx="380" cy="130" rx="58" ry="26" fill="#bcd8ea" opacity="0.9"/>
+  <ellipse cx="629" cy="130" rx="68" ry="21" fill="#bcd8ea" opacity="0.9"/>
+  <circle cx="105" cy="130" r="16" fill="#b03a2e"/><circle cx="157" cy="130" r="16" fill="#b03a2e"/>
+  <circle cx="347" cy="130" r="16" fill="#b03a2e"/><circle cx="413" cy="130" r="16" fill="#b03a2e"/>
+  <circle cx="584" cy="130" r="16" fill="#b03a2e"/><circle cx="674" cy="130" r="16" fill="#b03a2e"/>
+  <text x="131" y="176" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">左の核に働く力</text>
+  <text x="380" y="176" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">左の核に働く力</text>
+  <text x="629" y="176" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">左の核に働く力</text>
+  <line x1="105" y1="196" x2="135" y2="196" stroke="#1a5276" stroke-width="3" marker-end="url(#arB)"/>
+  <line x1="105" y1="218" x2="53" y2="218" stroke="#a04000" stroke-width="3" marker-end="url(#arO)"/>
+  <line x1="105" y1="244" x2="83" y2="244" stroke="#14684a" stroke-width="5" marker-end="url(#arG)"/>
+  <line x1="347" y1="196" x2="387" y2="196" stroke="#1a5276" stroke-width="3" marker-end="url(#arB)"/>
+  <line x1="347" y1="218" x2="307" y2="218" stroke="#a04000" stroke-width="3" marker-end="url(#arO)"/>
+  <circle cx="347" cy="244" r="9" fill="none" stroke="#14684a" stroke-width="3"/>
+  <text x="366" y="249" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#14684a">正味 0</text>
+  <line x1="584" y1="196" x2="634" y2="196" stroke="#1a5276" stroke-width="3" marker-end="url(#arB)"/>
+  <line x1="584" y1="218" x2="554" y2="218" stroke="#a04000" stroke-width="3" marker-end="url(#arO)"/>
+  <line x1="584" y1="244" x2="604" y2="244" stroke="#14684a" stroke-width="5" marker-end="url(#arG)"/>
+  <text x="131" y="270" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#b03a2e">核間反発が勝つ</text>
+  <text x="131" y="286" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#b03a2e">結合は伸びる</text>
+  <text x="380" y="270" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#14684a">引力と斥力がつり合う</text>
+  <text x="380" y="286" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#14684a">ここが安定構造</text>
+  <text x="629" y="270" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#1a5276">電子雲の引力が勝つ</text>
+  <text x="629" y="286" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#1a5276">結合は縮む</text>
+  <line x1="30" y1="318" x2="58" y2="318" stroke="#1a5276" stroke-width="3" marker-end="url(#arB)"/>
+  <text x="66" y="323" font-family="sans-serif" font-size="12" fill="#333">電子雲からの引力</text>
+  <line x1="240" y1="318" x2="268" y2="318" stroke="#a04000" stroke-width="3" marker-end="url(#arO)"/>
+  <text x="276" y="323" font-family="sans-serif" font-size="12" fill="#333">他の核からの反発</text>
+  <line x1="460" y1="318" x2="490" y2="318" stroke="#14684a" stroke-width="5" marker-end="url(#arG)"/>
+  <text x="500" y="323" font-family="sans-serif" font-size="12" fill="#333">正味の力(Hellmann–Feynman力)</text>
+</svg>
+<figcaption>図8.5 式 \eqref{eq:8-hf-electrostatic} が表す力のつり合い(模式図)。核に働く力は、核間の電子密度が及ぼす静電引力と、他の核が及ぼす静電斥力の和である。$R$ が短いと斥力が勝って結合は伸び、長いと電子雲の引力が勝って縮む。両者がつり合う点が平衡結合長 $R_{\mathrm{e}}$ である。</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題8.4 水素原子の核に働く力はゼロである</p>
+<p>水素原子の $1s$ 電子は球対称な密度分布 $\rho(\bm{r})=\abs{\phi_{1s}(r)}^{2}$ をもつ。式 \eqref{eq:8-hf-electrostatic} を使って、原点にある核に働く力がゼロであることを示せ。</p>
+<p><strong>解答:</strong>核は1個なので第2項(核間反発)はない。第1項は $\bm{R}_I=\bm{0}$ として</p>
+$$\bm{F}=\frac{\ee^{2}}{4\pi\eps}\int\rho(r)\,\frac{\bm{r}}{r^{3}}\,\dd^{3}r .$$
+<p>被積分関数のうち $\rho(r)/r^{3}$ は $r=\abs{\bm{r}}$ だけの関数(スカラー)であり、$\bm{r}$ はベクトルである。$\bm{r}\to-\bm{r}$ という変換を考えると、$r$ は変わらないのでスカラー部分は不変、一方ベクトル $\bm{r}$ は符号を変える。積分領域(全空間)もこの変換で不変だから、積分の値は</p>
+$$\bm{F}=-\bm{F}\quad\Longrightarrow\quad \bm{F}=\bm{0}.$$
+<p>球対称な電荷分布はその中心にある電荷に力を及ぼさない、というGaussの法則でおなじみの事実に対応する。孤立原子が自発的に動き出さないという当たり前の結論が、きちんと出てくる。<br>
+なお、この原子を別の原子に近づけると密度が球対称でなくなり(<em class="term">分極</em>する)、核は結合の相手側へ引かれるようになる。これが結合が生じるときの力の起源である。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題8.5 $\mathrm{O}_2$ に働く力の大きさを数値で実感する</p>
+<p>表8.1の高スピンのデータから、$R=0.95\ \text{Å}$ における原子に働く力を中心差分で見積もり、SI単位に直せ。また $R=1.20\ \text{Å}$ ではどうなるか。</p>
+<p><strong>解答:</strong>中心差分は $\dfrac{\dd E}{\dd R}\simeq\dfrac{E(R+h)-E(R-h)}{2h}$、$h=0.05\ \text{Å}$。$R=0.95\ \text{Å}$ では</p>
+$$\frac{\dd E}{\dd R}\simeq\frac{-4066.428637-(-4060.401153)}{0.10}=\frac{-6.027484}{0.10}=-60.3\ \mathrm{eV/\text{Å}} .$$
+<p>力は $F=-\dd E/\dd R=+60.3\ \mathrm{eV/\text{Å}}$、すなわち核間距離を<strong>伸ばす</strong>向きである。SI単位では</p>
+$$F=60.3\times\frac{1.6022\times10^{-19}\ \mathrm{J}}{1.0\times10^{-10}\ \mathrm{m}}=9.7\times10^{-8}\ \mathrm{N}\simeq0.10\ \mathrm{\mu N}.$$
+<p>原子1個にかかる力としては桁違いに大きい。原子スケールでは $\mathrm{nN}$ ($10^{-9}\ \mathrm{N}$)が力の目安であり、$0.1\ \mathrm{\mu N}$ はその100倍である。それだけ $0.95\ \text{Å}$ という結合長が「押し込まれすぎ」ということである。<br>
+一方 $R=1.20\ \text{Å}$ では</p>
+$$\frac{\dd E}{\dd R}\simeq\frac{-4069.226505-(-4069.246134)}{0.10}=+0.196\ \mathrm{eV/\text{Å}}$$
+<p>で、$F=-0.196\ \mathrm{eV/\text{Å}}$ とほぼゼロ(わずかに縮む向き)。平衡点のすぐ近くにいることが力からも確認できる。実際に解析的な微分で計算すると $R=1.20\ \text{Å}$ での力は $-0.47\ \mathrm{eV/\text{Å}}$ であり、平衡は $R_{\mathrm{e}}=1.1948\ \text{Å}$ にある。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意:Pulay力 — 局在基底では補正が要る</p>
+<p>8.7.2節の変分版の証明には、隠れた前提がある。「変分パラメータ $\bm{c}$ について最適化してあれば $\partial E/\partial c_k=0$」というのは正しいが、<strong>変分空間そのものが $\bm{R}$ に依存していない</strong>ことが必要である。ところが、量子化学計算で使うGauss型基底関数(第5章・第6章)は<strong>原子核に貼りついて一緒に動く</strong>。核を動かすと基底関数の中心も動き、変分空間が変形してしまう。</p>
+<p>基底関数を $\chi_\mu(\bm{r}-\bm{R}_{I(\mu)})$ と書けば、エネルギーの全微分には</p>
+$$\frac{\dd E}{\dd\bm{R}_I}=\underbrace{\bra{\Psi}\nabla_I\Ham\ket{\Psi}}_{\text{Hellmann–Feynman項}}+\underbrace{2\,\mathrm{Re}\bra{\nabla_I\Psi}\Ham-E\ket{\Psi}}_{\text{Pulay項}}$$
+<p>という余分な寄与が現れる。これを<em class="term">Pulay力</em>(Pulay force、基底関数の不完全性による力)といい、P. Pulay が1969年に指摘した(文献[7])。無視すると力が数十%も狂うことがあるので、実際のプログラムは必ずこの補正を含めて微分を評価している。</p>
+<p>一方、固体計算でよく使う<strong>平面波基底</strong>は原子位置に依存しない(空間全体に一様に張られている)ので、原理的にPulay力は現れない。ただし、平面波の数を打ち切るカットオフエネルギーを固定したまま<strong>格子定数(セル体積)</strong>を変えると、基底の数が実効的に変わるため類似の補正(Pulay応力)が必要になる。基底の完全性が上がればどちらの補正も小さくなる、という点は共通である。</p>
+</div>
+
+<h3>8.7.4 Hessian行列 — 力の次の階</h3>
+
+<p>力は1階微分だった。2階微分を集めた行列を<em class="term">Hessian行列</em>(Hessian matrix)といい、成分は</p>
+$$
+\begin{equation}
+\Phi_{I\alpha,J\beta}=\frac{\partial^{2}\epsilon_{\mathrm{el}}}{\partial R_{I\alpha}\,\partial R_{J\beta}}
+=-\frac{\partial F_{I\alpha}}{\partial R_{J\beta}}
+\qquad(\alpha,\beta=x,y,z)
+\label{eq:8-hessian}
+\end{equation}
+$$
+<p>である($3N\times3N$ の対称行列)。物理的には<em class="term">力の定数</em>(force constant)であり、「核 $J$ を $\beta$ 方向にずらしたとき、核 $I$ が $\alpha$ 方向にどれだけ力を受けるか」を表す。平衡点のまわりで $\epsilon_{\mathrm{el}}$ をTaylor展開すると、1階の項は力がゼロなので消え、</p>
+$$
+\epsilon_{\mathrm{el}}(\bm{R}_{\mathrm{e}}+\bm{u})=\epsilon_{\mathrm{el}}(\bm{R}_{\mathrm{e}})
++\frac{1}{2}\sum_{I\alpha}\sum_{J\beta}\Phi_{I\alpha,J\beta}\,u_{I\alpha}u_{J\beta}+O(u^{3})
+$$
+<p>となる。これは多次元のばねにほかならない。質量で重みづけした行列 $D_{I\alpha,J\beta}=\Phi_{I\alpha,J\beta}/\sqrt{M_IM_J}$ を対角化すれば、固有値が $\omega^{2}$、固有ベクトルが基準振動モードを与える。二原子分子では自由度が1本だけ残り、$\mu=M_AM_B/(M_A+M_B)$ を換算質量として</p>
+$$
+\begin{equation}
+\omega=\sqrt{\frac{k}{\mu}},\qquad k=\frac{\dd^{2}\epsilon_{\mathrm{el}}}{\dd R^{2}}\bigg|_{R=R_{\mathrm{e}}}
+\label{eq:8-omega}
+\end{equation}
+$$
+<p>となる。例題8.3で計算したのは、まさに式 \eqref{eq:8-omega} の $k$ と $\omega$ である。</p>
+
+<p>式 \eqref{eq:8-hessian} で定義したHessianの用途は、振動スペクトルの予測だけではない。固有値の符号を見れば、その構造が本当に安定かどうかを判定できる。すべて正なら極小(安定構造)、1つだけ負なら鞍点(遷移状態)、負が複数あればさらに不安定な停留点である。負の固有値をもつモード(<em class="term">虚振動</em>)は、構造がどちらに壊れたがっているかを教えてくれる。担当教員の研究でも、この虚振動を手がかりに新しい強誘電体を探索している(文献[13])。</p>
+
+<figure>
+<svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="酸素分子のポテンシャル曲線と調和近似および振動準位">
+  <line x1="110" y1="283.4" x2="705" y2="283.4" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="110" y1="231.5" x2="705" y2="231.5" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="110" y1="179.7" x2="705" y2="179.7" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="110" y1="127.9" x2="705" y2="127.9" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="110" y1="76.1" x2="705" y2="76.1" stroke="#e6ecea" stroke-width="1"/>
+  <line x1="110" y1="45" x2="110" y2="330" stroke="#566573" stroke-width="1.6"/>
+  <line x1="110" y1="330" x2="712" y2="330" stroke="#566573" stroke-width="1.6"/>
+  <text x="103" y="287" text-anchor="end" font-family="sans-serif" font-size="11" fill="#566573">−4069.0</text>
+  <text x="103" y="235" text-anchor="end" font-family="sans-serif" font-size="11" fill="#566573">−4068.5</text>
+  <text x="103" y="184" text-anchor="end" font-family="sans-serif" font-size="11" fill="#566573">−4068.0</text>
+  <text x="103" y="132" text-anchor="end" font-family="sans-serif" font-size="11" fill="#566573">−4067.5</text>
+  <text x="103" y="80" text-anchor="end" font-family="sans-serif" font-size="11" fill="#566573">−4067.0</text>
+  <text x="128.3" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.0</text>
+  <text x="219.8" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.1</text>
+  <text x="311.4" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.2</text>
+  <text x="402.9" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.3</text>
+  <text x="494.5" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.4</text>
+  <text x="586.0" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.5</text>
+  <text x="677.5" y="350" text-anchor="middle" font-family="sans-serif" font-size="11.5" fill="#566573">1.6</text>
+  <text x="410" y="375" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333">結合長 R (Å)</text>
+  <text x="30" y="190" text-anchor="middle" font-family="sans-serif" font-size="13.5" fill="#333" transform="rotate(-90 30 190)">全エネルギー (eV)</text>
+  <polyline fill="none" stroke="#14684a" stroke-width="1.8" stroke-dasharray="7,4" points="110.0,99.2 119.2,119.0 128.3,137.8 137.5,155.7 146.6,172.7 155.8,188.8 164.9,203.9 174.1,218.1 183.2,231.3 192.4,243.6 201.5,255.1 210.7,265.5 219.8,275.1 229.0,283.7 238.2,291.4 247.3,298.1 256.5,304.0 265.6,308.9 274.8,312.8 283.9,315.9 293.1,318.0 302.2,319.2 311.4,319.5 320.5,318.8 329.7,317.2 338.8,314.7 348.0,311.2 357.2,306.8 366.3,301.5 375.5,295.3 384.6,288.1 393.8,280.0 402.9,271.0 412.1,261.1 421.2,250.2 430.4,238.4 439.5,225.6 448.7,212.0 457.8,197.4 467.0,181.8 476.2,165.4 485.3,148.0 494.5,129.7 503.6,110.5 512.8,90.3 521.9,69.2 531.1,47.2"/>
+  <polyline fill="none" stroke="#1a5276" stroke-width="2.2" points="146.6,89.1 164.9,148.6 183.2,196.8 201.5,235.2 219.8,265.0 238.2,287.3 256.5,303.1 274.8,313.3 293.1,318.5 311.4,319.5 329.7,316.7 348.0,310.8 366.3,302.2 384.6,291.2 402.9,278.1 421.2,263.4 439.5,247.0 457.8,229.4 476.2,210.7 494.5,191.0 512.8,170.5 531.1,149.3 549.4,127.5 567.7,105.2 586.0,82.4 604.3,59.2"/>
+  <circle cx="174.1" cy="174.0" r="3.4" fill="#1a5276"/><circle cx="219.8" cy="265.0" r="3.4" fill="#1a5276"/><circle cx="265.6" cy="308.9" r="3.4" fill="#1a5276"/><circle cx="311.4" cy="319.5" r="3.4" fill="#1a5276"/><circle cx="357.2" cy="306.8" r="3.4" fill="#1a5276"/><circle cx="402.9" cy="278.1" r="3.4" fill="#1a5276"/><circle cx="448.7" cy="238.4" r="3.4" fill="#1a5276"/><circle cx="494.5" cy="191.0" r="3.4" fill="#1a5276"/><circle cx="540.2" cy="138.5" r="3.4" fill="#1a5276"/><circle cx="586.0" cy="82.4" r="3.4" fill="#1a5276"/>
+  <line x1="264.4" y1="308.3" x2="354.4" y2="308.3" stroke="#b03a2e" stroke-width="2"/>
+  <line x1="231.5" y1="285.8" x2="387.3" y2="285.8" stroke="#b03a2e" stroke-width="2"/>
+  <line x1="208.8" y1="263.4" x2="410.0" y2="263.4" stroke="#b03a2e" stroke-width="2"/>
+  <line x1="190.3" y1="241.0" x2="428.4" y2="241.0" stroke="#b03a2e" stroke-width="2"/>
+  <text x="311" y="304" text-anchor="middle" font-family="sans-serif" font-size="10.5" fill="#b03a2e">v = 0</text>
+  <text x="311" y="281.5" text-anchor="middle" font-family="sans-serif" font-size="10.5" fill="#b03a2e">v = 1</text>
+  <text x="311" y="259" text-anchor="middle" font-family="sans-serif" font-size="10.5" fill="#b03a2e">v = 2</text>
+  <text x="311" y="236.5" text-anchor="middle" font-family="sans-serif" font-size="10.5" fill="#b03a2e">v = 3</text>
+  <circle cx="309.4" cy="319.5" r="4.5" fill="#b03a2e"/>
+  <rect x="466" y="248" width="248" height="80" rx="6" fill="#ffffff" stroke="#d5dbdb" stroke-width="1"/>
+  <line x1="478" y1="268" x2="506" y2="268" stroke="#1a5276" stroke-width="2.2"/>
+  <text x="514" y="272" font-family="sans-serif" font-size="12" fill="#333">実際の曲線(UHF/6-31G)</text>
+  <line x1="478" y1="290" x2="506" y2="290" stroke="#14684a" stroke-width="1.8" stroke-dasharray="7,4"/>
+  <text x="514" y="294" font-family="sans-serif" font-size="12" fill="#333">調和近似(Hessian)</text>
+  <line x1="478" y1="312" x2="506" y2="312" stroke="#b03a2e" stroke-width="2"/>
+  <text x="514" y="316" font-family="sans-serif" font-size="12" fill="#333">振動準位 v = 0,1,2,3</text>
+</svg>
+<figcaption>図8.6 $\mathrm{O}_2$ の平衡点近傍を拡大したもの。青が実際の計算値(細かい刻みで計算した実データ、丸印は表8.1の格子点)、緑の破線が Hessian から決まる調和近似 $\epsilon_{\mathrm{el}}\simeq\epsilon_{\min}+\tfrac12k(R-R_{\mathrm{e}})^{2}$($k=1.44\times10^{3}\ \mathrm{N/m}$)。短距離側では実際の曲線が調和近似より急に立ち上がり、長距離側ではゆるやかになる。この<strong>非対称性(非調和性)</strong>が熱膨張の起源である。赤線は調和近似での振動準位 $E_v=\epsilon_{\min}+(v+\tfrac12)\hbar\omega$($\hbar\omega=0.216\ \mathrm{eV}$)で、線の長さは古典的な転回点の幅を表す。</figcaption>
+</figure>
+
+<h2 id="sec8-8">8.8 構造緩和のアルゴリズム</h2>
+
+<p>原子間力が求まれば、そのベクトルに従って原子核を動かせばよい。そうすると全エネルギーがより減少する方向に構造が変化する。これが<em class="term">構造緩和</em>(structural relaxation)あるいは構造最適化(geometry optimization)である。手順を図8.7のフローチャートにまとめた。</p>
+
+<figure>
+<svg viewBox="0 0 760 645" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="構造緩和計算のフローチャート">
+  <defs>
+    <marker id="arF" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#566573"/></marker>
+  </defs>
+  <rect x="195" y="18" width="370" height="58" rx="8" fill="#eef4f9" stroke="#1a5276" stroke-width="1.8"/>
+  <circle cx="218" cy="47" r="12" fill="#1a5276"/><text x="218" y="52" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">1</text>
+  <text x="243" y="42" font-family="sans-serif" font-size="14" font-weight="bold" fill="#1a5276">原子の初期配置を決める</text>
+  <text x="243" y="62" font-family="sans-serif" font-size="12.5" fill="#333">分子・結晶の構造(xyzファイル等)を入力</text>
+  <line x1="380" y1="76" x2="380" y2="104" stroke="#566573" stroke-width="2" marker-end="url(#arF)"/>
+  <rect x="195" y="108" width="370" height="72" rx="8" fill="#eff7f3" stroke="#14684a" stroke-width="1.8"/>
+  <circle cx="218" cy="137" r="12" fill="#14684a"/><text x="218" y="142" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">2</text>
+  <text x="243" y="132" font-family="sans-serif" font-size="14" font-weight="bold" fill="#14684a">原子位置を固定して電子状態を計算(SCF)</text>
+  <text x="243" y="152" font-family="sans-serif" font-size="12.5" fill="#333">電子密度・波動関数を求める</text>
+  <text x="243" y="170" font-family="sans-serif" font-size="12.5" fill="#333">電子系のエネルギーを変分的に最小化する</text>
+  <line x1="380" y1="180" x2="380" y2="208" stroke="#566573" stroke-width="2" marker-end="url(#arF)"/>
+  <rect x="195" y="212" width="370" height="58" rx="8" fill="#fdf8ee" stroke="#b9770e" stroke-width="1.8"/>
+  <circle cx="218" cy="241" r="12" fill="#b9770e"/><text x="218" y="246" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">3</text>
+  <text x="243" y="236" font-family="sans-serif" font-size="14" font-weight="bold" fill="#b9770e">全エネルギーを計算する</text>
+  <text x="243" y="256" font-family="sans-serif" font-size="12.5" fill="#333">電子系のエネルギー + 原子核どうしの反発エネルギー</text>
+  <line x1="380" y1="270" x2="380" y2="298" stroke="#566573" stroke-width="2" marker-end="url(#arF)"/>
+  <rect x="195" y="302" width="370" height="72" rx="8" fill="#f8f2fb" stroke="#7d3c98" stroke-width="1.8"/>
+  <circle cx="218" cy="331" r="12" fill="#7d3c98"/><text x="218" y="336" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">4</text>
+  <text x="243" y="326" font-family="sans-serif" font-size="14" font-weight="bold" fill="#7d3c98">Hellmann–Feynman力を計算する</text>
+  <text x="243" y="346" font-family="sans-serif" font-size="12.5" fill="#333">各原子に働く力を求める(Pulay補正を含む)</text>
+  <text x="243" y="364" font-family="sans-serif" font-size="12.5" fill="#333">どちらへ動けばエネルギーが下がるかを調べる段階</text>
+  <line x1="380" y1="374" x2="380" y2="396" stroke="#566573" stroke-width="2" marker-end="url(#arF)"/>
+  <polygon points="380,400 528,448 380,496 232,448" fill="#fdf3f1" stroke="#b03a2e" stroke-width="1.8"/>
+  <text x="380" y="443" text-anchor="middle" font-family="sans-serif" font-size="13.5" font-weight="bold" fill="#b03a2e">力は十分小さいか？</text>
+  <text x="380" y="462" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#b03a2e">(収束判定)</text>
+  <polyline fill="none" stroke="#566573" stroke-width="2" points="232,448 152,448 152,516" marker-end="url(#arF)"/>
+  <text x="188" y="440" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#1a5276">Yes</text>
+  <polyline fill="none" stroke="#566573" stroke-width="2" points="528,448 610,448 610,516" marker-end="url(#arF)"/>
+  <text x="572" y="440" text-anchor="middle" font-family="sans-serif" font-size="12.5" font-weight="bold" fill="#b03a2e">No</text>
+  <rect x="30" y="520" width="245" height="80" rx="8" fill="#eef4f9" stroke="#1a5276" stroke-width="1.8"/>
+  <circle cx="52" cy="546" r="12" fill="#1a5276"/><text x="52" y="551" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">5</text>
+  <text x="74" y="551" font-family="sans-serif" font-size="14" font-weight="bold" fill="#1a5276">計算終了</text>
+  <text x="45" y="573" font-family="sans-serif" font-size="12.5" fill="#333">全エネルギーが最小の構造を獲得</text>
+  <text x="45" y="591" font-family="sans-serif" font-size="12.5" fill="#333">これが理論的に予測された安定構造</text>
+  <rect x="470" y="520" width="260" height="90" rx="8" fill="#fdf2ec" stroke="#a04000" stroke-width="1.8"/>
+  <circle cx="492" cy="546" r="12" fill="#a04000"/><text x="492" y="551" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#fff">6</text>
+  <text x="514" y="551" font-family="sans-serif" font-size="14" font-weight="bold" fill="#a04000">原子を少し動かす</text>
+  <text x="485" y="573" font-family="sans-serif" font-size="12.5" fill="#333">力の向きに沿って原子を移動させる</text>
+  <text x="485" y="591" font-family="sans-serif" font-size="12.5" fill="#333">最急降下法・BFGS法などを用いる</text>
+  <polyline fill="none" stroke="#a04000" stroke-width="2" stroke-dasharray="6,4" points="730,565 748,565 748,144 569,144" marker-end="url(#arF)"/>
+  <text x="700" y="628" text-anchor="middle" font-family="sans-serif" font-size="12.5" fill="#a04000">新しい配置で 2 に戻る</text>
+</svg>
+<figcaption>図8.7 構造緩和計算のフローチャート。核を固定して電子状態を解く「内側のループ」(SCF)と、力に従って核を動かす「外側のループ」が入れ子になっている。図8.2で述べた2段階の最小化を、そのままアルゴリズムにしたものである。</figcaption>
+</figure>
+
+<h3>8.8.1 どちらへ、どれだけ動かすか</h3>
+
+<p>フローチャートの⑥「原子を少し動かす」をどう実装するかが、最適化アルゴリズムの中身である。もっとも素朴なのは<em class="term">最急降下法</em>(steepest descent)で、力の向きにそのまま動かす:</p>
+$$
+\begin{equation}
+\bm{R}^{(n+1)}=\bm{R}^{(n)}+\alpha\,\bm{F}^{(n)},\qquad \alpha\gt0 .
+\label{eq:8-steepest}
+\end{equation}
+$$
+<p>式 \eqref{eq:8-steepest} は坂道をボールが転がり落ちるのと同じで、必ずエネルギーは下がる($\alpha$ が十分小さければ)。しかし収束は遅い。細長い谷に入ると、谷底に沿って進まず左右の斜面をジグザグに往復してしまうからである。</p>
+
+<p>もっと賢いやり方は、2階微分の情報を使うことである。エネルギーを現在位置のまわりで2次まで展開し</p>
+$$
+\epsilon_{\mathrm{el}}(\bm{R}^{(n)}+\Delta\bm{R})\simeq
+\epsilon_{\mathrm{el}}(\bm{R}^{(n)})-\bm{F}^{(n)}\!\cdot\!\Delta\bm{R}
++\frac{1}{2}\Delta\bm{R}^{\mathsf{T}}\Phi\,\Delta\bm{R},
+$$
+<p>これを $\Delta\bm{R}$ について最小化する。$\partial/\partial\Delta\bm{R}$ をとってゼロとおけば $-\bm{F}^{(n)}+\Phi\Delta\bm{R}=0$、すなわち</p>
+$$
+\begin{equation}
+\Delta\bm{R}=\Phi^{-1}\bm{F}^{(n)} .
+\label{eq:8-newton}
+\end{equation}
+$$
+<p>式 \eqref{eq:8-newton} が<em class="term">Newton法</em>である。もしエネルギーがぴったり2次関数なら、この1歩で最小点に到達する。谷が細長くても、Hessian $\Phi$ がその細長さを知っているので、正しく谷底へ向かってくれる。</p>
+
+<p>ただし $\Phi$ を毎回計算するのは高くつく($3N\times3N$ 個の2階微分が要る)。そこで、これまでの歩みの履歴から $\Phi$ を推定しながら進む<em class="term">準Newton法</em>(quasi-Newton method)が使われる。基本になるのは<strong>割線条件</strong>(secant condition)である。1次元の $f'(x)$ を思い出すと $f''\simeq\Delta f'/\Delta x$ だった。多次元でも同じで、2ステップ間の変位 $\bm{s}=\bm{R}^{(n+1)}-\bm{R}^{(n)}$ と勾配の変化 $\bm{y}=\nabla\epsilon^{(n+1)}-\nabla\epsilon^{(n)}$ に対して、近似Hessian $B$ は</p>
+$$
+\begin{equation}
+B_{n+1}\,\bm{s}=\bm{y}
+\label{eq:8-secant}
+\end{equation}
+$$
+<p>を満たすべきである。この割線条件 \eqref{eq:8-secant} を満たす更新式のうち、もっとも広く使われるのが<em class="term">BFGS法</em>(Broyden–Fletcher–Goldfarb–Shanno法、文献[10])で、</p>
+$$
+\begin{equation}
+B_{n+1}=B_{n}+\frac{\bm{y}\bm{y}^{\mathsf{T}}}{\bm{y}^{\mathsf{T}}\bm{s}}-\frac{B_{n}\bm{s}\,\bm{s}^{\mathsf{T}}B_{n}}{\bm{s}^{\mathsf{T}}B_{n}\bm{s}}
+\label{eq:8-bfgs}
+\end{equation}
+$$
+<p>である。式 \eqref{eq:8-bfgs} が割線条件を満たすことは、右から $\bm{s}$ を掛けるだけで確かめられる:</p>
+$$
+B_{n+1}\bm{s}=B_{n}\bm{s}+\bm{y}\,\frac{\bm{y}^{\mathsf{T}}\bm{s}}{\bm{y}^{\mathsf{T}}\bm{s}}-B_{n}\bm{s}\,\frac{\bm{s}^{\mathsf{T}}B_{n}\bm{s}}{\bm{s}^{\mathsf{T}}B_{n}\bm{s}}
+=B_{n}\bm{s}+\bm{y}-B_{n}\bm{s}=\bm{y}. \qquad\checkmark
+$$
+<p>$\bm{y}\bm{y}^{\mathsf{T}}$ は列ベクトルと行ベクトルの積で $3N\times3N$ 行列になること、$\bm{y}^{\mathsf{T}}\bm{s}$ はスカラー(内積)になることに注意すれば、行列の積の計算だけである。</p>
+
+<p>さらに実用上は、2次近似が信用できる範囲を制限する<em class="term">信頼半径</em>(trust radius)が併用される。1歩の変位がこの半径を超えないように切り詰め、実際のエネルギー低下が予測どおりなら半径を広げ、外れたら狭める、という制御を行う。</p>
+
+<h3>8.8.2 O₂の構造緩和を実行する</h3>
+
+<p>それでは、わざと $0.9\ \text{Å}$ という短すぎる結合長から出発して、構造緩和が本当に平衡点を見つけてくれるか試してみよう。付録Bの <code>calc_pyscf_relax.py</code> は、PySCF と geomeTRIC(文献[9])を組み合わせて図8.7のループを回すスクリプトである。</p>
+
+<pre><code>$ cd ~/Downloads/pyscf_tutorial3/O2
+$ python3 calc_pyscf_relax.py --xyz XYZ_O2_0p900000.xyz --spin 2 --basis 6-31g</code></pre>
+<p class="codecap">コード8.12 結合長 $0.9\ \text{Å}$ の構造から構造緩和を開始する。</p>
+
+<p>実行すると、次のようなログが流れる。</p>
+
+<pre><code>Step    0 : Gradient = 1.701e+00/1.701e+00 (rms/max) Energy = -149.2169914759
+Step    1 : Displace = 6.061e-02/6.061e-02 Trust = 1.000e-01 Grad = 6.080e-01 E = -149.4655345067 (-2.485e-01)
+Step    2 : Displace = 3.370e-02/3.370e-02 Trust = 1.414e-01 Grad = 2.844e-01 E = -149.5208309326 (-5.530e-02)
+Step    3 : Displace = 2.962e-02/2.962e-02 Trust = 2.000e-01 Grad = 1.001e-01 E = -149.5416474412 (-2.082e-02)
+Step    4 : Displace = 1.608e-02/1.608e-02 Trust = 2.828e-01 Grad = 2.795e-02 E = -149.5454546188 (-3.807e-03)
+Step    5 : Displace = 6.231e-03/6.231e-03 Trust = 3.000e-01 Grad = 4.194e-03 E = -149.5458288490 (-3.742e-04)
+Step    6 : Displace = 1.100e-03/1.100e-03 Trust = 3.000e-01 Grad = 2.184e-04 E = -149.5458380000 (-9.151e-06)
+Step    7 : Displace = 6.044e-05/6.044e-05 Trust = 3.000e-01 Grad = 8.388e-07 E = -149.5458380253 (-2.523e-08)
+Converged!</code></pre>
+<p class="codecap">コード8.13 構造緩和のログ(要点のみ抜粋)。エネルギーはHartree単位、勾配はHartree/Bohr単位、変位はÅ単位である。</p>
+
+<p>各ステップでの結合長も含めて表8.3に整理した。</p>
+
+<div class="tablewrap">
+<table>
+<caption>表8.3 $\mathrm{O}_2$(三重項、UHF/6-31G)の構造緩和の経過。$0.9\ \text{Å}$ から出発し、7回の原子移動(=8回のSCF計算)で収束した。</caption>
+<thead>
+<tr><th>Step</th><th>結合長 (Å)</th><th>全エネルギー (Ha)</th><th>$\Delta E$ (Ha)</th><th>勾配 (Ha/Bohr)</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>0.900000</td><td>−149.2169914759</td><td>—</td><td>$1.701\times10^{0}$</td></tr>
+<tr><td>1</td><td>1.021220</td><td>−149.4655345067</td><td>$-2.485\times10^{-1}$</td><td>$6.080\times10^{-1}$</td></tr>
+<tr><td>2</td><td>1.088629</td><td>−149.5208309326</td><td>$-5.530\times10^{-2}$</td><td>$2.844\times10^{-1}$</td></tr>
+<tr><td>3</td><td>1.147876</td><td>−149.5416474412</td><td>$-2.082\times10^{-2}$</td><td>$1.001\times10^{-1}$</td></tr>
+<tr><td>4</td><td>1.180044</td><td>−149.5454546188</td><td>$-3.807\times10^{-3}$</td><td>$2.795\times10^{-2}$</td></tr>
+<tr><td>5</td><td>1.192506</td><td>−149.5458288490</td><td>$-3.742\times10^{-4}$</td><td>$4.194\times10^{-3}$</td></tr>
+<tr><td>6</td><td>1.194706</td><td>−149.5458380000</td><td>$-9.151\times10^{-6}$</td><td>$2.184\times10^{-4}$</td></tr>
+<tr><td><strong>7</strong></td><td><strong>1.194827</strong></td><td><strong>−149.5458380253</strong></td><td>$-2.523\times10^{-8}$</td><td>$8.388\times10^{-7}$</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>出力として、構造緩和された分子構造が <code>XYZ_O2_0p900000-finish.xyz</code> というファイルで得られる。</p>
+
+<pre><code>$ cat XYZ_O2_0p900000-finish.xyz
+2
+Optimized geometry, E = -149.5458380253 Ha
+O    -0.14741338    0.00000000     0.00000000
+O     1.04741338   -0.00000000    -0.00000000</code></pre>
+<p class="codecap">コード8.14 緩和後の構造。結合長は $1.04741338-(-0.14741338)=1.19483\ \text{Å}$。座標の原点がずれているのは、最適化の途中で重心を固定しているためで、結合長そのものには影響しない。</p>
+
+<p>結果をまとめよう。</p>
+<ul>
+<li>結合長は $0.9\ \text{Å}$ から <strong>$1.195\ \text{Å}$</strong> になった。図8.3の曲線の谷底にぴたりと落ち込んでいる。</li>
+<li>Step 0 から Step 7 まで、合計<strong>8回のSCF計算</strong>が実行された。原子を動かしたのは<strong>7回</strong>である。26通りの構造を総当たりした8.5節に比べ、計算回数は $1/3$ である。原子数が増えればこの差は天文学的に開く。</li>
+<li>全エネルギーは $-149.5458380253\ \mathrm{Ha}$。$1\ \mathrm{Ha}=27.2114\ \mathrm{eV}$ を掛けて $-4069.3495\ \mathrm{eV}$ となり、格子上の最小値 $-4069.3483\ \mathrm{eV}$($R=1.20\ \text{Å}$)よりわずかに $1.3\ \mathrm{meV}$ だけ低い。谷底を格子で捉えきれていなかったぶんが、きちんと拾われている。</li>
+<li>勾配は $1.7\to0.61\to0.28\to0.10\to0.028\to4.2\times10^{-3}\to2.2\times10^{-4}\to8.4\times10^{-7}$ と、最後は1ステップごとに桁が2つ以上落ちている。これはNewton法系のアルゴリズムに特徴的な超1次収束である。</li>
+</ul>
+
+<div class="box ex">
+<p class="box-title">例題8.6 最初の1歩はなぜ $0.12\ \text{Å}$ なのか</p>
+<p>(1) 表8.3の Step 0 の勾配 $1.701\ \mathrm{Ha/Bohr}$ を $\mathrm{eV/\text{Å}}$ に換算せよ($1\ \mathrm{Ha}=27.2114\ \mathrm{eV}$、$1\ \mathrm{Bohr}=0.529177\ \text{Å}$)。<br>(2) 例題8.3で求めた力の定数 $k=89.6\ \mathrm{eV/\text{Å}^{2}}$ を使って Newton 法の1歩 $\Delta R=F/k$ を見積もり、実際の移動量 $1.021220-0.900000=0.1212\ \text{Å}$ と比べよ。</p>
+<p><strong>解答:</strong>(1) 単位換算係数は</p>
+$$1\ \mathrm{Ha/Bohr}=\frac{27.2114\ \mathrm{eV}}{0.529177\ \text{Å}}=51.42\ \mathrm{eV/\text{Å}}$$
+<p>だから、$1.701\times51.42=87.5\ \mathrm{eV/\text{Å}}$。SI単位では $1.40\times10^{-7}\ \mathrm{N}$ である。</p>
+<p>(2) Newton 法の1歩は</p>
+$$\Delta R=\frac{F}{k}=\frac{87.5\ \mathrm{eV/\text{Å}}}{89.6\ \mathrm{eV/\text{Å}^{2}}}=0.98\ \text{Å}.$$
+<p>これは実際の移動量の8倍もある。$0.9\ \text{Å}$ から $0.98\ \text{Å}$ 動かせば $1.88\ \text{Å}$ になってしまい、最小点を大きく通り過ぎる。原因は、$k$ が<strong>平衡点での</strong>曲率であり、$0.9\ \text{Å}$ という壁のように急な領域では実際の曲率はずっと大きいからである。2次近似が通用しない遠方でNewton法を鵜呑みにすると暴走する。</p>
+<p>そこで信頼半径が効く。ログの Step 1 は <code>Trust = 1.000e-01</code>、すなわち原子1個あたりの変位を $0.1\ \text{Å}$ に制限しており、実際の変位は $0.0606\ \text{Å}$ である。2個の原子が逆向きに動くので結合長は $2\times0.0606=0.1212\ \text{Å}$ 伸びた——これが観測された値と一致する。その後、予測が当たるにつれて <code>Trust</code> は $0.1\to0.141\to0.2\to0.283\to0.3$ と広げられ、収束が加速している。</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意:構造緩和は「いちばん近い窪み」に落ちるだけ</p>
+<p>構造緩和が見つけるのは、初期構造から力に沿って下ったところにある<strong>局所</strong>最小点であって、系全体の最安定構造(大域最小点)である保証はまったくない。$\mathrm{O}_2$ のような1次元のPESなら問題は起きないが、原子数が増えると局所最小点の数は指数関数的に増える。実際の物質探索では、多数の初期構造から出発する、乱数で構造を生成する、進化的アルゴリズムを使う、といった<strong>構造探索</strong>の枠組みが別に必要になる(文献[12])。「構造最適化した」という言葉は、「大域最小を見つけた」という意味ではないことを、つねに意識してほしい。</p>
+</div>
+
+<h2 id="sec8-9">8.9 まとめと演習</h2>
+
+<h3>8.9.1 この章のまとめ</h3>
+
+<ol>
+<li>分子・固体の厳密なハミルトニアン \eqref{eq:8-full-hamiltonian} は五つの項からなる:核の運動エネルギー、電子の運動エネルギー、核–電子引力、核–核反発、電子–電子反発。</li>
+<li>陽子は電子の約1836倍重いので、核は電子よりはるかにゆっくり動く。そこで波動関数を $\Psi\simeq\Psi_{\mathrm{el}}(\bm{r},\bm{R})\Psi_{\mathrm{Nu}}(\bm{R})$ と積に分けるのが<strong>Born–Oppenheimer近似</strong>である。$\bm{R}$ は $\Psi_{\mathrm{el}}$ の変数ではなく<strong>パラメータ</strong>として入る。</li>
+<li>積を代入して核のラプラシアンを展開すると非断熱項 $\hat\Lambda$ が現れるが、$1/M_I$ に比例して小さいので落とす。残った式は $\bm{R}$ を固定した電子の固有値問題 \eqref{eq:8-el-eigen} と、$E_{\mathrm{el}}(\bm{R})$ をポテンシャルとする核の方程式 \eqref{eq:8-nuc-eigen} に分かれる。</li>
+<li><strong>全エネルギー</strong>とは、核の運動エネルギーを $0$ とみなした $E\simeq\min_{\bm{R}}E_{\mathrm{el}}(\bm{R})$ のことで、$0\ \mathrm{K}$ の内部エネルギーである。有限温度では零点振動とエントロピーを別途考える必要がある。</li>
+<li><strong>断熱近似</strong>は「イオンは電子基底状態のポテンシャルエネルギー曲面(PES)上のみを動く」という言い換えであり、全エネルギー計算は<strong>電子→核の2段階最小化</strong>になる。</li>
+<li>$\mathrm{O}_2$ の結合長を $0.9$–$2.15\ \text{Å}$ で変えて計算すると、教科書どおりの原子間ポテンシャル曲線が得られる。最小は $R=1.20\ \text{Å}$(放物線内挿で $1.198\ \text{Å}$)で、実験値 $1.2075\ \text{Å}$ をよく再現する。ただし結合エネルギーはHartree–Fockでは全く再現できない。</li>
+<li>$\mathrm{O}_2$ の基底状態は $\pi^{*}_{2p}$ に不対電子2個をもつ<strong>三重項</strong>($S=1$、$^{3}\Sigma_{g}^{-}$、PySCFでは <code>spin = 2</code>)である。一重項より $2.29\ \mathrm{eV}$ 安定で、この差の主因は交換エネルギー(第9章)である。液体酸素が磁石に引かれるのはこの不対電子のためである。</li>
+<li><strong>Hellmann–Feynmanの定理</strong> \eqref{eq:8-hf-theorem} により、エネルギーのパラメータ微分はハミルトニアンの微分の期待値だけで書ける。規格化条件 $\braket{\psi|\psi}=1$ の微分がゼロになることが証明の急所である。核座標に適用すると原子間力 \eqref{eq:8-hf-force} が得られ、その中身は電子密度と他の核がつくる<strong>古典的な静電気力</strong>である。</li>
+<li>原子中心のGauss基底では変分空間が $\bm{R}$ に依存するため、<strong>Pulay力</strong>の補正が必要である。平面波基底では原理的に不要。</li>
+<li>2階微分の行列が<strong>Hessian</strong>(力の定数)で、対角化すれば振動モードと振動数が得られ、固有値の符号で安定性が判定できる。</li>
+<li><strong>構造緩和</strong>は「SCF→力→収束判定→原子移動」のループである。最急降下法よりNewton法・準Newton法(BFGS)が速く、信頼半径で暴走を防ぐ。$\mathrm{O}_2$ では $0.9\ \text{Å}$ から8回のSCFで $1.195\ \text{Å}$ に収束した。</li>
+</ol>
+
+<h3>8.9.2 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習8.1 質量比から時間スケールへ</p>
+<p>(a) 陽子と電子の質量比を用いて、両者の運動量が同程度であるときの速度比を求めよ。(b) 運動<strong>エネルギー</strong>が同程度であるときの速度比を求め、(a) と比べよ。(c) 炭素核($A=12$)についても (b) を計算せよ。(d) これらの見積もりのうち、Born–Oppenheimer近似の正当化にとってより本質的なのはどちらか、理由とともに述べよ。</p>
+<p><em>ヒント：</em>(a) $v=P/M$ より $v_{\text{核}}/v_{\text{el}}=m/M$。(b) $\tfrac12Mv^{2}$ が等しいなら $v\propto1/\sqrt{M}$ なので比は $\sqrt{m/M}$。$\sqrt{1/1836}=1/42.8$。(c) $M=12\times1836\,m$。(d) 核と電子はCoulomb力で結ばれており、力積のやりとりを通じて運動量が同程度になる、という描像を考えよ。どちらの見積もりでも「核のほうが桁違いに遅い」という結論は変わらないことも確認せよ。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習8.2 非断熱項を書き下す</p>
+<p>(a) BO近似で捨てた非断熱項 $\hat\Lambda$ を、$\Psi_{\mathrm{el}}$、$\Psi_{\mathrm{Nu}}$、$\nabla_I$、$M_I$ を使って書き下せ。(b) $\hat\Lambda$ の各項が $1/M_I$ に比例することを確認し、それが小さい理由を説明せよ。(c) 二つの電子状態のエネルギーが接近する点(円錐交差)でBO近似が破綻する理由を、$\nabla_I\Psi_{\mathrm{el}}$ の振る舞いから説明せよ。</p>
+<p><em>ヒント：</em>(a) 式 \eqref{eq:8-laplacian-product} の第2項と第3項に $-\hbar^{2}/2M_I$ を掛けて和をとる。(b) 電子波動関数は核の位置に「なめらかに」依存する。(c) 摂動論(第4章)では、状態の変化量の分母にエネルギー差 $E_1-E_0$ が現れた。この分母がゼロに近づくとどうなるか。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習8.3 粗い格子で放物線内挿するとどうなるか</p>
+<p>表8.1の高スピンの値のうち $R=1.10,\ 1.20,\ 1.30\ \text{Å}$ の3点($h=0.10\ \text{Å}$)を使って、例題8.3と同じ手順で $R_{\mathrm{e}}$、$k$、$\tilde\nu$ を求めよ。刻み幅 $h=0.05\ \text{Å}$ の結果および構造緩和の結果 $1.1948\ \text{Å}$ と比較し、差の原因を論じよ。</p>
+<p><em>ヒント：</em>$E_+-2E_0+E_-=0.923875\ \mathrm{eV}$、$E_+-E_-=-0.126623\ \mathrm{eV}$ となるはずである。$k=(E_+-2E_0+E_-)/h^{2}$ で $h$ が2倍になると分母は4倍。答えは $R_{\mathrm{e}}=1.207\ \text{Å}$、$k=1.48\times10^{3}\ \mathrm{N/m}$、$\tilde\nu=1.77\times10^{3}\ \mathrm{cm^{-1}}$。刻みが粗いほど3次以上の非調和項を拾ってしまうことを、図8.6を見ながら確認せよ。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習8.4 調和振動子でHellmann–Feynmanの定理を検算する</p>
+<p>1次元調和振動子 $\Ham=\dfrac{\hat{p}^{2}}{2m}+\dfrac{1}{2}m\omega^{2}\hat{x}^{2}$ のエネルギー固有値は $E_n=\left(n+\tfrac12\right)\hbar\omega$ である。パラメータを $\lambda=\omega$ として定理 \eqref{eq:8-hf-theorem} を適用し、$\braket{n|\hat{x}^{2}|n}$ を求めよ。さらに、その結果からポテンシャルエネルギーの期待値が全エネルギーのちょうど半分になること(ビリアル定理)を確かめよ。</p>
+<p><em>ヒント：</em>$\partial\Ham/\partial\omega=m\omega\hat{x}^{2}$、$\dd E_n/\dd\omega=(n+\tfrac12)\hbar$。両者を等置して $\braket{\hat{x}^{2}}=\dfrac{(n+1/2)\hbar}{m\omega}$。ポテンシャルの期待値は $\tfrac12m\omega^{2}\braket{\hat{x}^{2}}$ である。波動関数の具体形(Hermite多項式)を一度も使わずに答えが出ることに注目せよ。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習8.5 Pulay力はどんなときに現れるか</p>
+<p>(a) 原子中心のGauss基底を用いた計算で、Hellmann–Feynman力だけでは正しい力が得られない理由を、8.7.2節の変分版の証明のどの前提が破れるかを指摘して説明せよ。(b) 平面波基底ではPulay力が現れない理由を述べよ。(c) 基底関数の数を無限に増やしていくと、Pulay力はどうなると期待されるか。</p>
+<p><em>ヒント：</em>(a) 「変分空間そのものが $\bm{R}$ に依存しない」という前提。基底関数 $\chi_\mu(\bm{r}-\bm{R}_{I})$ は核と一緒に動く。(b) 平面波 $e^{i\bm{G}\cdot\bm{r}}$ に核座標は入っていない。(c) 完全基底に近づくと、基底を動かしても張られる空間は変わらなくなる。ただしセル体積を変える場合はカットオフの扱いに注意。</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習8.6 酸素分子の磁性とスピン状態</p>
+<p>(a) 表8.2をもとに $\mathrm{O}_2$ の $S$、多重度、結合次数を導け。(b) 液体酸素が磁石に引き寄せられる理由を、Lewis構造式では説明できず分子軌道法で説明できることを含めて述べよ。(c) 8.6節の低スピン計算($\braket{\hat{S}^{2}}=0$)が、実験でいう $a^{1}\Delta_{g}$ 状態(基底状態より $0.98\ \mathrm{eV}$ 高い)と一致しない理由を述べよ。(d) 図8.4で、高スピンと低スピンの平衡結合長がほとんど変わらないのはなぜか。</p>
+<p><em>ヒント：</em>(a) $\pi^{*}_{2p}$ は2重縮退で電子2個。Hundの規則。結合次数 $=$(結合性電子数 $-$ 反結合性電子数)$/2$。(c) $^{1}\Delta_{g}$ は2つのSlater行列式の重ね合わせでしか表せない(第7章・第9章)。(d) 結合次数を決めるのは軌道の<strong>占有数</strong>であって、スピンの向きではない。</p>
+</div>
+
+<h3>8.9.3 参考文献</h3>
+<div class="refs">
+<ol>
+<li>原田 義也『量子化学(上巻)』裳華房(2007).</li>
+<li>A. Szabo, N. S. Ostlund(大野公男・阪井健男・望月祐志 訳)『新しい量子化学 — 電子構造の理論入門(上)』東京大学出版会(1987)(原著:<em>Modern Quantum Chemistry</em>, Dover, 1996).</li>
+<li>P. Atkins, J. de Paula, <em>Atkins' Physical Chemistry</em>, 11th ed., Oxford University Press (2018).</li>
+<li>M. Born, J. R. Oppenheimer, "Zur Quantentheorie der Molekeln", <em>Ann. Phys.</em> <strong>389</strong>, 457 (1927).</li>
+<li>H. Hellmann, <em>Einführung in die Quantenchemie</em>, Franz Deuticke, Leipzig und Wien (1937).</li>
+<li>R. P. Feynman, "Forces in Molecules", <em>Phys. Rev.</em> <strong>56</strong>, 340 (1939).</li>
+<li>P. Pulay, "Ab initio calculation of force constants and equilibrium geometries in polyatomic molecules I. Theory", <em>Mol. Phys.</em> <strong>17</strong>, 197 (1969).</li>
+<li>Q. Sun <em>et al.</em>, "PySCF: the Python-based simulations of chemistry framework", <em>WIREs Comput. Mol. Sci.</em> <strong>8</strong>, e1340 (2018).</li>
+<li>L.-P. Wang, C. Song, "Geometry optimization made simple with translation and rotation coordinates", <em>J. Chem. Phys.</em> <strong>144</strong>, 214108 (2016)(geomeTRIC).</li>
+<li>J. Nocedal, S. J. Wright, <em>Numerical Optimization</em>, 2nd ed., Springer (2006).</li>
+<li>K. P. Huber, G. Herzberg, <em>Molecular Spectra and Molecular Structure IV. Constants of Diatomic Molecules</em>, Van Nostrand Reinhold (1979)($\mathrm{O}_2$ の実験値:$R_{\mathrm{e}}=1.20752\ \text{Å}$、$\omega_{\mathrm{e}}=1580.19\ \mathrm{cm^{-1}}$、$D_0=5.115\ \mathrm{eV}$).</li>
+<li>Y. Mochizuki <em>et al.</em>, "Theoretical Exploration of the Surface Structures of $\mathrm{SrTiO_3}$", <em>Chem. Mater.</em> <strong>35</strong>, 2047 (2023).</li>
+<li>Y. Mochizuki <em>et al.</em>, "$\mathrm{Li_2SrNb_2O_7}$: A New Ferroelectric", <em>Chem. Mater.</em> <strong>33</strong>, 1257 (2021).</li>
+<li>C. Kittel(宇野良清 ほか 訳)『固体物理学入門(上)』第8版、丸善(2005).</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch07_manyelectron_spin.html">← 第7章:多電子原子とスピン</a>
+  <span class="spacer"></span>
+  <a href="ch09_exchange_energy.html">第9章:交換エネルギーの登場 →</a>
+</nav>
+</main>
+</body>
+</html>
