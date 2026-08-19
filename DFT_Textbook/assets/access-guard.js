@@ -11,6 +11,6 @@
 
   if (!allowed) {
     document.documentElement.style.display = 'none';
-    window.location.replace('../research.html#dft-textbook');
+    window.location.replace('../education.html#dft-textbook');
   }
 })();
