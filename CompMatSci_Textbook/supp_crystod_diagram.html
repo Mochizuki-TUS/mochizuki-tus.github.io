@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<script src="assets/access-guard.js"></script>
+<title>付録C CrystOD 徹底解説 — crystod --diagram は何を計算しているのか — マテリアル計算科学入門</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      rr: "\\bm{r}",
+      RR: "\\bm{R}",
+      xx: "\\bm{x}",
+      abs: ["\\left|#1\\right|", 1],
+      braket: ["\\langle #1 \\rangle", 1],
+      ket: ["\\left| #1 \\right\\rangle", 1],
+      bra: ["\\left\\langle #1 \\right|", 1],
+      Ham: "\\hat{\\mathcal{H}}",
+      ee: "e_0",
+      eps: "\\varepsilon_0",
+      hb: "\\bar{h}",
+      kk: "\\bm{k}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">マテリアル計算科学入門 — 目次</a>
+  <span class="series">付録 / 付録C</span>
+</header>
+<main>
+<h1><span class="chapter-no">付録C</span>CrystOD 徹底解説 — <code>crystod --diagram</code> は何を計算しているのか</h1>
+
+<div class="lead">
+  <p>本編第14章で，われわれは「エネルギー準位が固体の中で帯になる」という描像に到達した．そこでは NaCl を例に，なぜ Cl-3p が価電子帯になり Na-3s が伝導帯になるのかを，イオン化エネルギー・電子親和力・Madelung エネルギーの足し算で説明した．本付録はその続きである．同じ問いを，<strong>対称性（第12章）と永年方程式（第11章）を使って k 点ごとに定量的に答える道具</strong>が，CrystOD の中心機能 <code>crystod --diagram</code>，すなわち<em class="term">結晶軌道ダイアグラム</em>（crystal-orbital diagram, COD）である．岩塩型 AlN を実例に，コマンド一発の裏側で起きていることを，入力ファイルの読み込みから出力 HTML の一本一本の線の意味まで，順を追ってすべて解説する．使う数学は本編で全部準備してある：STO の重なり積分（第5章），変分原理と永年方程式（第3・11章），点群と既約表現（第12章），Madelung 場（第13章）．新しく登場するのは「重なり行列の固有値」というたった一つの視点で，これが分かると，なぜ一部の準位のエネルギーに<strong>チルダ（~）</strong>が付くのか（Löwdin 1次推定），なぜ拡張 Hückel 法には「overlap catastrophe」という持病があるのかまで，一続きの話として理解できる．</p>
+  <div class="goals">
+    <strong>この付録で学ぶこと</strong>
+    <ul>
+      <li><code>crystod --diagram -c POSCAR_AlN_Fm-3m --co-left Al --co-right N</code> が実行する処理の全工程</li>
+      <li>結晶軌道ダイアグラム（COD）の思想：結晶を二つの部分格子に分け，「結合する前」と「結合した後」を並べて描く</li>
+      <li>Bloch 和 — 二原子分子の $\pm$ 結合（第11章）の「$N$ 原子版」— と，重なり行列 $S(\kk)$ の対角が 1 でなくなる理由</li>
+      <li>Wolfsberg–Helmholz 近似（拡張 Hückel 法）：$H_{ij}=K\,S_{ij}(\hb_i+\hb_j)/2$，$K=1.75$</li>
+      <li>一般化固有値問題と canonical orthogonalization．二原子分子の $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ の分母 $1\pm S$ が，実は重なり行列の固有値であること</li>
+      <li><em class="term">overlap catastrophe</em>：重なり行列の固有値 $\varepsilon\to 0$ で拡張 Hückel のエネルギーが発散するという持病．第11章の「反結合性軌道の上がり幅は結合性軌道の下がり幅より大きい」の極限として理解する</li>
+      <li><em class="term">Löwdin 1次推定</em>：発散を回避する一次近似 $E=\hb\,(1+(K-1)\sigma)$ の導出と適用範囲．端末出力の<strong>チルダ（~）付きエネルギー</strong>とツールチップ注記の意味</li>
+      <li>電子の詰め方（aufbau），HOMO/LUMO，COOP による結合性・非結合性・反結合性の色分け</li>
+      <li>AlN の X 点で実際に得られる全準位の読み解き</li>
+    </ul>
+  </div>
+  <div class="prereq"><strong>前提：</strong>変分原理（第3章），STO と重なり積分（第5章），永年方程式と $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$（第11章），点群・既約表現・指標表（第12章），Madelung エネルギー（第13章），バンド形成の定性描像（第14章）．行列の固有値問題と Taylor 展開は<a href="appA_math.html">付録A</a>にまとめがある．結晶の並進対称性（Bloch の定理）は本文中で必要な分だけ自己完結的に導入するので，固体物理の履修は仮定しない．</div>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この付録の目次</strong>
+  <ol>
+    <li><a href="#secC-1">C.1 結晶軌道ダイアグラムとは何か — コマンドと出力の全体像</a></li>
+    <li><a href="#secC-2">C.2 ステップ1：結晶構造を読む — 基本単位胞と空間群</a></li>
+    <li><a href="#secC-3">C.3 ステップ2：結晶を二つの部分格子に分ける — 基底関数と VSIP</a></li>
+    <li><a href="#secC-4">C.4 ステップ3：除いた側は点電荷になる — 配位子場</a></li>
+    <li><a href="#secC-5">C.5 ステップ4：Bloch 和 — 二原子分子の「$N$ 原子版」</a></li>
+    <li><a href="#secC-6">C.6 ステップ5：対称性ラベル — X1+ とは何か</a></li>
+    <li><a href="#secC-7">C.7 ステップ6：拡張 Hückel 法でハミルトニアンを組む</a></li>
+    <li><a href="#secC-8">C.8 ステップ7：永年方程式を解く — 重なり行列の固有値という主役</a></li>
+    <li><a href="#secC-9">C.9 overlap catastrophe — 発散する反結合軌道</a></li>
+    <li><a href="#secC-10">C.10 Löwdin 1次推定 — ~ 付き準位の正体</a></li>
+    <li><a href="#secC-11">C.11 ステップ8：電子を詰める — aufbau と HOMO/LUMO</a></li>
+    <li><a href="#secC-12">C.12 ステップ9：結晶軌道の色 — COOP による結合性判定</a></li>
+    <li><a href="#secC-13">C.13 出力の読み方 総まとめ — AlN の X 点を一行ずつ</a></li>
+    <li><a href="#secC-14">C.14 まとめと演習</a></li>
+  </ol>
+</nav>
+
+<h2 id="secC-1">C.1 結晶軌道ダイアグラムとは何か — コマンドと出力の全体像</h2>
+
+<h3>C.1.1 分子軌道ダイアグラムの結晶版</h3>
+
+<p>第12章の最後で CH$_4$ の分子軌道ダイアグラムを描いた．左に C の原子軌道，右に H$_4$ の対称化軌道（SALC）を置き，<strong>同じ既約表現に属するものだけが混ざって</strong>，中央に結合性・反結合性の分子軌道ができる — あの図である．化学者はこの図を見ただけで，どの軌道がどの軌道と手を結び，電子がどこまで詰まり，どこに空きがあるかを一目で読み取る．</p>
+
+<p>結晶に対して同じ図を描きたい，というのが結晶軌道ダイアグラム（COD）の動機である．岩塩型 AlN なら，左に「Al だけの格子」の電子状態，右に「N だけの格子」の電子状態を置き，中央に「AlN 結晶」の電子状態を描く．左右をつなぐ規則は分子のときとまったく同じで，<strong>同じ既約表現の状態だけが混ざる</strong>．違いはただ一つ，結晶には並進対称性があるので，この図が<strong>波数 $\kk$ の値ごとに 1 枚ずつ</strong>できることである．</p>
+
+<div class="box def">
+<p class="box-title">定義：結晶軌道ダイアグラム（COD）</p>
+<p>結晶を二つの部分格子（fragment sublattice）に分け，各 $\kk$ 点において，（i）左の部分格子だけの電子準位，（ii）右の部分格子だけの電子準位，（iii）全結晶の電子準位を，既約表現のラベル付きで並べた準位相関図．（i）（ii）は「化学結合をつくる前」，（iii）は「つくった後」に対応し，両者を結ぶ相関線が「どの軌道とどの軌道が結合したか」を表す．</p>
+</div>
+
+<h3>C.1.2 実行するコマンドと出力</h3>
+
+<p>本付録で追いかける実例はこれである．</p>
+
+<pre><code><span class="prompt">$</span> conda create -n crystod python=3.11
+<span class="prompt">$</span> conda activate crystod
+<span class="prompt">$</span> pip install crystod
+<span class="prompt">$</span> crystod --diagram -c POSCAR_AlN_Fm-3m --co-left Al --co-right N
+
+<span class="prompt">#</span> NOTE : POSCAR_AlN_Fm-3m is given below:
+<span class="prompt">$</span> cat POSCAR_AlN_Fm-3m
+<span class="prompt">$</span> Al4 N4
+<span class="prompt">$</span>    1.00000000000000
+<span class="prompt">$</span>      4.0443663777730645    0.0000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.0000000000000000    4.0443663777730645    0.0000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.0000000000000000    4.0443663777730645
+<span class="prompt">$</span>    Al   N
+<span class="prompt">$</span>      4     4
+<span class="prompt">$</span> Direct
+<span class="prompt">$</span>      0.0000000000000000    0.0000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.5000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.0000000000000000    0.5000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.5000000000000000    0.5000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.0000000000000000    0.5000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.0000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.5000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.5000000000000000    0.5000000000000000
+</code></pre>
+
+<p>数十秒後，端末に各 $\kk$ 点の準位表が流れ，<code>CrystOD_POSCAR_AlN_Fm-3m.html</code> というインタラクティブな図が書き出される．端末出力のうち X 点の部分を先に見てしまおう（この表を一行ずつ読めるようになるのが本付録のゴールである）．</p>
+
+<pre><code> * k point X (1/2,0,1/2) *
+   (4 near-dependent diffuse Bloch combination(s) below overlap floor 0.2:
+    energies marked ~ are first-order Loewdin estimates; ...)
+   Al  : Al 1s X1+ (-1590.88), Al 2s X1+ (-133.04), Al 2p X5- (-87.40),
+         Al 2p X3- (-87.40), Al 3p X3- (-14.94), Al 3s X1+ (~-6.65),
+         Al 3p X5- (7.03)
+   N   : N 1s X1+ (-425.05), N 2s X1+ (-25.04), N 2p X3- (-14.29),
+         N 2p X5- (-13.23)
+   crystal :
+     X1+ #1   -1590.91 eV  x1  2e   Al 1s X1+ 100.0%
+     X1+ #2    -424.91 eV  x1  2e   N 1s X1+ 99.9%
+     X1+ #3    -133.16 eV  x1  2e   Al 2s X1+ 98.8%
+     X3- #1     -87.40 eV  x1  2e   Al 2p X3- 99.9%
+     X5- #1     -87.39 eV  x2  4e   Al 2p X5- 99.8%
+     X1+ #4     -25.77 eV  x1  2e   N 2s X1+ 92.1%  Al 3s X1+ 7.9%
+     X3- #2     -17.24 eV  x1  2e   Al 3p X3- 58.7%  N 2p X3- 41.2%
+     X5- #2     -14.11 eV  x2  4e   N 2p X5- 84.9%  Al 3p X5- 15.1%
+     X1+ #5     ~-5.92 eV  x1       Al 3s X1+ 90.9%  N 2s X1+ 7.8%
+     X5- #3     ~-4.36 eV  x2       Al 3p X5- 84.8%  N 2p X5- 15.0%
+     X3- #3      -0.36 eV  x1       N 2p X3- 58.8%  Al 3p X3- 41.2%
+</code></pre>
+<p class="codecap">AlN の X 点の端末出力（要約）．エネルギーに <code>~</code> が付いた準位が本付録の主役の一つ「Löwdin 1次推定」である．</p>
+
+<p>処理の全体像を図 C.1 に示す．以降の節はこのフローチャートを上から順にたどる構成になっている．</p>
+
+<figure>
+<svg viewBox="0 0 780 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="crystod --diagram の処理フローチャート">
+<defs><marker id="arf" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#566573"/></marker></defs>
+<rect x="10" y="10" width="760" height="410" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif" font-size="13.5">
+<rect x="60" y="28" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="46" text-anchor="middle" fill="#1a5276">① POSCAR を読み，基本単位胞へ変換</text><text x="215" y="62" text-anchor="middle" fill="#566573" font-size="12">空間群 Fm-3m（No. 225）を同定 → §C.2</text>
+<rect x="60" y="82" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="100" text-anchor="middle" fill="#1a5276">② --co-left / --co-right で部分格子に分割</text><text x="215" y="116" text-anchor="middle" fill="#566573" font-size="12">全電子基底（STO）と VSIP を用意 → §C.3</text>
+<rect x="60" y="136" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="154" text-anchor="middle" fill="#1a5276">③ 除いた部分格子を点電荷列に置換</text><text x="215" y="170" text-anchor="middle" fill="#566573" font-size="12">配位子場でオンサイト準位がシフト → §C.4</text>
+<rect x="60" y="190" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="208" text-anchor="middle" fill="#1a5276">④ 各特殊 k 点で Bloch 和と S(k) を構築</text><text x="215" y="224" text-anchor="middle" fill="#566573" font-size="12">STO 重なり積分の格子和 → §C.5</text>
+<rect x="60" y="244" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="262" text-anchor="middle" fill="#1a5276">⑤ 小群の既約表現で状態を分類</text><text x="215" y="278" text-anchor="middle" fill="#566573" font-size="12">X1+, X3-, X5- のラベル → §C.6</text>
+<rect x="410" y="28" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="46" text-anchor="middle" fill="#1a5276">⑥ Wolfsberg–Helmholz で H(k) を構築</text><text x="565" y="62" text-anchor="middle" fill="#566573" font-size="12">拡張 Hückel 近似，K = 1.75 → §C.7</text>
+<rect x="410" y="82" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="100" text-anchor="middle" fill="#1a5276">⑦ 一般化固有値問題を解く</text><text x="565" y="116" text-anchor="middle" fill="#566573" font-size="12">S の固有値 ε が主役 → §C.8〜C.10</text>
+<rect x="410" y="136" width="310" height="40" rx="6" fill="#fdf3e6" stroke="#b9770e"/><text x="565" y="154" text-anchor="middle" fill="#b03a2e">ε &lt; 0.2 のモードは Löwdin 1次推定で復元</text><text x="565" y="170" text-anchor="middle" fill="#566573" font-size="12">~ 印の推定準位 → §C.9, C.10</text>
+<rect x="410" y="190" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="208" text-anchor="middle" fill="#1a5276">⑧ 電子を詰める（aufbau）</text><text x="565" y="224" text-anchor="middle" fill="#566573" font-size="12">HOMO / LUMO の決定 → §C.11</text>
+<rect x="410" y="244" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="262" text-anchor="middle" fill="#1a5276">⑨ COOP で結合性を判定（青・黒・赤）</text><text x="565" y="278" text-anchor="middle" fill="#566573" font-size="12">2 Re c_L†S c_R の符号 → §C.12</text>
+<rect x="235" y="310" width="310" height="44" rx="6" fill="#e8f0f8" stroke="#1a5276" stroke-width="1.8"/><text x="390" y="329" text-anchor="middle" fill="#1a5276" font-weight="bold">⑩ 端末の準位表 + インタラクティブ HTML</text><text x="390" y="346" text-anchor="middle" fill="#566573" font-size="12">k 点ボタン・相関線・波動関数スケッチ → §C.13</text>
+<line x1="215" y1="68" x2="215" y2="82" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="215" y1="122" x2="215" y2="136" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="215" y1="176" x2="215" y2="190" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="215" y1="230" x2="215" y2="244" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<path d="M 370 264 C 395 264 395 48 408 48" fill="none" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="68" x2="565" y2="82" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="122" x2="565" y2="136" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="176" x2="565" y2="190" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="230" x2="565" y2="244" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<path d="M 565 284 C 565 300 480 300 465 310" fill="none" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+</g>
+</svg>
+<figcaption>図 C.1　<code>crystod --diagram</code> の処理の流れ．⑦〜⑧の「重なり行列の固有値 $\varepsilon$」まわり（橙色の箱）が本付録の山場である．</figcaption>
+</figure>
+
+<div class="box note">
+<p class="box-title">補足：この図は「第一原理計算」ではない</p>
+<p>COD のエネルギーは，第10章で使った PySCF のような自己無撞着な計算ではなく，<strong>対称性 + 厳密な重なり積分 + 経験的パラメータ（拡張 Hückel 法）</strong>から出てくる半経験値である．目的は正確な固有値を出すことではなく，「どの軌道が，どの対称性で，どちら向きに混ざるか」という<strong>化学結合の骨格</strong>を，手描きのダイアグラムと同じ流儀で，しかし取りこぼしなく描くことにある．定量が必要なら CrystOD には同じ図を PySCF の周期系 DFT で描く <code>--pyscf</code> モードも用意されているが，本付録では扱わない．</p>
+</div>
+
+<h2 id="secC-2">C.2 ステップ1：結晶構造を読む — 基本単位胞と空間群</h2>
+
+<p>入力の <code>POSCAR_AlN_Fm-3m</code> は VASP 形式の構造ファイルで，一辺 $a = 4.044$ Å の立方体（慣用単位胞）に Al 4 個・N 4 個の計 8 原子が入っている．実行するとまず</p>
+
+<pre><code> ### Inputed cell was converted into primitive cell. ###
+
+ * Space group *
+ Fm-3m (225)
+</code></pre>
+
+<p>と表示される．岩塩型構造は面心立方（fcc）格子なので，並進対称性まで考えると独立な原子は Al 1 個と N 1 個だけである．CrystOD は spglib で対称性を検出し，8 原子の慣用胞を <strong>2 原子の基本単位胞（primitive cell）</strong>に変換してから計算する．基本並進ベクトルは</p>
+
+$$
+\bm{a}_1=\frac{a}{2}(0,1,1),\quad
+\bm{a}_2=\frac{a}{2}(1,0,1),\quad
+\bm{a}_3=\frac{a}{2}(1,1,0)
+$$
+
+<p>で，Al は原点，N は $(\bm{a}_1+\bm{a}_2+\bm{a}_3)/2$ に座る．あとで効いてくる距離を二つ控えておこう．</p>
+
+<ul>
+  <li><strong>Al–N 最近接距離</strong>：$a/2 = 2.022$ Å（6 配位の八面体）</li>
+  <li><strong>Al–Al 最近接距離</strong>：$a/\sqrt{2} = 2.860$ Å，配位数 <strong>12</strong>（fcc 副格子）</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 780 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="岩塩型AlNの(001)面．AlとNが市松模様に並び，Al-N距離2.022Å，Al-Al距離2.860Åを示す">
+<rect x="10" y="10" width="760" height="320" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif">
+<text x="390" y="38" text-anchor="middle" font-size="14" fill="#14684a">岩塩型 AlN の (001) 面（慣用胞の一辺 a = 4.044 Å）</text>
+<!-- 5x5 checkerboard, spacing 55 px = a/2 -->
+<g>
+<!-- Al: filled steel blue, N: filled orange-red -->
+<!-- row y=90..310 x=170..390 -->
+<circle cx="170" cy="90" r="13" fill="#1a5276"/><circle cx="280" cy="90" r="13" fill="#1a5276"/><circle cx="390" cy="90" r="13" fill="#1a5276"/>
+<circle cx="225" cy="90" r="10" fill="#b03a2e"/><circle cx="335" cy="90" r="10" fill="#b03a2e"/>
+<circle cx="225" cy="145" r="13" fill="#1a5276"/><circle cx="335" cy="145" r="13" fill="#1a5276"/>
+<circle cx="170" cy="145" r="10" fill="#b03a2e"/><circle cx="280" cy="145" r="10" fill="#b03a2e"/><circle cx="390" cy="145" r="10" fill="#b03a2e"/>
+<circle cx="170" cy="200" r="13" fill="#1a5276"/><circle cx="280" cy="200" r="13" fill="#1a5276"/><circle cx="390" cy="200" r="13" fill="#1a5276"/>
+<circle cx="225" cy="200" r="10" fill="#b03a2e"/><circle cx="335" cy="200" r="10" fill="#b03a2e"/>
+<circle cx="225" cy="255" r="13" fill="#1a5276"/><circle cx="335" cy="255" r="13" fill="#1a5276"/>
+<circle cx="170" cy="255" r="10" fill="#b03a2e"/><circle cx="280" cy="255" r="10" fill="#b03a2e"/><circle cx="390" cy="255" r="10" fill="#b03a2e"/>
+<circle cx="170" cy="310" r="13" fill="#1a5276"/><circle cx="280" cy="310" r="13" fill="#1a5276"/><circle cx="390" cy="310" r="13" fill="#1a5276"/>
+<circle cx="225" cy="310" r="10" fill="#b03a2e"/><circle cx="335" cy="310" r="10" fill="#b03a2e"/>
+</g>
+<!-- distance annotations -->
+<line x1="280" y1="200" x2="335" y2="200" stroke="#14684a" stroke-width="2"/>
+<text x="300" y="190" font-size="12.5" fill="#14684a">a/2 = 2.022 Å</text>
+<line x1="280" y1="200" x2="335" y2="145" stroke="#b9770e" stroke-width="2" stroke-dasharray="5 3"/>
+<text x="323" y="168" font-size="12.5" fill="#b9770e">2.860 Å</text>
+<text x="150" y="90" text-anchor="end" font-size="13" fill="#1a5276">Al</text>
+<text x="150" y="149" text-anchor="end" font-size="13" fill="#b03a2e">N</text>
+<!-- legend right -->
+<g font-size="13.5">
+<text x="460" y="100" fill="#1a5276">● Al 副格子：それ自体が fcc 格子．</text>
+<text x="475" y="122" fill="#566573" font-size="12.5">最近接 Al–Al は 12 個，距離 2.860 Å．</text>
+<text x="475" y="142" fill="#566573" font-size="12.5">この「密さ」が §C.9 の伏線になる．</text>
+<text x="460" y="180" fill="#b03a2e">● N 副格子：これも fcc 格子．</text>
+<text x="475" y="202" fill="#566573" font-size="12.5">Al 副格子と互いに a/2 だけずれて重なる．</text>
+<text x="460" y="240" fill="#14684a">実線：Al–N 最近接（八面体 6 配位）</text>
+<text x="460" y="262" fill="#b9770e">破線：Al–Al 最近接（面対角方向）</text>
+</g>
+</g>
+</svg>
+<figcaption>図 C.2　岩塩型 AlN の (001) 断面．岩塩型は「fcc の Al 副格子」と「fcc の N 副格子」を半格子ずらして重ねた構造とみなせる．COD はまさにこの 2 つの副格子への分解に沿って結晶を眺める．</figcaption>
+</figure>
+
+<div class="box phys">
+<p class="box-title">物理の眼：なぜ基本単位胞に直すのか</p>
+<p>Bloch の定理（§C.5）は「基本並進」に対する定理なので，慣用胞のまま計算すると同じバンドが折りたたまれて 4 重に重複して現れる．基本単位胞なら独立な原子は Al 1 個・N 1 個で，基底関数の数も最小になり，ダイアグラムが最も見やすくなる．出力の 1 行目「converted into primitive cell」はこの変換の宣言である．</p>
+</div>
+
+<h2 id="secC-3">C.3 ステップ2：結晶を二つの部分格子に分ける — 基底関数と VSIP</h2>
+
+<h3>C.3.1 --co-left と --co-right</h3>
+
+<p>オプション <code>--co-left Al --co-right N</code> は「ダイアグラムの左の列を Al 副格子，右の列を N 副格子にせよ」という指定である．化学式ですべての原子を左右どちらかに割り当てる決まりで，SrTiO$_3$ なら <code>--co-left SrTi --co-right O3</code> のように複数元素をまとめることもできる．</p>
+
+<p>端末には次のように出る．</p>
+
+<pre><code> * Fragments (full-electron basis: core + valence shells; ...) *
+ left  Al : Al 1s 2s 2p 3s 3p x1 site(s), 13 electrons
+ right N  : N 1s 2s 2p x1 site(s), 7 electrons
+ electrons per cell in the diagram: 20
+</code></pre>
+
+<p>注目してほしいのは <strong>full-electron basis（全電子基底）</strong>という言葉である．価電子の 3s, 3p だけでなく，1s や 2p のような内殻（コア）まで全部の殻が基底に入っている．内殻はほとんど混成しないが，準位図に「深いところで平坦なまま動かない線」として現れることで，エネルギーの絶対スケールの目印になる（XPS の内殻準位に対応する）．電子数は中性原子の合計 $13+7=20$ 個／基本単位胞である．</p>
+
+<h3>C.3.2 基底関数：Slater 型軌道と VSIP</h3>
+
+<p>各殻の動径関数には第5章で導入した <em class="term">Slater 型軌道</em>（STO）$R(r)\propto r^{n-1}e^{-\zeta r}$ を使う．そして各殻の「原子内でのエネルギー」として <em class="term">VSIP</em>（valence state ionization potential，原子価状態イオン化ポテンシャル）$h$ を割り当てる．これは分光データ等から決められた経験値で，拡張 Hückel 法の伝統的なパラメータ表（YAeHMOP のテーブル）そのままである．AlN で使われる値を表 C.1 に掲げる．</p>
+
+<div class="tablewrap">
+<table>
+<caption>表 C.1　AlN の基底関数．$h$ は VSIP（オンサイトエネルギー），$\zeta$ は STO の軌道指数．内殻の $h$ は原子の Hartree–Fock 計算（第10章の PySCF と同じ流儀）を各元素についてアーカイブした値，$\zeta$ は Slater 則による．</caption>
+<thead><tr><th>殻</th><th>$h$ (eV)</th><th>$\zeta$ (bohr$^{-1}$)</th><th>電子数</th><th>役割</th></tr></thead>
+<tbody>
+<tr><td>Al 1s</td><td>$-1590.98$</td><td>12.70</td><td>2</td><td>内殻（不動の目印）</td></tr>
+<tr><td>Al 2s</td><td>$-133.35$</td><td>4.43</td><td>2</td><td>内殻</td></tr>
+<tr><td>Al 2p</td><td>$-87.38$</td><td>4.43</td><td>6</td><td>内殻</td></tr>
+<tr><td><strong>Al 3s</strong></td><td>$-12.30$</td><td><strong>1.167</strong></td><td>2</td><td>価電子．$\zeta$ が小さい＝広がっている</td></tr>
+<tr><td><strong>Al 3p</strong></td><td>$-6.50$</td><td><strong>1.167</strong></td><td>1</td><td>価電子</td></tr>
+<tr><td>N 1s</td><td>$-425.05$</td><td>6.70</td><td>2</td><td>内殻</td></tr>
+<tr><td>N 2s</td><td>$-26.00$</td><td>1.95</td><td>2</td><td>価電子</td></tr>
+<tr><td>N 2p</td><td>$-13.40$</td><td>1.95</td><td>3</td><td>価電子</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：$\zeta$ の大小を見ておく</p>
+<p>Al の価電子殻（$\zeta = 1.167$）は N の価電子殻（$\zeta = 1.95$）よりずっと広がっている．第2章で見たように，陽性の金属原子の価電子軌道は大きく膨らんでいるからである．一方 Al 副格子は 2.860 Å という近距離に 12 個も隣がいる（図 C.2）．「広がった軌道 × 密な格子」— この組合せが §C.9 の overlap catastrophe の主因になるので，ここで頭の隅に置いておいてほしい．</p>
+</div>
+
+<h2 id="secC-4">C.4 ステップ3：除いた側は点電荷になる — 配位子場</h2>
+
+<p>「Al 副格子だけの電子状態」を計算するとき，N 原子を単純に消し去ってよいだろうか．よくない．第13・14章で学んだとおり，イオン結晶では周囲のイオンが作る静電場（Madelung 場）が各サイトの準位を大きく押し上げ・押し下げるからである．NaCl で Cl$^-$-3p が持ち上がり Na$^+$-3s が下がる，あの効果である．</p>
+
+<p>そこで CrystOD は，除いた側の副格子を<strong>形式酸化数をもつ点電荷の格子</strong>に置き換える．</p>
+
+<pre><code> * Ligand-field point charges (removed sublattice) *
+ left  Al feels the N^-3 lattice (multipole ligand field + penetration; ...)
+ right N  feels the Al^+3 lattice (...)
+</code></pre>
+
+<p>酸化数（AlN なら Al$^{+3}$，N$^{-3}$）は pymatgen の推定に任され，<code>--oxidation Al=+3 N=-3</code> で上書きもできる．点電荷の場は STO との厳密な行列要素として取り込まれ，s 軌道なら準位の一様シフト，d 軌道なら第12章で学んだ結晶場分裂（$t_{2g}$–$e_g$ 分裂）まで正しく出る仕掛けになっている．AlN の場合，Al サイトの価電子殻はこの場で約 $-4.6$ eV 押し下げられ，たとえば Al 3s のオンサイトエネルギーは</p>
+
+$$
+\hb_{3s} = \underbrace{-12.30}_{\text{VSIP}} \underbrace{-4.58}_{\text{配位子場}} = -16.88\ \text{eV}
+$$
+
+<p>となる．以降，この「配位子場込みのオンサイトエネルギー」を $\hb$（エイチ・バー）と書く．</p>
+
+<div class="box note">
+<p class="box-title">補足：Madelung の単極項はあえて省かれている</p>
+<p>点電荷格子の静電ポテンシャルのうち，球対称な単極（Madelung）成分は AlN で $\mp 11.64$ eV にもなるが，CrystOD はこれを表示上<strong>省いている</strong>（端末に「jellium-referenced monopole ... omitted」と明記される）．イオンを $\pm 3$ に帯電させる仮想過程のエネルギーと大きく相殺する項であり，経験パラメータである VSIP には後者が含まれていないので，両方省くのが釣り合いのとれた設計，という判断である．興味があれば第13章の Madelung エネルギーの議論と見比べてほしい．</p>
+</div>
+
+<h2 id="secC-5">C.5 ステップ4：Bloch 和 — 二原子分子の「$N$ 原子版」</h2>
+
+<h3>C.5.1 二原子分子の復習から</h3>
+
+<p>第11章で，2 個の 1s 軌道 $\phi_A,\phi_B$ から結合性・反結合性軌道</p>
+
+$$
+\psi_\pm=\frac{\phi_A\pm\phi_B}{\sqrt{2(1\pm S)}},\qquad
+\varepsilon_\pm=\frac{\alpha\pm\beta}{1\pm S}
+$$
+
+<p>を導いた．係数のパターンは $(+,+)$ と $(+,-)$ の 2 通りだった．原子が 3 個，4 個…と増えれば独立な符号パターンも 3 通り，4 通り…と増える．では原子が $N\to\infty$ 個，等間隔に並んだ結晶ではどうなるか．その答えが <em class="term">Bloch 和</em>である．</p>
+
+<div class="box def">
+<p class="box-title">定義：Bloch 和（結晶の対称化軌道）</p>
+<p>格子ベクトル $\RR$ の位置にある原子軌道を $\phi(\rr-\RR)$ とするとき，波数 $\kk$ の Bloch 和を</p>
+$$
+\chi_{\kk}(\rr)=\frac{1}{\sqrt{N}}\sum_{\RR} e^{i\kk\cdot\RR}\,\phi(\rr-\RR)
+$$
+<p>で定義する．係数 $e^{i\kk\cdot\RR}$ は絶対値 1 の位相因子で，$\kk$ が「隣どうしの符号パターン」を指定する連続ラベルになっている．$\kk=0$（$\Gamma$ 点）は全原子同符号 $(+,+,+,\dots)$，Brillouin ゾーン境界は隣どうし逆符号 $(+,-,+,-,\dots)$ の交代パターンに対応する．並進対称性のおかげで，<strong>異なる $\kk$ の Bloch 和どうしは決して混ざらない</strong>．だから準位図は $\kk$ ごとに独立に描ける．</p>
+</div>
+
+<p>つまり Bloch 和とは，二原子分子の $\pm$ 結合の一般化にほかならない．$\psi_+$ が $\Gamma$ 点，$\psi_-$ がゾーン境界の元祖である．CrystOD が図を描く $\kk$ 点は，空間群 Fm-3m の<strong>特殊 $\kk$ 点</strong>である $\Gamma\,(0,0,0)$，$L\,(\tfrac12,\tfrac12,\tfrac12)$，$X\,(\tfrac12,0,\tfrac12)$，$W\,(\tfrac12,\tfrac14,\tfrac34)$ の 4 つ（座標は基本逆格子基底）である．</p>
+
+<h3>C.5.2 重なり行列 $S(\kk)$ — 対角が 1 でなくなる！</h3>
+
+<p>Bloch 和どうしの重なり積分を並べたのが重なり行列 $S(\kk)$ である．基底 $i,j$（例：$i=$ Al 3s，$j=$ N 2p$_z$）について</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+S_{ij}(\kk)=\sum_{\RR} e^{i\kk\cdot(\RR+\bm{\tau}_j-\bm{\tau}_i)}\,
+s_{ij}(\RR)
+\label{eq:S-bloch}
+\end{equation}
+$$
+</div>
+
+<p>ここで $s_{ij}(\RR)$ は「原点セルの軌道 $i$ と，$\RR$ だけ離れたセルの軌道 $j$」の普通の二中心重なり積分で，第5章で手計算したものの s/p 版である（CrystOD はこれを STO について厳密に，収束するまで遠くのセルまで足し上げる）．</p>
+
+<p>ここで学部生が必ず一度は驚く事実を述べる．<strong>同じ軌道どうしの対角要素 $S_{ii}(\kk)$ が 1 にならない</strong>のである．なぜなら，隣のセルの「同じ Al 3s」との重なりが位相付きで足し込まれるからだ：</p>
+
+$$
+S_{ii}(\kk)=1+\underbrace{\sum_{\RR\neq 0}e^{i\kk\cdot\RR}\,s_{ii}(\RR)}_{\displaystyle \equiv\ \sigma(\kk)}
+$$
+
+<p>この $\sigma(\kk)$（同一軌道の隣接セル重なりの位相付き和）が本付録の最重要量である．AlN の Al 3s について実測してみよう．殻ごとの寄与を表 C.2 に示す．</p>
+
+<div class="tablewrap">
+<table>
+<caption>表 C.2　Al 3s Bloch 和の対角重なり $S_{ii}(\kk)=1+\sigma(\kk)$ の殻分解（CrystOD の内部量を実測）．$s$ は 1 対の Al 3s–3s 重なり積分，「位相和」は $\sum e^{i\kk\cdot\RR}$ をその殻内で足した値．</caption>
+<thead><tr><th>近接殻</th><th>距離 (Å)</th><th>個数</th><th>$s_{3s,3s}$</th><th colspan="2">$\Gamma$ 点</th><th colspan="2">X 点</th></tr></thead>
+<tbody>
+<tr><td></td><td></td><td></td><td></td><td>位相和</td><td>寄与</td><td>位相和</td><td>寄与</td></tr>
+<tr><td>第1（面対角）</td><td>2.860</td><td>12</td><td>0.339</td><td>$+12$</td><td>$+4.07$</td><td>$-4$</td><td>$-1.36$</td></tr>
+<tr><td>第2（稜方向）</td><td>4.044</td><td>6</td><td>0.118</td><td>$+6$</td><td>$+0.71$</td><td>$+6$</td><td>$+0.71$</td></tr>
+<tr><td>第3</td><td>4.953</td><td>24</td><td>0.043</td><td>$+24$</td><td>$+1.03$</td><td>$-8$</td><td>$-0.34$</td></tr>
+<tr><td>第4</td><td>5.720</td><td>12</td><td>0.017</td><td>$+12$</td><td>$+0.20$</td><td>$+12$</td><td>$+0.20$</td></tr>
+<tr><td colspan="4"><strong>合計（遠方まで）</strong></td><td></td><td>$S_{ii}=7.27$</td><td></td><td>$S_{ii}=0.158$</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>驚くべき数字である．$\Gamma$ 点では 12 個の隣が全部同位相で足し合わさり，たった 1 本の Al 3s の「ノルム」が $7.27$ 倍に膨らむ．逆に X 点では，12 個の最近接のうち <strong>4 個が同位相（$+1$），8 個が逆位相（$-1$）</strong>となって激しく打ち消し合い，$S_{ii}=0.158$，すなわち $\sigma=-0.84$ までしぼんでしまう（図 C.3）．</p>
+
+<figure>
+<svg viewBox="0 0 780 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Γ点とX点でのAl 3s Bloch和の位相パターン．Γでは12近接が全て同位相，Xでは4個が同位相・8個が逆位相">
+<rect x="10" y="10" width="760" height="310" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif" font-size="13">
+<text x="200" y="40" text-anchor="middle" font-size="14" fill="#14684a">Γ 点：12 近接すべて同位相</text>
+<text x="580" y="40" text-anchor="middle" font-size="14" fill="#14684a">X 点：4 個が同位相，8 個が逆位相</text>
+<!-- Gamma panel: central atom + ring of 12 (schematic, drawn as 12 around) -->
+<g>
+<circle cx="200" cy="170" r="16" fill="#1a5276"/><text x="200" y="175" text-anchor="middle" fill="#ffffff" font-size="12">+</text>
+<!-- 12 neighbours -->
+<g fill="#5b8db8">
+<circle cx="200" cy="90" r="12"/><circle cx="240" cy="101" r="12"/><circle cx="269" cy="130" r="12"/><circle cx="280" cy="170" r="12"/><circle cx="269" cy="210" r="12"/><circle cx="240" cy="239" r="12"/><circle cx="200" cy="250" r="12"/><circle cx="160" cy="239" r="12"/><circle cx="131" cy="210" r="12"/><circle cx="120" cy="170" r="12"/><circle cx="131" cy="130" r="12"/><circle cx="160" cy="101" r="12"/>
+</g>
+<g fill="#ffffff" font-size="11" text-anchor="middle">
+<text x="200" y="94">+</text><text x="240" y="105">+</text><text x="269" y="134">+</text><text x="280" y="174">+</text><text x="269" y="214">+</text><text x="240" y="243">+</text><text x="200" y="254">+</text><text x="160" y="243">+</text><text x="131" y="214">+</text><text x="120" y="174">+</text><text x="131" y="134">+</text><text x="160" y="105">+</text>
+</g>
+<text x="200" y="290" text-anchor="middle" fill="#566573">位相和 +12 → S<tspan font-size="10" dy="3">ii</tspan><tspan dy="-3"> = 1 + σ = 7.27（膨張）</tspan></text>
+</g>
+<!-- X panel -->
+<g>
+<circle cx="580" cy="170" r="16" fill="#1a5276"/><text x="580" y="175" text-anchor="middle" fill="#ffffff" font-size="12">+</text>
+<!-- 4 in-phase: the four neighbours perpendicular to the X direction -->
+<g fill="#5b8db8">
+<circle cx="580" cy="90" r="12"/><circle cx="660" cy="170" r="12"/><circle cx="580" cy="250" r="12"/><circle cx="500" cy="170" r="12"/>
+</g>
+<g fill="#ffffff" font-size="11" text-anchor="middle">
+<text x="580" y="94">+</text><text x="660" y="174">+</text><text x="580" y="254">+</text><text x="500" y="174">+</text>
+</g>
+<!-- 8 out-of-phase -->
+<g fill="#c0604d">
+<circle cx="637" cy="113" r="12"/><circle cx="637" cy="227" r="12"/><circle cx="523" cy="227" r="12"/><circle cx="523" cy="113" r="12"/>
+<circle cx="617" cy="76" r="12"/><circle cx="680" cy="230" r="12"/><circle cx="543" cy="264" r="12"/><circle cx="480" cy="110" r="12"/>
+</g>
+<g fill="#ffffff" font-size="11" text-anchor="middle">
+<text x="637" y="117">−</text><text x="637" y="231">−</text><text x="523" y="231">−</text><text x="523" y="117">−</text>
+<text x="617" y="80">−</text><text x="680" y="234">−</text><text x="543" y="268">−</text><text x="480" y="114">−</text>
+</g>
+<text x="580" y="290" text-anchor="middle" fill="#566573">位相和 4 − 8 = −4 → S<tspan font-size="10" dy="3">ii</tspan><tspan dy="-3"> = 1 + σ = 0.158（収縮！）</tspan></text>
+</g>
+<text x="390" y="315" text-anchor="middle" fill="#14684a" font-size="12.5">X 点の波数ベクトルに垂直な面内の 4 近接だけが同位相で生き残る</text>
+</g>
+</svg>
+<figcaption>図 C.3　Al 副格子（fcc）上の 3s Bloch 和の位相パターン（模式図）．X 点では波数方向に成分をもつ 8 個の近接が逆位相になり，重なりの格子和がほぼ打ち消される．</figcaption>
+</figure>
+
+<div class="box why">
+<p class="box-title">なぜ？：$S_{ii}$ が小さいとはどういうことか</p>
+<p>二原子分子で考えると分かりやすい．反結合性の組合せ $\phi_A-\phi_B$ のノルムは $2(1-S)$ で，$S\to 1$（2 つの軌道がほぼ同じ形）の極限でゼロに近づく．ノルムがゼロに近い＝<strong>その符号パターンでは，足し合わせた軌道がほとんど打ち消え合って「実体」が残らない</strong>ということである．X 点の Al 3s はまさにこの状況で，$S_{ii}=0.158$ という数字は「広がった 3s 軌道たちを $+,-$ 交代で重ねると，波動関数の 84 %が消し飛ぶ」ことを意味する．消え残ったわずかな成分が正規化で $1/\sqrt{0.158}$ 倍に増幅される — ここに §C.9 の災いの種がある．</p>
+</div>
+
+<h2 id="secC-6">C.6 ステップ5：対称性ラベル — X1+ とは何か</h2>
+
+<p>第12章では点群の既約表現（$A_1$，$T_2$ など）で分子軌道を分類した．結晶では，$\kk$ 点ごとに「その $\kk$ を不変に保つ対称操作の集合」＝<em class="term">小群</em>（little group）をとり，その既約表現で Bloch 和を分類する．ラベルは $\kk$ 点の名前＋通し番号＋パリティで書かれ，X 点なら X1+，X3-，X5- のようになる（CrystOD は ISOTROPY（Miller–Love）の記法を使う．+/− は反転対称性に対する偶奇である）．</p>
+
+<p>役割は分子の場合とまったく同じで，<strong>混成の選択則</strong>を与える：</p>
+
+<div class="box thm">
+<p class="box-title">COD の基本則（第12章の大直交定理の帰結）</p>
+<p>同じ $\kk$ 点で<strong>同じ既約表現</strong>に属する Bloch 和どうしだけが混ざり，結合性・反結合性の結晶軌道をつくる．既約表現が異なれば重なり積分もハミルトニアン行列要素も厳密にゼロであり，相手のいない状態は<strong>厳密に非結合</strong>のまま残る．</p>
+</div>
+
+<p>AlN の X 点で各殻がどの既約表現に落ちるかを整理すると表 C.3 のようになる．これは群論だけから決まる「座席表」であり，エネルギー計算の前に確定する．</p>
+
+<div class="tablewrap">
+<table>
+<caption>表 C.3　X 点 $(\tfrac12,0,\tfrac12)$ における AlN の基底の既約表現分解（小群は $D_{4h}$ 相当）．同じ行に並んだ状態だけが互いに混成できる．</caption>
+<thead><tr><th>既約表現</th><th>次元</th><th>Al 側の基底</th><th>N 側の基底</th><th>できる結晶軌道の本数</th></tr></thead>
+<tbody>
+<tr><td><strong>X1+</strong></td><td>1</td><td>Al 1s，Al 2s，<strong>Al 3s</strong></td><td>N 1s，N 2s</td><td>5（#1〜#5）</td></tr>
+<tr><td><strong>X3-</strong></td><td>1</td><td>Al 2p$_\parallel$，Al 3p$_\parallel$</td><td>N 2p$_\parallel$</td><td>3（#1〜#3）</td></tr>
+<tr><td><strong>X5-</strong></td><td>2</td><td>Al 2p$_\perp$，Al 3p$_\perp$</td><td>N 2p$_\perp$</td><td>3 組（各 2 重縮退）</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>ここで §C.1 の端末出力を見返してほしい．crystal 列の X1+ は確かに #1 から #5 まで 5 本ある．<strong>s 軌道は必ず X1+ に入る</strong>から，「X 点に Al 3s 由来の X1+ 準位が存在しなければならない」ことは群論だけから予言できる — これが本付録の執筆動機になった実際のバグ（修正済み）の検出原理でもある（§C.10 末のコラム参照）．</p>
+
+<h2 id="secC-7">C.7 ステップ6：拡張 Hückel 法でハミルトニアンを組む</h2>
+
+<p>次はハミルトニアン行列 $H(\kk)$ である．第11章の記法でいえば，対角要素が Coulomb 積分 $\alpha$，非対角要素が共鳴積分 $\beta$ に当たる．CrystOD の EHT エンジンは<em class="term">拡張 Hückel 法</em>（extended Hückel theory, EHT; Hoffmann, 1963）の処方に従う：</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+H_{ij}(\kk)=K\,S_{ij}(\kk)\,\frac{\hb_i+\hb_j}{2},
+\qquad K=1.75
+\label{eq:WH}
+\end{equation}
+$$
+</div>
+
+<p>これが <em class="term">Wolfsberg–Helmholz 近似</em>である．意味を言葉にすると：</p>
+
+<ul>
+<li><strong>共鳴積分は重なり積分に比例する</strong>．よく重なる軌道対ほど強く相互作用する — 第11章で $\beta$ と $S$ が同符号で連動していた事情の定式化である．</li>
+<li>比例係数は両軌道のオンサイトエネルギーの平均 $(\hb_i+\hb_j)/2$ に定数 $K=1.75$ を掛けたもの．$K$ は分子の実測を再現するよう選ばれた経験定数で，60 年間使われ続けている値である．</li>
+<li>対角要素は $\hb_i$ を基本とするが，式 \eqref{eq:S-bloch} で見たとおり $S_{ii}(\kk)$ 自体が隣接セルの寄与 $\sigma$ を含むので，対角にも $K\hb_i\sigma$ 型の項が乗る．すなわち $H_{ii}=\hb_i\,(1+K\sigma_i(\kk))$ である．</li>
+</ul>
+
+<p>まとめると，1 種類の軌道が 1 個／セルだけある理想化したモデル（Al 3s だけの fcc 格子）では，$\kk$ 点でのエネルギー期待値は</p>
+
+$$
+\braket{\chi_\kk|\hat H|\chi_\kk} = \hb\,(1+K\sigma(\kk)),\qquad
+\braket{\chi_\kk|\chi_\kk} = 1+\sigma(\kk)
+$$
+
+<p>となる．規格化して割り算すれば，バンドエネルギーの式が得られる：</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+E(\kk)=\frac{\hb\,(1+K\sigma)}{1+\sigma}
+=\hb\left(K+\frac{1-K}{\varepsilon}\right),
+\qquad \varepsilon\equiv 1+\sigma
+\label{eq:band}
+\end{equation}
+$$
+</div>
+
+<p>右辺は $\varepsilon=1+\sigma$（＝その符号パターンでの重なり行列の固有値）だけの関数に整理した形である．この一本の式が，§C.8 以降のすべてを支配する．</p>
+
+<div class="box phys">
+<p class="box-title">物理の眼：式 \eqref{eq:band} は $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ そのものである</p>
+<p>二原子分子で $\beta=K S\alpha$（Wolfsberg–Helmholz）とおくと $\varepsilon_\pm=\alpha(1\pm KS)/(1\pm S)$．ここで $\varepsilon=1\pm S$ と書けば式 \eqref{eq:band} と完全に一致する．つまり式 \eqref{eq:band} は，第11章の 2 準位の結果を「符号パターンが $\kk$ で連続的に指定される」だけの違いで結晶に持ち込んだものである．$\sigma&gt;0$（$\Gamma$ 点的な同位相パターン）なら結合性で $E$ は $\hb$ より下がり，$\sigma&lt;0$（ゾーン境界的な交代パターン）なら反結合性で上がる．</p>
+</div>
+
+<h2 id="secC-8">C.8 ステップ7：永年方程式を解く — 重なり行列の固有値という主役</h2>
+
+<h3>C.8.1 一般化固有値問題</h3>
+
+<p>実際には各既約表現セクターに複数の殻が同居する（X1+ には Al 1s, 2s, 3s, N 1s, 2s の 5 本）から，解くべきは第11章と同形の連立方程式，すなわち<em class="term">一般化固有値問題</em></p>
+
+$$
+H(\kk)\,\bm{c} = E\, S(\kk)\,\bm{c}
+$$
+
+<p>である．第11章では $2\times2$ の行列式（永年行列式）を展開して解いたが，行列が大きいときの定石は <em class="term">canonical orthogonalization</em>（正準直交化）である：</p>
+
+<div class="box derive">
+<p class="box-title">導出：canonical orthogonalization</p>
+<p>まず重なり行列だけの固有値問題 $S\bm{v}_m=\varepsilon_m\bm{v}_m$ を解く．$S$ はエルミートなので固有値 $\varepsilon_m$ は実数，固有ベクトル $\bm{v}_m$ は直交する．次に各固有ベクトルを $\sqrt{\varepsilon_m}$ で割って新しい基底 $\bm{x}_m=\bm{v}_m/\sqrt{\varepsilon_m}$ を作ると，この基底では重なり行列が単位行列になる（$\bm{x}_m^\dagger S \bm{x}_n=\delta_{mn}$）．あとはこの直交基底でハミルトニアンを表現し直し（$\tilde H_{mn}=\bm{x}_m^\dagger H\bm{x}_n$），普通の固有値問題として解けばよい．</p>
+<p>二原子分子で確かめよう．$S=\begin{pmatrix}1&amp;S\\ S&amp;1\end{pmatrix}$ の固有ベクトルは $(1,1)/\sqrt2$ と $(1,-1)/\sqrt2$，固有値は $\varepsilon_\pm=1\pm S$ である．つまり<strong>結合・反結合の符号パターンとは $S$ の固有ベクトルのことであり，$\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ の分母 $1\pm S$ とは $S$ の固有値のことだった</strong>のである．第11章では明示しなかったこの見方が，結晶ではそのまま主役になる．</p>
+</div>
+
+<p>AlN の X 点で，Al 副格子（左列）の重なり行列の固有値を実測すると次のようになっている：</p>
+
+$$
+\{\varepsilon_m\} = \{\,\underbrace{0.147}_{\text{Al 3s 主体}},\ \underbrace{0.316,\ 0.316}_{\text{Al 3p}_\perp},\ 0.994,\ 1.000,\ \dots,\ 1.949\,\}
+$$
+
+<p>ほぼ 1 のものは内殻（隣と重ならないので $\sigma\approx0$），1 から大きく外れたものが価電子殻の Bloch 和である．そして最小の $\varepsilon=0.147$ — §C.5 で見た「84 %が消し飛んだ」Al 3s の交代パターン — が問題児である．</p>
+
+<h2 id="secC-9">C.9 overlap catastrophe — 発散する反結合軌道</h2>
+
+<h3>C.9.1 第11章の伏線を回収する</h3>
+
+<p>第11章 §11.7 で，反結合性軌道の上がり幅が結合性軌道の下がり幅より大きい（比 $(1+S)/(1-S)$）ことを学んだ．$S=0.5$ なら 3 倍，$S=0.8$ なら 9 倍．では $S\to 1$ ではどうなるか — 上がり幅は<strong>無限大に発散</strong>する．分母の $1-S$，すなわち重なり行列の固有値 $\varepsilon$ がゼロに潰れるからである．</p>
+
+<p>式 \eqref{eq:band} で定量的に見よう．$\varepsilon\to 0^+$ の極限で</p>
+
+$$
+E=\hb\left(K+\frac{1-K}{\varepsilon}\right)
+\ \xrightarrow{\ \varepsilon\to 0^+\ }\
+\frac{(1-K)\,\hb}{\varepsilon}\to +\infty
+$$
+
+<p>（$\hb&lt;0$，$K=1.75&gt;1$ なので $(1-K)\hb&gt;0$）．これが拡張 Hückel 法の有名な持病，<em class="term">overlap catastrophe</em>（重なりの破局）である．物理的な実体をほとんど失った符号パターンに，Wolfsberg–Helmholz 近似の「$\beta\propto S$」という設計と正規化の $1/\varepsilon$ が重なって，無意味に巨大なエネルギーを与えてしまうのである．</p>
+
+<p>AlN の実測値で確かめる．Al 3s（$\hb=-16.88$ eV）について：</p>
+
+<div class="tablewrap">
+<table>
+<caption>表 C.4　式 \eqref{eq:band} による Al 3s バンドの評価（1 軌道モデル）と CrystOD 表示値の比較．</caption>
+<thead><tr><th>$\kk$ 点</th><th>$\varepsilon=1+\sigma$</th><th>式 \eqref{eq:band} の値</th><th>CrystOD 表示値</th><th>評価</th></tr></thead>
+<tbody>
+<tr><td>$\Gamma$</td><td>7.27</td><td>$-27.8$ eV</td><td>$-25.0$ eV</td><td>結合性に深まる．健全</td></tr>
+<tr><td>X</td><td>0.158</td><td>$+50.3$ eV</td><td>（変分値 $+62.8$ eV）</td><td><strong>破局</strong>．3s の準位が数十 eV も上空へ</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>$\Gamma$ 点は問題ない．しかし X 点の $+50\sim+63$ eV は，真空準位のはるか上，物理的にナンセンスな値である（表示値 $+62.8$ eV は 1s・2s との混成まで含めた実際の行列での値）．DFT で計算しても Al 3s 由来のバンドが X 点でここまで上がることはない．<strong>モデルが自分の適用限界を踏み抜いた</strong>のである．</p>
+
+<h3>C.9.2 従来の対処：床（floor）を切って捨てる</h3>
+
+<p>CrystOD はこの破局への安全装置として，$\varepsilon$ が閾値 <code>0.2</code>（overlap floor）を下回る符号パターンを変分計算から除外している．ScF$_3$ や SrTiO$_3$ のような格子では，床を割るのは「複数の広がった殻の組合せでほぼ表現できてしまう冗長なパターン」だけであり，捨てても物理的な準位は失われない — そのように較正された閾値だった．</p>
+
+<p>ところが AlN では事情が違った．X 点で床を割った $\varepsilon=0.147$ のモードは，冗長どころか <strong>X1+ セクターにただ一つしかない Al 3s の Bloch 和そのもの</strong>である（表 C.3）．これを捨てると：</p>
+
+<ul>
+<li>左列（Al 副格子）から X 点の 3s 準位が消える．</li>
+<li>Al 側の 13 電子を残った準位に詰めると，3s$^2$3p$^1$ になるべきところが「3p に 3 電子」という不合理な配置になる．</li>
+<li>結晶列でも X1+ が 5 本あるべきところ 4 本しか現れない．</li>
+</ul>
+
+<p>これが本付録のきっかけになった実際のバグである（2026 年 8 月に修正済み）．「密な副格子 × 広がった価電子軌道」では，<strong>物理的に必須の状態自身が破局領域に入ってしまう</strong>．捨てるわけにはいかない．かといって変分値 $+63$ eV をそのまま描くわけにもいかない．どうするか — ここで Löwdin 1次推定が登場する．</p>
+
+<h2 id="secC-10">C.10 Löwdin 1次推定 — ~ 付き準位の正体</h2>
+
+<h3>C.10.1 発想：直交化してから飛び移り積分を測り直す</h3>
+
+<p>破局の犯人は，非直交基底の正規化因子 $1/\varepsilon$ だった．それなら<strong>最初から直交化した軌道でモデルを組み直せば</strong>発散は起きないはずである．Löwdin の対称直交化（$S^{-1/2}$ 変換）を厳密にやるのは大掛かりだが，その<strong>1 次近似</strong>は驚くほど簡単な形をしている：</p>
+
+<div class="box derive">
+<p class="box-title">導出：Löwdin 1次の実効ハミルトニアン</p>
+<p>直交化した軌道の間の実効的な飛び移り積分は，1 次までで</p>
+$$
+\tilde t(\RR) = t(\RR) - s(\RR)\,\hb
+$$
+<p>である．「隣の軌道に飛び移る強さ $t$ から，単に重なっている分 $s\hb$ を差し引いたものが，本当の（直交軌道間の）飛び移り」という意味で，行列で書けば</p>
+$$
+\tilde H_{ij} = H_{ij} - \left(S_{ij}-\delta_{ij}\right)\frac{\hb_i+\hb_j}{2}
+$$
+<p>となる．Wolfsberg–Helmholz 近似 $t=K s\hb$ を入れると $\tilde t = (K-1)\,s\,\hb$ であり，Bloch 和のエネルギーは正規化の割り算<strong>なしに</strong></p>
+<div class="keyeq">
+$$
+\begin{equation}
+E^{(1)}(\kk) = \hb + \sum_{\RR\neq0}e^{i\kk\cdot\RR}\,\tilde t(\RR)
+= \hb\,\bigl(1+(K-1)\,\sigma(\kk)\bigr)
+\label{eq:loewdin1}
+\end{equation}
+$$
+</div>
+<p>と求まる．これが<em class="term">Löwdin 1次推定</em>である．同じ式は，変分式 \eqref{eq:band} を $\sigma$ の 1 次まで Taylor 展開（付録A）しても得られる：</p>
+$$
+\hb\,\frac{1+K\sigma}{1+\sigma}
+=\hb\,(1+K\sigma)(1-\sigma+\sigma^2-\cdots)
+=\hb\,\bigl(1+(K-1)\sigma\bigr)+\mathcal{O}(\sigma^2)
+$$
+<p>つまり両者は $\sigma=0$（$\varepsilon=1$）で値も傾きも一致し，$\sigma$ が大きくなるにつれ乖離する．決定的な違いは，式 \eqref{eq:loewdin1} が $\sigma$ の<strong>1 次式なので絶対に発散しない</strong>ことである．$\varepsilon\to0$（$\sigma\to-1$）でも $E^{(1)}\to\hb(2-K)=0.25\,\hb$ という有限値に収まる．</p>
+</div>
+
+<p>AlN の X 点の Al 3s に適用してみる．$\sigma=-0.8415$，$\hb=-16.88$ eV なので</p>
+
+$$
+E^{(1)} = -16.88\times\bigl(1+0.75\times(-0.8415)\bigr) = -6.2\ \text{eV}
+$$
+
+<p>変分値の $+50\sim+63$ eV に対し，$-6.2$ eV．オンサイト $-16.9$ eV から反結合的に約 10 eV 持ち上がった，という健全な答えである（実際の表示値 $\sim-6.65$ eV は 1s・2s との混成込み）．図 C.4 に二つの式の振る舞いをまとめた．本付録で一番大事な図である．</p>
+
+<figure>
+<svg viewBox="0 0 780 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="重なり固有値εに対する変分エネルギーとLöwdin 1次推定の比較．変分式はε→0で発散，1次式は有界">
+<rect x="10" y="10" width="760" height="400" rx="10" fill="#ffffff" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif" font-size="12.5">
+<!-- axes: x eps in [0,1.6] -> px 90..710 ; y E in [-40,120] -> px 340..40 -->
+<line x1="90" y1="340" x2="720" y2="340" stroke="#566573" stroke-width="1.4"/>
+<line x1="90" y1="340" x2="90" y2="35" stroke="#566573" stroke-width="1.4"/>
+<text x="720" y="376" text-anchor="end" fill="#566573">重なり行列の固有値 ε = 1 + σ</text>
+<text x="30" y="30" fill="#566573">E (eV)</text>
+<!-- y ticks -->
+<g stroke="#d5dbdb" stroke-width="1">
+<line x1="90" y1="265" x2="710" y2="265"/><line x1="90" y1="190" x2="710" y2="190"/><line x1="90" y1="115" x2="710" y2="115"/><line x1="90" y1="302.5" x2="710" y2="302.5"/>
+</g>
+<text x="84" y="269" text-anchor="end" fill="#566573">0</text>
+<text x="84" y="194" text-anchor="end" fill="#566573">+40</text>
+<text x="84" y="119" text-anchor="end" fill="#566573">+80</text>
+<text x="84" y="306" text-anchor="end" fill="#566573">−20</text>
+<text x="84" y="344" text-anchor="end" fill="#566573">−40</text>
+<!-- x ticks -->
+<g stroke="#aab7b8" stroke-width="1">
+<line x1="167.5" y1="336" x2="167.5" y2="344"/><line x1="283.8" y1="336" x2="283.8" y2="344"/><line x1="477.5" y1="336" x2="477.5" y2="344"/><line x1="671.3" y1="336" x2="671.3" y2="344"/>
+</g>
+<text x="167" y="358" text-anchor="middle" fill="#566573">0.2</text>
+<text x="284" y="358" text-anchor="middle" fill="#566573">0.5</text>
+<text x="477" y="358" text-anchor="middle" fill="#566573">1.0</text>
+<text x="671" y="358" text-anchor="middle" fill="#566573">1.5</text>
+<!-- floor vertical -->
+<line x1="167.5" y1="45" x2="167.5" y2="340" stroke="#b9770e" stroke-width="1.6" stroke-dasharray="6 4"/>
+<text x="172" y="60" fill="#b9770e">overlap floor ε = 0.2</text>
+<text x="172" y="76" fill="#b9770e" font-size="11.5">左：1次推定に切替（~ 印）／右：変分値</text>
+<!-- h_bar horizontal -->
+<line x1="90" y1="296.7" x2="710" y2="296.7" stroke="#566573" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="700" y="292" text-anchor="end" fill="#566573" font-size="11.5">オンサイト h̄ = −16.88 eV</text>
+<!-- variational curve (pole near 0) -->
+<path d="M 123 40 L 125 57 L 129 83 L 137 123 L 147 159 L 160 189 L 168 202 L 187 225 L 206 241 L 226 253 L 245 261 L 284 273 L 323 281 L 400 291 L 478 297 L 555 301 L 633 304 L 710 306"
+      fill="none" stroke="#b03a2e" stroke-width="2.6"/>
+<text x="250" y="100" fill="#b03a2e">赤：変分式 E = h̄(K + (1−K)/ε) — ε → 0 で発散（overlap catastrophe）</text>
+<text x="250" y="118" fill="#1a5276">青：Löwdin 1次 E = h̄(1 + (K−1)σ) — σ の1次式なので常に有界</text>
+<!-- first-order line -->
+<line x1="90" y1="272.9" x2="710" y2="310.9" stroke="#1a5276" stroke-width="2.6"/>
+<!-- tangency point -->
+<circle cx="478" cy="297" r="5" fill="#14684a"/>
+<text x="490" y="272" fill="#14684a" font-size="11.5">ε = 1 で両式は値も傾きも一致</text>
+<!-- X point dots -->
+<circle cx="147" cy="159" r="6" fill="#b03a2e"/>
+<text x="158" y="150" fill="#b03a2e" font-size="11.5">X点の 3s：変分 +50 eV（実測 +62.8）→ 棄却</text>
+<circle cx="147" cy="276.4" r="6" fill="#1a5276"/>
+<text x="158" y="313" fill="#1a5276" font-size="11.5">X点の 3s：1次推定 −6.2 eV（表示 ~−6.65）</text>
+<!-- Gamma annotation -->
+<text x="700" y="330" text-anchor="end" fill="#14684a" font-size="11.5">Γ点の 3s は ε = 7.3（右外）：変分 −27.8 eV で健全 →</text>
+</g>
+</svg>
+<figcaption>図 C.4　Al 3s（$\hb=-16.88$ eV，$K=1.75$）の 1 軌道モデルにおける，重なり固有値 $\varepsilon$ とエネルギーの関係．赤：変分式 \eqref{eq:band}．$\varepsilon\to0$ で $+\infty$ に発散する．青：Löwdin 1次推定 \eqref{eq:loewdin1}．$\varepsilon$ の 1 次式なので常に有界で，$\varepsilon=1$ で変分式に接する．CrystOD は floor（$\varepsilon=0.2$，橙破線）を境に両者を使い分ける．</figcaption>
+</figure>
+
+<h3>C.10.2 使い分けの規則と，~ という表示</h3>
+
+<p>ここで注意すべきは，<strong>1次推定は万能ではない</strong>ことである．たとえば $\Gamma$ 点の 3s（$\sigma=+6.27$）に式 \eqref{eq:loewdin1} を使うと $-16.88\times(1+0.75\times6.27)=-96$ eV という，今度は逆方向にひどい値が出る．1 次近似なのだから $|\sigma|$ が大きければ壊れるのは当然で，<strong>それぞれの式には適用領域がある</strong>：</p>
+
+<div class="tablewrap">
+<table>
+<caption>表 C.5　二つのエネルギー式の使い分け（CrystOD の実装）．</caption>
+<thead><tr><th>重なり固有値</th><th>使う式</th><th>理由</th><th>表示</th></tr></thead>
+<tbody>
+<tr><td>$\varepsilon &gt; 0.2$</td><td>変分式 \eqref{eq:band}（厳密な一般化固有値問題）</td><td>正規化が安定な領域．結合性側（$\varepsilon&gt;1$）は $\varepsilon$ が大きいほどむしろ安定</td><td>通常表示（無印）</td></tr>
+<tr><td>$10^{-6}&lt;\varepsilon\le 0.2$</td><td>Löwdin 1次推定 \eqref{eq:loewdin1}</td><td>変分値は catastrophe で無意味．1次式は有界で，反結合的な持ち上がりの向きと大きさの目安を正しく与える</td><td><strong>エネルギーに ~（端末）＋ツールチップ注記</strong></td></tr>
+<tr><td>$\varepsilon\le10^{-6}$</td><td>（状態自体を削除）</td><td>数値的に完全な線形従属．物理的実体なし</td><td>表示されない（端末で報告）</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="box note">
+<p class="box-title">補足：~ 印＝「精度の等級」の表示である</p>
+<p>チルダは「非占有」の意味では<strong>ない</strong>．同じ図の中に精度の異なる 2 種類のエネルギーが同居することになったので，どの準位が推定値なのかを区別できるようにした印である．実際，AlN の X 点では ~ 付きの Al 3s X1+ に電子が 1 個入っている（占有された推定準位）．逆に無印の非占有準位もいくらでもある．HTML では準位の線はすべて通常の実線で描かれ，推定準位にマウスを乗せると「overlap eigenvalue 0.15 &lt; floor 0.2 …」という由来の説明がツールチップに表示される（ページ脚注にも明記される）．</p>
+</div>
+
+<div class="box why">
+<p class="box-title">なぜ？：推定値でも描く価値があるのか</p>
+<p>三つの理由がある．第一に<strong>群論的な完全性</strong>：表 C.3 の「座席表」どおりの本数の準位が揃っていなければ，ダイアグラムとして誤りである（X1+ が 4 本しかない図は，群論を知る読者には即座に矛盾と分かる）．第二に<strong>電子の勘定</strong>：Al 側の 13 電子は 3s の席がなければ正しく詰められない．第三に<strong>定性的な正しさ</strong>：1次推定は「X 点で 3s は反結合的に約 10 eV 持ち上がる」という向きと規模を正しく与え，実際 DFT のバンド計算でも AlN の X 点の伝導帯下端は X1+（s 的）である．エネルギーの数値そのものより，この定性構造こそが COD の描きたいものである．</p>
+</div>
+
+<div class="box phys">
+<p class="box-title">コラム：このバグはどうやって見つかったか</p>
+<p>発端は「AlN の X 点で 3p に電子が 3 個入っている」という占有数の不合理への気づきだった．s 軌道は必ず存在し，X 点では X1+ になるはず — という群論の必然（表 C.3）から「X1+ が 1 本足りない」ことが特定され，重なり行列の固有値を洗い出す診断（各固有ベクトルの主成分と $\bm v^\dagger H\bm v/\varepsilon$ を列挙する）で，floor に切り落とされた $\varepsilon=0.147$ の Al 3s モードが犯人と確定した．「対称性の勘定が合わない図はどこかが必ず間違っている」— 第12章の群論は，このように計算プログラムのデバッグにも使える．</p>
+</div>
+
+<h2 id="secC-11">C.11 ステップ8：電子を詰める — aufbau と HOMO/LUMO</h2>
+
+<p>準位が出そろったら，あとは第7章以来おなじみの構成原理（aufbau）である．各 $\kk$ 点で，エネルギーの低い準位から 1 軌道あたり 2 電子（$d$ 重縮退なら $2d$ 電子）ずつ詰める．</p>
+
+<ul>
+<li><strong>結晶列</strong>：20 電子／セル．X 点なら X1+ #1〜#4，X3- #1，#2，X5- #1，#2 で計 20 電子．最高被占準位（HOMO）は X5- #2（$-14.11$ eV），最低空準位（LUMO）は X1+ #5（$\sim-5.92$ eV）となる．</li>
+<li><strong>左右の列</strong>：Al 側 13 電子，N 側 7 電子を同様に詰める．これは「結合前の各副格子の電子配置」を表す表示上の約束である．</li>
+</ul>
+
+<p>ここで面白いのは，副格子の電子配置が $\kk$ 点ごとに変わることである．$\Gamma$ 点の Al 列は 1s$^2$2s$^2$2p$^6$3s$^2$3p$^1$ という教科書どおりの配置になるが，X 点では 3p（X3-，$-14.94$ eV）が 3s（$\sim-6.65$ eV）より<strong>下</strong>に来るので，詰めると 3p$^2$3s$^1$ になる．これはバグではなく，副格子のバンド分散の物理そのものである：X 点の符号パターンでは 3s Bloch 和が大きく反結合的に持ち上がる一方（§C.9），3p$_\parallel$ の Bloch 和は結合的に下がるからである．</p>
+
+<h2 id="secC-12">C.12 ステップ9：結晶軌道の色 — COOP による結合性判定</h2>
+
+<p>最後の仕上げとして，結晶列の各準位が Al–N 間で結合性か反結合性かを判定し，線の色を変える．使う量は <em class="term">COOP</em>（crystal orbital overlap population; Hughbanks–Hoffmann）：</p>
+
+$$
+P = 2\,\mathrm{Re}\,\bigl[\bm{c}_{\text{Al}}^\dagger\, S_{\text{Al,N}}\,\bm{c}_{\text{N}}\bigr]
+$$
+
+<p>これは第11章で学んだ重なり電子密度の一般化で，係数 $\bm c$ の Al 成分と N 成分が重なり領域で同位相（$P&gt;0$）なら<strong>結合性（青）</strong>，逆位相（$P&lt;0$）なら<strong>反結合性（赤）</strong>，ゼロ（対称性で相手がいない，など）なら<strong>非結合（黒）</strong>と塗り分ける．X 点の実際の判定は次節の図 C.5 に反映されている．たとえば X3- #2（Al 3p + N 2p の同位相の組）は青，その逆位相の相方 X3- #3 は赤，Al 3s がほぼ単独の X1+ #5 は黒である．</p>
+
+<h2 id="secC-13">C.13 出力の読み方 総まとめ — AlN の X 点を一行ずつ</h2>
+
+<p>以上の全部品を組み立てると，X 点のダイアグラムは図 C.5 のようになる（価電子領域のみ；HTML の実物では内殻まで見られる）．</p>
+
+<figure>
+<svg viewBox="0 0 780 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AlN X点の結晶軌道ダイアグラム．左にAl副格子，中央に結晶，右にN副格子の準位">
+<rect x="10" y="10" width="760" height="380" rx="10" fill="#ffffff" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif" font-size="12.5">
+<text x="155" y="40" text-anchor="middle" font-size="14" fill="#1a5276">Al 副格子（+ N³⁻ の点電荷場）</text>
+<text x="392" y="40" text-anchor="middle" font-size="14" fill="#14684a">AlN 結晶</text>
+<text x="660" y="40" text-anchor="middle" font-size="14" fill="#b03a2e">N 副格子（+ Al³⁺ の点電荷場）</text>
+<line x1="52" y1="60" x2="52" y2="345" stroke="#566573" stroke-width="1.2"/>
+<text x="28" y="55" fill="#566573" font-size="11">E (eV)</text>
+<line x1="48" y1="123" x2="56" y2="123" stroke="#566573"/><text x="44" y="127" text-anchor="end" fill="#566573" font-size="11">0</text>
+<line x1="48" y1="193" x2="56" y2="193" stroke="#566573"/><text x="44" y="197" text-anchor="end" fill="#566573" font-size="11">−10</text>
+<line x1="48" y1="263" x2="56" y2="263" stroke="#566573"/><text x="44" y="267" text-anchor="end" fill="#566573" font-size="11">−20</text>
+<line x1="48" y1="333" x2="56" y2="333" stroke="#566573"/><text x="44" y="337" text-anchor="end" fill="#566573" font-size="11">−30</text>
+<g stroke="#aab7b8" stroke-width="1" stroke-dasharray="4 4">
+<line x1="215" y1="169.6" x2="330" y2="303.4"/><line x1="215" y1="169.6" x2="330" y2="164.4"/>
+<line x1="600" y1="298.3" x2="455" y2="303.4"/><line x1="600" y1="298.3" x2="455" y2="164.4"/>
+<line x1="215" y1="227.6" x2="330" y2="243.7"/><line x1="215" y1="227.6" x2="330" y2="125.5"/>
+<line x1="600" y1="223.0" x2="455" y2="243.7"/><line x1="600" y1="223.0" x2="455" y2="125.5"/>
+<line x1="215" y1="73.8" x2="330" y2="221.8"/><line x1="215" y1="73.8" x2="330" y2="153.5"/>
+<line x1="600" y1="215.6" x2="455" y2="221.8"/><line x1="600" y1="215.6" x2="455" y2="153.5"/>
+</g>
+<g stroke-width="2.6">
+<line x1="95" y1="73.8" x2="215" y2="73.8" stroke="#5b8db8"/>
+<line x1="95" y1="169.6" x2="215" y2="169.6" stroke="#5b8db8"/>
+<line x1="95" y1="227.6" x2="215" y2="227.6" stroke="#5b8db8"/>
+</g>
+<g fill="#1a5276" font-size="12">
+<text x="95" y="66.8">Al 3p X5− +7.03（空）</text>
+<text x="95" y="161.0">Al 3s X1+ ~−6.65 ↑</text>
+<text x="95" y="220.6">Al 3p X3− −14.94 ↑↓</text>
+</g>
+<g stroke-width="2.8">
+<line x1="330" y1="125.5" x2="455" y2="125.5" stroke="#d32f2f"/>
+<line x1="330" y1="153.5" x2="455" y2="153.5" stroke="#d32f2f"/>
+<line x1="330" y1="164.4" x2="455" y2="164.4" stroke="#333333"/>
+<line x1="330" y1="221.8" x2="455" y2="221.8" stroke="#1565c0"/>
+<line x1="330" y1="243.7" x2="455" y2="243.7" stroke="#1565c0"/>
+<line x1="330" y1="303.4" x2="455" y2="303.4" stroke="#1565c0"/>
+</g>
+<g fill="#14684a" font-size="12" text-anchor="middle">
+<text x="392" y="118.5" fill="#b03a2e">X3− #3 −0.36（反結合）</text>
+<text x="392" y="146.5" fill="#b03a2e">X5− #3 ~−4.36（反結合）</text>
+<text x="392" y="180.4" fill="#333333">X1+ #5 ~−5.92（LUMO）</text>
+<text x="392" y="214.8" fill="#1565c0">X5− #2 −14.11 ↑↓↑↓（HOMO）</text>
+<text x="392" y="236.7" fill="#1565c0">X3− #2 −17.24 ↑↓（結合性）</text>
+<text x="392" y="296.4" fill="#1565c0">X1+ #4 −25.77 ↑↓（σ結合）</text>
+</g>
+<g stroke-width="2.6">
+<line x1="600" y1="215.6" x2="720" y2="215.6" stroke="#c0604d"/>
+<line x1="600" y1="223.0" x2="720" y2="223.0" stroke="#c0604d"/>
+<line x1="600" y1="298.3" x2="720" y2="298.3" stroke="#c0604d"/>
+</g>
+<g fill="#b03a2e" font-size="12" text-anchor="end">
+<text x="720" y="208.6">N 2p X5− −13.23 ↑↓↑↓</text>
+<text x="720" y="239.0">N 2p X3− −14.29 ↑↓</text>
+<text x="720" y="291.3">N 2s X1+ −25.04 ↑↓</text>
+</g>
+<g font-size="11.5" fill="#566573">
+<text x="70" y="360">凡例：<tspan fill="#1565c0">青＝結合性</tspan>／<tspan fill="#333333">黒＝非結合</tspan>／<tspan fill="#d32f2f">赤＝反結合性</tspan>（COOP の符号）．~ 付き＝Löwdin 1次推定（ツールチップに注記）．細い点線＝組成の相関線．</text>
+<text x="70" y="378">内殻（Al 1s, 2s, 2p / N 1s：−87 eV 以深）は図外．いずれも平坦・非結合のまま動かない．</text>
+</g>
+</g>
+</svg>
+<figcaption>図 C.5　AlN の X 点の結晶軌道ダイアグラム（価電子領域）．§C.1 の端末出力と CrystOD の HTML 出力をそのまま図式化したもの．X1+ どうし（Al 3s ↔ N 2s），X3- どうし，X5- どうしだけが相関線で結ばれていることを確認してほしい．</figcaption>
+</figure>
+
+<p>端末出力（§C.1）を，習った言葉で一行ずつ読み直そう．</p>
+
+<ol>
+<li><strong>X1+ #1〜#3，X3- #1，X5- #1</strong>（$-1591\sim-87$ eV）：Al と N の内殻．ほぼ 100 %単一成分で，オンサイト値のまま動かない非結合準位（黒）．</li>
+<li><strong>X1+ #4（$-25.77$ eV，青）</strong>：N 2s（92 %）と Al 3s（8 %）の同位相の組合せ＝σ 結合性．相方の反結合が X1+ #5 である．</li>
+<li><strong>X3- #2（$-17.24$ eV，青）／ X5- #2（$-14.11$ eV，青，HOMO）</strong>：Al 3p と N 2p の結合性の組．N 2p が主成分で，これが AlN の価電子帯上端に対応する．</li>
+<li><strong>X1+ #5（$\sim-5.92$ eV，LUMO）</strong>：Al 3s 主体（91 %）の反結合側．§C.9〜C.10 の主役で，変分では $+63$ eV に発散するため Löwdin 1次推定で描かれている．DFT バンドで X 点の伝導帯下端が s 的（X1+）であることと定性的に整合する．</li>
+<li><strong>X5- #3（$\sim-4.36$ eV，赤）／ X3- #3（$-0.36$ eV，赤）</strong>：Al 3p–N 2p 反結合側．X3- #3 は floor より上（$\varepsilon=0.44$）なので無印＝変分値である．</li>
+</ol>
+
+<div class="box note">
+<p class="box-title">補足：HTML でだけ見られるもの・見えないことがあるもの</p>
+<p>出力 HTML では，各準位をクリックすると成分の内訳と，実空間の波動関数 Re$[\psi]$ のスケッチ（ドラッグで回転可）が表示される．エネルギー窓は最初 HOMO/LUMO 中心の $\pm8$ eV で開くので，深い内殻や高い空準位は「Show all energy levels」ボタンで表示範囲を広げる必要がある．たとえば LaN の X 点の La 6s X1+（$+8.85$ eV）は既定の窓の外にあって「準位が存在しないように見える」ことがある — 見当たらない準位があったら，まず窓を疑うこと．</p>
+</div>
+
+<h2 id="secC-14">C.14 まとめと演習</h2>
+
+<div class="box thm">
+<p class="box-title">この付録の要点</p>
+<ul>
+<li><code>crystod --diagram</code> は，結晶を二つの部分格子に分け，各特殊 $\kk$ 点で「結合前（左右）」と「結合後（中央）」の準位を既約表現ラベル付きで並べる．混成の規則は<strong>同じ $\kk$・同じ既約表現どうしだけ</strong>．</li>
+<li>エネルギーは 拡張 Hückel 法：厳密な STO 重なり積分の Bloch 格子和 $S(\kk)$ と，Wolfsberg–Helmholz 近似 $H=KS(\hb_i+\hb_j)/2$（$K=1.75$），点電荷配位子場つき．</li>
+<li>1 軌道バンドの式 $E=\hb(K+(1-K)/\varepsilon)$ は二原子分子の $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ の直系であり，重なり行列の固有値 $\varepsilon\to0$ で発散する（overlap catastrophe）．密な副格子の広がった軌道はゾーン境界でこの領域に入り得る（AlN の X 点の Al 3s：$\varepsilon=0.147$）．</li>
+<li>そのような状態は Löwdin 1次推定 $E=\hb(1+(K-1)\sigma)$ — 変分式の $\sigma$ 1次 Taylor 展開そのもので，常に有界 — で描かれ，<strong>チルダ（~）とツールチップ注記</strong>で区別される．~ は「非占有」ではなく「エネルギーの精度等級」の印である．</li>
+<li>群論による準位の本数の勘定（座席表）は，計算結果の検算にもプログラムのデバッグにも使える最強の道具である．</li>
+</ul>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習</p>
+<ol>
+<li>$2\times2$ の重なり行列 $S=\begin{pmatrix}1&amp;S\\S&amp;1\end{pmatrix}$ の固有値が $1\pm S$，固有ベクトルが $(1,\pm1)/\sqrt2$ であることを確かめよ．さらに canonical orthogonalization の手順（§C.8）をこの $2\times2$ で実行し，$\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ が再現されることを示せ．</li>
+<li>式 \eqref{eq:band} と式 \eqref{eq:loewdin1} が $\sigma=0$ で値と 1 階微分ともに一致することを示せ．また $\varepsilon\to0^+$ での両者の極限値を求めよ（$K=1.75$，$\hb=-16.88$ eV で数値も出すこと）．</li>
+<li>表 C.2 の数値を使い，Al 3s の 1 軌道モデルで $\Gamma$ 点と X 点のバンドエネルギー（変分式）を電卓で再現せよ．また X 点に 1次推定を適用し，$-6.2$ eV を確かめよ．</li>
+<li>L 点 $(\tfrac12,\tfrac12,\tfrac12)$ では，fcc の 12 最近接のうち 6 個が同位相・6 個が逆位相になり，最近接の位相和はゼロになることを示せ（ヒント：$e^{i\kk\cdot\RR}$ を 12 本の $\RR$ について書き出す）．このことから，L 点の Al 3s のバンドエネルギーがオンサイト値 $\hb$ に近いことを予想し，実際の出力（Al 3s L1+ $=-2.43$ eV…配位子場込みのオンサイトからのずれ）と比べて論ぜよ．</li>
+<li>（考察）X 点の LUMO は ~ 付きの X1+ #5（$\sim-5.92$ eV）である．この値を，同じ図の無印の準位と同じ精度で信用してよいか．「信用できること」（対称性ラベル・準位の存在・持ち上がりの向き）と「信用しすぎてはいけないこと」（eV 単位の数値）を整理して述べよ．</li>
+</ol>
+</div>
+
+<div class="refs">
+<strong>参考文献</strong>
+<ol>
+<li>M. Wolfsberg and L. Helmholz, <i>J. Chem. Phys.</i> <b>20</b>, 837 (1952). — $H_{ij}=KS_{ij}(H_{ii}+H_{jj})/2$ の原論文．</li>
+<li>R. Hoffmann, <i>J. Chem. Phys.</i> <b>39</b>, 1397 (1963). — 拡張 Hückel 法．</li>
+<li>R. Hoffmann, <i>Solids and Surfaces: A Chemist's View of Bonding in Extended Structures</i> (VCH, 1988). — 結晶軌道・COOP の考え方の古典．本付録の思想的な親である．</li>
+<li>T. Hughbanks and R. Hoffmann, <i>J. Am. Chem. Soc.</i> <b>105</b>, 3528 (1983). — COOP．</li>
+<li>P.-O. Löwdin, <i>J. Chem. Phys.</i> <b>18</b>, 365 (1950). — 対称直交化．</li>
+<li>J. H. Ammeter, H.-B. Bürgi, J. C. Thibeault, and R. Hoffmann, <i>J. Am. Chem. Soc.</i> <b>100</b>, 3686 (1978). — 重み付き Wolfsberg–Helmholz 式と counterintuitive orbital mixing（overlap の病理の分子版）．</li>
+<li>H. T. Stokes, B. J. Campbell, and R. Cordes, <i>Acta Cryst.</i> <b>A69</b>, 388 (2013). — ISO-IR（既約表現ラベルの出典）．</li>
+<li>H. Koiso and Y. Mochizuki <i>et al.</i>, <i>Phys. Rev. B</i> <b>110</b>, 064104 (2024). — CrystOD を研究に使う際の引用文献．</li>
+</ol>
+</div>
+
+</main>
+</body>
+</html>
