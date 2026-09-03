@@ -443,6 +443,26 @@ function sample1s(Z){ // r ~ Gamma(3, 1/2Z)，方向は一様
   return [r*s*Math.cos(ph), r*s*Math.sin(ph), r*u];
 }
 
+/* 不確定性関係の可視化（ガウス波束）で使う小道具 */
+const UNC_NV=14;                 // 速度の不確定さを表す矢印（3 次元ガウス分布からのサンプル）の本数
+const NEL_N=4, NEL_H=0.0032;     // 電子の Nelson 過程：1 コマあたりの部分ステップ数と刻み [原子単位の時間 24.2 as]
+function mkXi(n){ const r=[]; for(let i=0;i<n;i++) r.push([randn(),randn(),randn()]); return r; }
+function gaussBlob(c,x,y,sig,rgb){ /* 2 次元ガウス分布 exp(−ρ²/2σ²) を放射状グラデーションで描く（3 次元等方ガウスの射影も同じ σ） */
+  if(sig<1.2){ c.fillStyle='rgba('+rgb+',.9)'; c.beginPath(); c.arc(x,y,1.6,0,Math.PI*2); c.fill(); return; }
+  const A=clamp(0.85*Math.pow(14/sig,0.6),0.16,0.7);   // 大きい雲ほど薄く（面密度 ∝ 1/σ² の気分で，雲の点が透けるように）
+  const g=c.createRadialGradient(x,y,0,x,y,3*sig);
+  for(let k=0;k<=6;k++){ const u=k/2; g.addColorStop(k/6,'rgba('+rgb+','+(A*Math.exp(-u*u/2)).toFixed(3)+')'); }
+  c.fillStyle=g; c.beginPath(); c.arc(x,y,3*sig,0,Math.PI*2); c.fill();
+}
+function arrow(c,x0,y0,x1,y1,col,w){
+  const dx=x1-x0, dy=y1-y0, L=Math.hypot(dx,dy); if(L<2) return;
+  c.strokeStyle=col; c.lineWidth=w||1.3; c.lineCap='round';
+  c.beginPath(); c.moveTo(x0,y0); c.lineTo(x1,y1); c.stroke();
+  const hl=Math.min(5,L*0.45), ux=dx/L, uy=dy/L;
+  c.beginPath(); c.moveTo(x1,y1); c.lineTo(x1-hl*ux+hl*0.5*uy, y1-hl*uy-hl*0.5*ux); c.moveTo(x1,y1); c.lineTo(x1-hl*ux-hl*0.5*uy, y1-hl*uy+hl*0.5*ux); c.stroke();
+}
+function kvHtml(rows){ return '<div class="kv">'+rows.map(function(r){ return r.length===1?'<span class="hd">'+r[0]+'</span>':'<span>'+r[0]+'</span><span>'+r[1]+'</span>'; }).join('')+'</div>'; }
+
 /* ========================================================================
    3. 原子のデータ（核子の運動エネルギー等は GFMC, AV18/IL2: Pieper & Wiringa 2001）
    ======================================================================== */
@@ -468,6 +488,7 @@ function ZoomSim(root){
   this.atom='He'; this.level='atom';
   this.cam={a:-0.55, b:0.32};
   this.speed=1; this.showCloud=true; this.showTrail=true;
+  this.showUnc=true; this.uncG=-0.40;   /* 不確定性関係の表示．uncG = log10(σ_m/σ₀)：位置を測る分解能（右端 ≥0.99 は「測定なし」） */
   this.selType='p'; this.selIdx=0; this.selE=0;
   this.freeMode='zbw'; this.Zhyd=1; this.sig0=1.0; this.packT=0;
   this.trans=null; this.demo=null; this.demoT=0;
@@ -515,6 +536,11 @@ ZoomSim.prototype.buildControls=function(){
       '<button class="pill" data-speed="3">速く</button><button class="pill" data-speed="0">停止</button></div>'+
     '<label class="chk"><input type="checkbox" data-role="cloud" checked> 確率の雲（|ψ|² のサンプル）を表示</label>'+
     '<label class="chk"><input type="checkbox" data-role="trail" checked> 揺らぎの軌跡を表示</label>'+
+    '<hr class="sep"><div class="ctlhead">不確定性関係 <span class="lc">Δ<i>x</i>·Δ<i>p</i> ≥ ħ/2</span></div>'+
+    '<label class="chk"><input type="checkbox" data-role="unc" checked> 位置と速度の不確定さをガウス分布で表示（原子・電子の階層）</label>'+
+    '<div class="ctlrow"><span>位置を測る分解能 σ<sub>m</sub></span><input type="range" min="-1.7" max="1" step="0.02" value="'+this.uncG+'" data-role="uncg"><span class="val" data-role="uncval"></span></div>'+
+    '<span class="hint" data-role="uncsum"></span>'+
+    '<span class="hint">左へ：電子の位置を細く絞る → 青いぼかし Δx は小さく，橙の矢印 Δv = ħ/2mΔx は長く．右端：測らない（1s の拡がりのまま．ぼかしの中心は原子核）．</span>'+
     '<hr class="sep"><div class="ctlhead">直接ジャンプ</div>'+
     '<div class="pills" data-role="jump">'+
       '<button class="pill" data-level="atom">原子</button><button class="pill" data-level="nucleus">原子核</button>'+
@@ -527,6 +553,8 @@ ZoomSim.prototype.buildControls=function(){
     self.speed=parseFloat(this.dataset.speed); c.querySelectorAll('[data-speed]').forEach(function(x){ x.classList.toggle('on', x===b); }); }); });
   c.querySelector('[data-role="cloud"]').addEventListener('change', function(){ self.showCloud=this.checked; });
   c.querySelector('[data-role="trail"]').addEventListener('change', function(){ self.showTrail=this.checked; });
+  c.querySelector('[data-role="unc"]').addEventListener('change', function(){ self.showUnc=this.checked; });
+  c.querySelector('[data-role="uncg"]').addEventListener('input', function(){ self.uncG=parseFloat(this.value); self.renderUnc(); });
   c.querySelectorAll('[data-level]').forEach(function(b){ b.addEventListener('click', function(){
     if(this.dataset.type) self.selType=this.dataset.type;
     self.go(this.dataset.level); }); });
@@ -535,7 +563,7 @@ ZoomSim.prototype.setAtom=function(sym){
   const self=this; this.atom=sym; const A=ATOMS[sym];
   this.ctl.querySelectorAll('[data-atom]').forEach(function(b){ b.classList.toggle('on', b.dataset.atom===sym); });
   /* 電子：1s 密度からサンプルして開始 */
-  this.electrons=[]; for(let i=0;i<A.ne;i++) this.electrons.push({p:sample1s(A.Zeff), trail:[]});
+  this.electrons=[]; for(let i=0;i<A.ne;i++) this.electrons.push({p:sample1s(A.Zeff), trail:[], vxi:mkXi(UNC_NV)});  /* vxi：速度の不確定さの矢印（単位分散の OU 過程） */
   this.cloud=[]; for(let i=0;i<1100;i++) this.cloud.push(sample1s(A.Zeff));
   /* 核子：Gauss 分布（単位 b）．重心を引く */
   const N=A.nuc.length; this.bN = N>1 ? A.rpt/(Math.sqrt(1-1/N)*Math.sqrt(1.5)) : 1;
@@ -629,12 +657,15 @@ ZoomSim.prototype.step=function(dt){
   const sp=this.speed; if(sp<=0) return;
   this.time+=dt*sp; const A=ATOMS[this.atom], L=this.level;
   if(L==='atom' || L==='electron'){
-    const n=4, h=0.0032*sp; const Z=A.Zeff; const self=this;
+    const n=NEL_N, h=NEL_H*sp; const Z=A.Zeff; const self=this;
     this.electrons.forEach(function(e,i){
       if(L==='electron' && i!==self.selE) return;
       for(let k=0;k<n;k++) stepExp(e.p, Z, h);
       e.trail.push(e.p.slice()); const maxT = L==='electron'?90:40; if(e.trail.length>maxT) e.trail.shift();
     });
+    /* 速度の不確定さの矢印：単位分散の Ornstein–Uhlenbeck 過程で滑らかに入れ替える（相関時間 0.8 s）．描くときに Δv を掛ける */
+    if(this.showUnc){ const a=dt*sp/0.8, b=Math.sqrt(2*a);
+      this.electrons.forEach(function(e){ e.vxi.forEach(function(x){ x[0]+=-x[0]*a+b*randn(); x[1]+=-x[1]*a+b*randn(); x[2]+=-x[2]*a+b*randn(); }); }); }
   }
   if(L==='nucleus'){
     if(this.demo){ this.demoT+=dt*sp; const h=0.02*sp;
@@ -710,10 +741,36 @@ ZoomSim.prototype.drawAtom=function(c,W,H,zoomE){
   const items=[{z:0,kind:'nucleus'}];
   this.electrons.forEach(function(e,i){ if(zoomE && i!==self.selE) return; const p=project(self.cam,e.p[0],e.p[1],e.p[2]); items.push({z:p[2],kind:'electron',p:p,i:i,e:e}); });
   items.sort(function(a,b){ return a.z-b.z; });
+  /* ---- 不確定性関係（ガウス波束）：位置の不確定さ Δx を青いぼかし，速度の不確定さ Δv を橙の矢印で ----
+     σ₀ = a₀/Z′ は 1s の各軸方向の位置の標準偏差（|ψ₁ₛ|² ∝ e^{−2Z′r/a₀} で ⟨x²⟩ = a₀²/Z′²）．これをガウス分布で近似し，
+     図の点（Nelson のサンプル P）の位置を分解能 σ_m で「測った」直後の状態を，事前分布（1s，中心 O = 原子核）×
+     測定（中心 P）の積のガウス分布とする：中心 C = (σ_m² O + σ₀² P)/(σ₀²+σ_m²)，幅 Δx = σ₀σ_m/√(σ₀²+σ_m²)．
+     実ガウス波束は最小不確定状態なので Δp = ħ/2Δx，Δv = Δp/m（uncParams）．矢印は 3 次元ガウス分布からの速度
+     サンプルを射影したもので，長さは速度 × τ（τ = a₀/(3Z′²αc)）：v_rms = Z′αc の矢印が σ₀/3 の長さになる（見やすさの縮尺）． */
+  const U=this.showUnc?this.uncParams():null;
+  const sZ=s/A.Zeff, vpx=sZ/(3*A.Zeff);                   // σ₀ = a₀/Z′ [px]，速度 αc あたりの矢印の長さ [px]（v_rms ↔ σ₀/3）
+  const sig=U?U.fac*sZ:0, sv=U?vpx*U.dv/(K.alpha*K.c):0;  // Δx [px]，Δv の矢印の 1σ [px]
+  const center=function(it){ const X=cx+s*it.p[0], Y=cy-s*it.p[1]; return [X+U.wO*(cx-X), Y+U.wO*(cy-Y)]; };
+  if(U){ /* ぼかしはほかのものの下に描く．「測定なし」なら 2 電子の雲は同一なので 1 つだけ */
+    items.forEach(function(it){ if(it.kind!=='electron' || (U.none && it.i>0)) return; const C=center(it);
+      gaussBlob(c,C[0],C[1],sig,'15,76,129');
+      c.strokeStyle='rgba(15,76,129,.55)'; c.lineWidth=1.1; c.beginPath(); c.arc(C[0],C[1],Math.max(sig,1.5),0,Math.PI*2); c.stroke();
+      const q=Math.max(sig,5)*0.71; label(c,'Δx',C[0]+q+3,C[1]-q-4,{size:10,color:'#0a355a',align:'left'}); });
+  }
   for(let i=0;i<items.length;i++){ const it=items[i];
     if(it.kind==='nucleus'){ glow(c,cx,cy,26,'rgba(214,69,69,.35)'); ball(c,cx,cy,5.5,'#d64545'); label(c,'原子核',cx,cy+17,{size:10.5,color:'#8a2b2b',bold:true}); this.hits.push({x:cx,y:cy,r:18,kind:'nucleus'}); }
     else { const X=cx+s*it.p[0], Y=cy-s*it.p[1]; this.trail(c,it.e.trail,s,cx,cy,'rgba(15,76,129,A)');
-      glow(c,X,Y,20,'rgba(15,76,129,.35)'); ball(c,X,Y,5.5,'#0f4c81','#cfe3f7'); label(c,'e⁻',X+12,Y-10,{size:11.5,bold:true,color:'#0a355a'});
+      if(U){
+        const C=center(it), nv=zoomE?UNC_NV:8;
+        for(let k=0;k<nv;k++){ const q=project(this.cam,it.e.vxi[k][0],it.e.vxi[k][1],it.e.vxi[k][2]);   /* 速度 = Δv·ξ（3 次元ガウス）を射影 */
+          arrow(c,C[0],C[1],C[0]+sv*q[0],C[1]-sv*q[1],'rgba(190,110,20,'+(0.35+0.3*clamp(q[2]/2+0.5,0,1)).toFixed(2)+')',1.1); }
+        if(zoomE && sv<Math.max(W,H)){ c.setLineDash([3,4]); c.strokeStyle='rgba(190,110,20,.6)'; c.lineWidth=1.1; c.beginPath(); c.arc(C[0],C[1],sv,0,Math.PI*2); c.stroke(); c.setLineDash([]);
+          label(c,'Δv（1σ）',C[0]+sv*0.71+4,C[1]+sv*0.71+4,{size:10,color:'#8a5a00',align:'left'}); }
+        ball(c,X,Y,3.4,'#0f4c81','#cfe3f7'); c.strokeStyle='rgba(255,255,255,.9)'; c.lineWidth=1.2; c.beginPath(); c.arc(X,Y,3.4,0,Math.PI*2); c.stroke();
+        label(c,'e⁻',X+10,Y+11,{size:11.5,bold:true,color:'#0a355a'});
+      } else {
+        glow(c,X,Y,20,'rgba(15,76,129,.35)'); ball(c,X,Y,5.5,'#0f4c81','#cfe3f7'); label(c,'e⁻',X+12,Y-10,{size:11.5,bold:true,color:'#0a355a'});
+      }
       this.hits.push({x:X,y:Y,r:14,kind:'electron',idx:it.i}); }
   }
   if(!zoomE){
@@ -726,9 +783,58 @@ ZoomSim.prototype.drawAtom=function(c,W,H,zoomE){
     label(c, '軌道はない：確率密度の中を拡散係数 ħ/2m で歩き，内向きドリフト Z′αc と釣り合っている（Nelson）', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
     /* 揺らぎの物差し */
     const rr=Math.sqrt(3)/A.Zeff; c.setLineDash([4,4]); c.strokeStyle='rgba(15,76,129,.5)'; c.beginPath(); c.arc(cx,cy,rr*s,0,Math.PI*2); c.stroke(); c.setLineDash([]);
-    label(c,'r_rms = √3 a₀/Z′ = '+(rr*K.a0).toFixed(2)+' Å', cx+rr*s*0.72, cy-rr*s*0.72-8, {size:10.5,color:'#0a355a',align:'left'});
+    label(c,'r_rms = √3 a₀/Z′ = '+(rr*K.a0).toFixed(2)+' Å', cx-rr*s*0.72, cy+rr*s*0.72+12, {size:10.5,color:'#0a355a',align:'right'});  /* 円の左下（右上は不確定さの数値と重なる） */
+  }
+  if(U){ /* 不確定さの数値（右上）と矢印の物差し（左下） */
+    const kms=mn(Math.round(U.dv/1e3).toLocaleString('en-US'))+' km/s';
+    label(c,'Δx = '+mn(U.dx.toPrecision(3))+' pm，Δp = ħ/2Δx = '+mn((U.dp/1e3).toPrecision(3))+' keV/c（Δx·Δp = ħ/2）', W-12, 52, {align:'right',size:10.5,color:'#0a355a'});
+    label(c,'Δv = Δp/m = '+kms+' = '+mn((U.dv/K.c*100).toPrecision(3))+'% c（v_rms = Z′αc の '+(U.dv/U.vrms).toFixed(2)+' 倍）', W-12, 68, {align:'right',size:10.5,color:'#8a5a00'});
+    label(c, U.none?'測定なし：Δx = σ₀ = a₀/Z′（1s の拡がりそのもの．ぼかしの中心は原子核）':'位置を分解能 σₘ = '+mn(U.sm.toPrecision(3))+' pm で測った直後のガウス波束（中心は測定値≈点）', W-12, 84, {align:'right',size:10,color:'#5c6670'});
+    label(c,'橙の矢印：速度 × '+(K.tau_au/(3*A.Zeff*A.Zeff)*1e18).toFixed(1)+' as の移動距離（→ が v_rms = Z′αc）', 14, H-56, {align:'left',size:10,color:'#8a5a00'});
+    arrow(c,14,H-42,14+sZ/3,H-42,'rgba(190,110,20,.9)',1.3);
   }
   scaleBar(c, 14, H-16, s/K.a0, '1 Å = 10⁻¹⁰ m');
+};
+/* ---- 不確定性関係（ガウス波束）の数値 ---- */
+ZoomSim.prototype.uncParams=function(){
+  const A=ATOMS[this.atom], Z=A.Zeff;
+  const s0=K.a0*100/Z;                        // σ₀ = a₀/Z′ [pm]：1s の各軸方向の位置の標準偏差
+  const none=this.uncG>=0.99;                 // スライダー右端：測定しない（1s のまま）
+  const g=Math.pow(10,this.uncG);             // σ_m/σ₀
+  const fac=none?1:g/Math.sqrt(1+g*g);        // Δx/σ₀ = σ_m/√(σ₀²+σ_m²)（ガウス × ガウス）
+  const wO=none?1:g*g/(1+g*g);                // 波束の中心の原子核側の重み σ_m²/(σ₀²+σ_m²)
+  const dx=fac*s0;                            // Δx [pm]
+  const dv=K.hbar/(2*K.me_kg*dx*1e-12);       // Δv = ħ/2mΔx [m/s]（実ガウス波束＝最小不確定状態）
+  const dp=K.hbarc*1e6/(2*dx*1e3);            // Δp·c = ħc/2Δx [eV]（ħc = 197.33 MeV fm，Δx を fm に）
+  const T=0.75*13.605693*Math.pow(K.a0*100/dx,2);   // ゼロ点運動エネルギー 3ħ²/8mΔx² = (3/4)·13.6 eV·(a₀/Δx)² [eV]
+  return {Z:Z, s0:s0, none:none, g:g, sm:g*s0, fac:fac, wO:wO, dx:dx, dv:dv, dp:dp, T:T,
+          T1s:13.605693*Z*Z,                  // 1s の運動エネルギー ⟨T⟩ = 13.6 Z′² eV（ビリアル定理で束縛エネルギーに等しい）
+          vrms:Z*K.alpha*K.c,                 // 1s の v_rms = Z′αc [m/s]
+          tau:2*K.me_kg*Math.pow(dx*1e-12,2)/K.hbar};  // 自由なら幅が √2 倍になる時間 τ = 2mΔx²/ħ [s]（2 倍は √3 τ）
+};
+ZoomSim.prototype.renderUnc=function(){
+  const U=this.uncParams();
+  const kms=function(v){ return mn(Math.round(v/1e3).toLocaleString('en-US'))+' km/s'; };
+  const pc=function(v){ return mn((v/K.c*100).toPrecision(3))+'% <i>c</i>'; };
+  const ev=function(E){ return E<1e3?mn(E.toPrecision(3))+' eV':E<1e6?mn((E/1e3).toPrecision(3))+' keV':mn((E/1e6).toPrecision(3))+' MeV'; };
+  const ratio=U.T/U.T1s, rs=ratio>=100?Math.round(ratio).toLocaleString('en-US'):mn(ratio.toPrecision(2));
+  const v=this.ctl.querySelector('[data-role="uncval"]'); if(v) v.innerHTML=U.none?'測定なし（∞）':mn(U.sm.toPrecision(3))+' pm = '+U.g.toFixed(2)+' σ₀';
+  const sm=this.ctl.querySelector('[data-role="uncsum"]');
+  if(sm) sm.innerHTML='→ Δ<i>x</i> = '+mn(U.dx.toPrecision(3))+' pm（σ₀ = <i>a</i>₀/<i>Z</i>′ = '+mn(U.s0.toPrecision(3))+' pm の '+U.fac.toFixed(2)+' 倍），Δ<i>v</i> = ħ/2<i>m</i>Δ<i>x</i> = '+kms(U.dv)+'（'+pc(U.dv)+'，<i>v</i><sub>rms</sub> の '+(U.dv/U.vrms).toFixed(2)+' 倍）'
+    +(U.T>2*U.T1s?' <b style="color:#8a5a00">→ 原子に留まれない（イオン化）</b>':'')+(U.dv>0.1*K.c?' <b style="color:#8a5a00">相対論的</b>':'');
+  const box=this.info.querySelector('[data-live="unckv"]'); if(!box) return;
+  let h=kvHtml([['ガウス波束の不確定さ（1σ）：'+(U.none?'測定なし（1s のまま）':'分解能 σ<sub>m</sub> = '+mn(U.sm.toPrecision(3))+' pm で位置を測った直後')],
+    ['位置の不確定さ Δ<i>x</i>（青いぼかし）',mn(U.dx.toPrecision(3))+' pm（σ₀ = '+mn(U.s0.toPrecision(3))+' pm の '+U.fac.toFixed(2)+' 倍）'],
+    ['運動量の不確定さ Δ<i>p</i> = ħ/2Δ<i>x</i>',mn((U.dp/1e3).toPrecision(3))+' keV/<i>c</i>'],
+    ['速度の不確定さ Δ<i>v</i> = Δ<i>p</i>/<i>m</i>（橙の矢印）',kms(U.dv)+' = '+pc(U.dv)],
+    ['同／1s の <i>v</i><sub>rms</sub> = <i>Z</i>′α<i>c</i>','× '+(U.dv/U.vrms).toFixed(2)],
+    ['Δ<i>x</i>·Δ<i>p</i>','ħ/2（最小不確定）．実際の 1s は ħ/√3 = 0.58ħ'],
+    ['波束の運動エネルギー 3ħ²/8<i>m</i>Δ<i>x</i>²',ev(U.T)+'（1s の ⟨<i>T</i>⟩ '+U.T1s.toFixed(1)+' eV の '+rs+' 倍）'],
+    ['自由なら幅が 2 倍になる時間 √3·2<i>m</i>Δ<i>x</i>²/ħ',fmtPow(Math.sqrt(3)*U.tau,1)+' s']]);
+  if(U.T>2*U.T1s) h+='<div class="note warn"><b>この波束は原子に留まれない</b>：運動エネルギー '+ev(U.T)+' が 1s の束縛エネルギー |<i>E</i><sub>1s</sub>| ≈ '+U.T1s.toFixed(0)+' eV を大きく上回り，電子は原子から飛び出します（イオン化）．「細い点」にするほど「速い」——これが不確定性関係です．</div>';
+  else if(U.none) h+='<div class="note key"><b>測らなければ，位置の不確かさは原子そのもの</b>：Δ<i>x</i> = <i>a</i>₀/<i>Z</i>′（各軸）．図の点は Nelson 描像でのサンプルで，ぼかしの中心は原子核に戻ります．</div>';
+  if(U.dv>0.1*K.c) h+='<div class="note warn"><b>相対論的</b>：Δ<i>v</i> が <i>c</i> の 1 割を超えました．Δ<i>x</i> が換算コンプトン波長 ƛ<sub>C</sub> = 0.39 pm に近づくと電子・陽電子対ができ，「1 個の電子の位置」という描像そのものが破れます（→ 真空中の電子）．</div>';
+  box.innerHTML=h; postHeight();
 };
 ZoomSim.prototype.drawNucleus=function(c,W,H){
   const A=ATOMS[this.atom], R=Math.min(W,H)/2-30, s=R/3.0, cx=W/2, cy=H/2, self=this, bN=this.bN;
@@ -922,12 +1028,19 @@ ZoomSim.prototype.renderPanel=function(){
     h+='<h3>原子 ― 10⁻¹⁰ m の世界</h3>'+
       '<p><span class="tag">見えているもの</span>青い雲は電子の<b>確率密度</b> |ψ<sub>1s</sub>|²，青い点は「電子の位置」をNelson の確率力学で描いたものです．中心の赤い点が原子核ですが，実寸は He で 1.7 fm＝a₀ の 3×10⁻⁵ 倍，この図の点の 1/10⁴ 以下．<b>原子の大きさは，ほぼすべて電子の量子的な揺らぎ</b>で決まっています．</p>'+
       kv([[A.name+'原子'],['電子の数',A.ne+' 個'],['有効核電荷 <i>Z</i>′（電子が感じる核電荷）',A.Zeff.toFixed(4)],['1s の拡がり <i>r</i><sub>rms</sub> = √3 <i>a</i>₀/<i>Z</i>′',rr.toFixed(3)+' Å'],['電子の速さ <i>v</i><sub>rms</sub> = <i>Z</i>′α<i>c</i>',(v*100).toFixed(2)+'% <i>c</i> = '+mn((v*K.c/1e3).toFixed(0))+' km/s'],['全エネルギー（実測値）',mn(A.E.toFixed(2))+' eV'+(A.Evar?'（変分 '+mn(A.Evar.toFixed(2))+'）':'')],['揺らぎの時間スケール <i>a</i>₀/(α<i>c</i>)','24.2 as = 2.4×10⁻¹⁷ s'],['原子核の電荷半径',A.rch.toFixed(2)+' fm = '+fmtPow(A.rch/K.a0fm,1)+' <i>a</i>₀'],['電子の大きさ（実験の上限）','< 2.8×10⁻¹⁹ m'],['揺らぎ／電子の大きさ','> '+fmtPow(rr*1e-10/2.8e-19,1)]])+
+      '<h4>位置と速度の不確定さ ― ガウス分布で見る</h4>'+
+      '<p>青い点は電子の<b>位置のサンプル</b>であって，電子の大きさではありません（電子は &lt; 3×10⁻¹⁹ m の点）．量子力学では位置を Δ<i>x</i> に絞るほど運動量が Δ<i>p</i> ≥ ħ/2Δ<i>x</i> だけばらつきます（Heisenberg）．図では点のまわりの<b>青いぼかし</b>が位置の不確定さ Δ<i>x</i>（1σ の円つき），<b>橙の矢印の束</b>が速度の不確定さ Δ<i>v</i> = ħ/2<i>m</i>Δ<i>x</i>（3 次元ガウス分布からのサンプル．長さは速度に比例）です．操作パネルのスライダー「位置を測る分解能 σ<sub>m</sub>」で，電子をどこまで細く絞るかを変えられます．</p>'+
+      '<div data-live="unckv"></div>'+
+      '<div class="note key"><b>1s 電子そのものの不確定さ</b>：測らなければ Δ<i>x</i> = <i>a</i>₀/<i>Z</i>′（各軸．雲の拡がりそのもの），Δ<i>p</i> = <i>Z</i>′ħ/√3<i>a</i>₀，Δ<i>x</i>·Δ<i>p</i> = ħ/√3 = 0.58ħ で，最小値 ħ/2 のわずか 15% 上——1s は最小不確定状態にかなり近い状態です．細く測るほど速度がばらつき，Δ<i>x</i> ≈ 1 pm では Δ<i>v</i> ≈ 20% <i>c</i>，運動エネルギーは数十 keV．「ものすごく細い点」にはできますが，そのとき電子は「ものすごく速く」なって原子から飛び出します．</div>'+
       '<div class="note key"><b>なぜ電子は原子核に落ち込まないのか</b>：電子を半径 <i>r</i> に閉じ込めると運動エネルギー ħ²/2<i>mr</i>² が必要で，クーロン引力 −<i>Ze</i>²/4πε₀<i>r</i> と足した <i>E</i>(<i>r</i>) は <i>r</i> = <i>a</i>₀/<i>Z</i> で最小になります（電子をクリックすると曲線が出ます）．古典電磁気学なら 10⁻¹¹ s で核に落ちる電子を支えているのは，不確定性関係そのものです．</div>'+
       '<div class="note"><b>陽子と電子がくっついて中性子になれば安定？</b>——なりません．中性子は陽子＋電子より <b>0.78 MeV 重い</b>（<i>m</i><sub>n</sub> − <i>m</i><sub>p</sub> − <i>m</i><sub>e</sub> = 0.782 MeV）ので，p + e⁻ → n + ν<sub>e</sub> は外からエネルギーを与えないと起きません．逆に自由な中性子は 15 分で β 崩壊して p + e⁻ に戻ります．中性子星の内部（密度 ≳ 10⁷ g/cm³）では電子の Fermi エネルギーがこの費用を払い，本当に「くっつき」ます．</div>'+
       '<p class="hint">原子核をクリック → 核力の世界へ／電子をクリック → 電子の運動を詳しく．</p>';
   }
   if(L==='electron'){
     const v=A.Zeff*K.alpha, rr=Math.sqrt(3)*K.a0/A.Zeff, T=13.6057*A.Zeff*A.Zeff;
+    /* Nelson の点のコマ間の見かけの速さ √(3ħ/mΔt)：Δt = NEL_N·NEL_H τ_au（再生速度「ふつう」） */
+    const dtf=NEL_N*NEL_H, dtas=(dtf*K.tau_au*1e18).toFixed(2), vappv=Math.sqrt(3/dtf)*K.alpha*K.c;
+    const vapp=mn(Math.round(vappv/1e3).toLocaleString('en-US'))+' km/s', vpc=mn((vappv/K.c*100).toPrecision(2))+'% <i>c</i>', vratio=(Math.sqrt(3/dtf)/A.Zeff).toFixed(0);
     h+='<h3>原子の中の電子 ― 光速の <i>Z</i>/137 で「揺らぐ」</h3>'+
       '<p>1s 電子の速さの二乗平均平方根は <i>v</i><sub>rms</sub> = <i>Z</i>α<i>c</i>（α = 1/137.036）．水素で 0.73% <i>c</i>（2,190 km/s），ヘリウムで 1.23% <i>c</i> です．ただし「軌道」はありません．図の点は確率密度 |ψ|² の中を拡散係数 ħ/2<i>m</i> でランダムに歩く Nelson 流の描像で，内向きのドリフト速度がちょうど <i>Z</i>α<i>c</i>．外向きの拡散と釣り合って |ψ<sub>1s</sub>|² が保たれます．</p>'+
       kv([[A.name+'原子の 1s 電子（<i>Z</i>′ = '+A.Zeff.toFixed(4)+'）'],['<i>v</i><sub>rms</sub> = <i>Z</i>′α<i>c</i>',(v*100).toFixed(2)+'% <i>c</i>'],['運動エネルギー ⟨<i>T</i>⟩ = ½<i>mv</i>² = 13.6 <i>Z</i>′² eV',T.toFixed(1)+' eV'],['ポテンシャル ⟨<i>V</i>⟩ = −2⟨<i>T</i>⟩（ビリアル定理）',mn((-2*T).toFixed(1))+' eV'],['位置の揺らぎ <i>r</i><sub>rms</sub>',rr.toFixed(3)+' Å'],['電子の大きさ（上限）','< 2.8×10⁻¹⁹ m'],['揺らぎ／大きさ','> '+fmtPow(rr*1e-10/2.8e-19,1)]])+
@@ -935,6 +1048,9 @@ ZoomSim.prototype.renderPanel=function(){
       '<div class="ctlrow"><span><i>Z</i> =</span><input type="range" min="1" max="92" step="1" value="'+this.Zhyd+'" data-role="zhyd"><span class="val" data-role="zval"></span></div>'+
       '<div data-role="zkv"></div>'+
       '<canvas class="mini" data-role="ecurve" height="170"></canvas>'+
+      '<h4>位置と速度の不確定さ ― 点はなぜ「ものすごく速い」のか</h4>'+
+      '<p>図の点は各瞬間に位置が確定した Brown 運動（Nelson）で，<b>速度は定義できません</b>（軌跡はどこでも微分不可能）．Δ<i>t</i> 間隔でコマ送りしたときの見かけの速さは √(3ħ/<i>m</i>Δ<i>t</i>)：この図の 1 コマ Δ<i>t</i> = '+dtas+' as では ≈ '+vapp+'（'+vpc+'，<i>v</i><sub>rms</sub> の '+vratio+' 倍）で，Δ<i>t</i> を細かくするほど際限なく速くなります．位置を確定させた代償が速度の不確定さとして現れているわけです．青いぼかしと橙の矢印は，これをガウス波束で有限の Δ<i>x</i>・Δ<i>v</i> に翻訳したもの：Δ<i>x</i> を選ぶと Δ<i>v</i> = ħ/2<i>m</i>Δ<i>x</i> が決まります（1s の運動量分布 |φ(<i>p</i>)|² ∝ [1 + (<i>pa</i>₀/<i>Z</i>′ħ)²]⁻⁴ の rms 幅は <i>Z</i>′ħ/<i>a</i>₀）．</p>'+
+      '<div data-live="unckv"></div>'+
       '<div class="note"><b>材料科学へのつながり</b>：金（<i>Z</i> = 79）の 1s 電子は 0.58<i>c</i> で動き，相対論的に質量が 22% 増えて軌道が縮みます．この収縮が 6s まで伝わって 5d→6s の吸収が可視光（青）に入るのが<b>金の色</b>，水銀が液体なのも同じ相対論効果です（Pyykkö, 1979）．</div>'+
       '<div class="note warn"><b>電子は原子核の中に住めない</b>：1 fm に閉じ込めると運動エネルギーが ħ<i>c</i>/<i>r</i> ≈ 200 MeV も必要で，核のクーロン引力（数 MeV）では支えられません．だから原子核の中の「中性の部分」は電子ではなく，新しい粒子——中性子（Chadwick 1932）でなければならなかったのです．</div>'+
       '<p class="hint">原子に戻る → パンくずの「原子」．真空中の電子 → パンくずの「真空中の電子」．</p>';
@@ -1015,6 +1131,8 @@ ZoomSim.prototype.renderPanel=function(){
   const sr=this.info.querySelector('[data-role="sig0"]');
   if(sr){ const upd=function(){ self.sig0=Math.pow(10,parseFloat(sr.value)); self.packT=0; self.renderPacket(); }; sr.addEventListener('input', upd); upd(); }
   const nn=this.info.querySelector('[data-role="nnpot"]'); if(nn) this.drawNNpot(nn);
+  this.renderUnc();
+  foldInfo(this.info);   /* 階層を変えるたびに解説を畳み直す（開閉の状態は覚えている） */
   postHeight();
 };
 const ELEM=['','H','He','Li','Be','B','C','N','O','F','Ne','Na','Mg','Al','Si','P','S','Cl','Ar','K','Ca','Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn','Ga','Ge','As','Se','Br','Kr','Rb','Sr','Y','Zr','Nb','Mo','Tc','Ru','Rh','Pd','Ag','Cd','In','Sn','Sb','Te','I','Xe','Cs','Ba','La','Ce','Pr','Nd','Pm','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','Hf','Ta','W','Re','Os','Ir','Pt','Au','Hg','Tl','Pb','Bi','Po','At','Rn','Fr','Ra','Ac','Th','Pa','U'];
@@ -1549,9 +1667,13 @@ app.addEventListener('toggle', postHeight, true);
    education.html に埋め込むと .info が長すぎて iframe が 1900〜2800px にな
    っていた．生きた読み出し（data-role を持つ要素）と見出しはそのまま見せ，
    静的な解説だけを <details> に入れる．埋め込みのときは初期状態で閉じ，
-   単独で開いたときは開いたままにする（読み物として読めるように）． */
+   単独で開いたときは開いたままにする（読み物として読めるように）．
+   ① のパネルは階層を変えるたびに書き直されるので renderPanel からも呼ぶ．
+   いちどユーザーが開閉したら，その状態を .info に覚えて次の書き直しでも保つ．
+   （生きた読み出しでも畳んでよいものは data-role ではなく data-live を付ける） */
 function foldInfo(info){
-  if(!info || info.dataset.folded) return;
+  if(!info) return;
+  for(var k=0;k<info.children.length;k++){ if(info.children[k].classList.contains('infofold')) return; }
   var kids=Array.prototype.slice.call(info.children), keep=0;
   kids.forEach(function(e,i){
     if(e.hasAttribute('data-role') || e.querySelector('[data-role]')) keep=i+1;
@@ -1564,8 +1686,8 @@ function foldInfo(info){
   d.appendChild(sm);
   rest.forEach(function(e){ d.appendChild(e); });
   info.appendChild(d);
-  d.open = !app.classList.contains('is-embed');
-  info.dataset.folded='1';
+  d.open = info.dataset.infoOpen ? info.dataset.infoOpen==='1' : !app.classList.contains('is-embed');
+  d.addEventListener('toggle', function(){ info.dataset.infoOpen = d.open ? '1' : '0'; });
 }
 app.querySelectorAll('.info').forEach(foldInfo);
 /* 畳む／開くで高さが変わるので，親へ知らせ直す */
