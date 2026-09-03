@@ -289,6 +289,7 @@ K.rpi = K.hbarc/K.mpi;                         // π 中間子の到達距離 [f
 K.a0fm = K.a0*1e5;                             // Bohr 半径 [fm]
 K.MeVfm_N = 1e6*K.eV/1e-15;                    // 1 MeV/fm = 160.2 N
 K.tau_au = K.hbar/(K.alpha*K.alpha*K.me_kg*K.c*K.c); // 原子単位の時間 2.42e-17 s
+K.lP = Math.sqrt(K.hbar*K.G/Math.pow(K.c,3));  // プランク長 1.616e-35 m（弦の長さ ℓ_s ≈ ℓ_P とする）
 
 /* ========================================================================
    2. 小道具
@@ -423,6 +424,27 @@ function label(c, txt, x, y, opt){
   if(opt.halo!==false){ c.lineWidth=3; c.strokeStyle='rgba(255,255,255,.85)'; c.strokeText(txt,x,y); }
   c.fillStyle=opt.color||'#1f2328'; c.fillText(txt,x,y);
 }
+/* 見出し行のレイアウト．左寄せの行は幅に収まるよう折り返し（日本語向け：句読点の直後を優先），
+   右寄せの行は左の行と重なるなら空いている行まで下げる．行間 18 px，最初の行 y = 16．
+   引数 left / right は [[文字列, {size,bold,color}], ...]．戻り値は次に使える行の y． */
+function hdrLayout(c, W, left, right){
+  const x0=12, x1=W-12, dy=18, gap=14, ends=[]; let y=16;
+  const setFont=function(o){ c.font=(o.bold?'bold ':'')+(o.size||11)+'px '+CFONT; };
+  const wrap=function(t,maxW){ const out=[]; let str=String(t);
+    while(str.length){ if(c.measureText(str).width<=maxW){ out.push(str); break; }
+      let cut=1, good=-1;
+      for(let i=1;i<=str.length;i++){ if(c.measureText(str.slice(0,i)).width>maxW) break; cut=i; if('，．、。）] ：；'.indexOf(str[i-1])>=0) good=i; }
+      if(good>cut*0.45) cut=good; if(cut<1) cut=1;
+      out.push(str.slice(0,cut)); str=str.slice(cut).replace(/^\s+/,''); }
+    return out; };
+  (left||[]).forEach(function(L){ if(!L) return; const o=L[1]||{}; setFont(o);
+    wrap(L[0], x1-x0).forEach(function(ln){ label(c,ln,x0,y,Object.assign({},o,{align:'left'})); setFont(o); ends.push(x0+c.measureText(ln).width); y+=dy; }); });
+  let r=0;
+  (right||[]).forEach(function(R){ if(!R) return; const o=R[1]||{}; setFont(o); const w=c.measureText(R[0]).width;
+    while(r<ends.length && (x1-w)<ends[r]+gap) r++;
+    label(c,R[0],x1,16+r*dy,Object.assign({},o,{align:'right'})); r++; });
+  return Math.max(y, 16+r*dy);
+}
 function scaleBar(c, x, y, px, txt){
   c.strokeStyle='#1f2328'; c.lineWidth=1.5; c.beginPath(); c.moveTo(x,y); c.lineTo(x+px,y); c.moveTo(x,y-4); c.lineTo(x,y+4); c.moveTo(x+px,y-4); c.lineTo(x+px,y+4); c.stroke();
   label(c, txt, x+px/2, y-9, {size:10.5, color:'#1f2328'});
@@ -446,6 +468,7 @@ function sample1s(Z){ // r ~ Gamma(3, 1/2Z)，方向は一様
 /* 不確定性関係の可視化（ガウス波束）で使う小道具 */
 const UNC_NV=14;                 // 速度の不確定さを表す矢印（3 次元ガウス分布からのサンプル）の本数
 const NEL_N=4, NEL_H=0.0032;     // 電子の Nelson 過程：1 コマあたりの部分ステップ数と刻み [原子単位の時間 24.2 as]
+const STR_NM=14, STR_NP=180;     // 弦：ゼロ点振動に使うモード数と，輪を描く折れ線の分割数
 function mkXi(n){ const r=[]; for(let i=0;i<n;i++) r.push([randn(),randn(),randn()]); return r; }
 function gaussBlob(c,x,y,sig,rgb){ /* 2 次元ガウス分布 exp(−ρ²/2σ²) を放射状グラデーションで描く（3 次元等方ガウスの射影も同じ σ） */
   if(sig<1.2){ c.fillStyle='rgba('+rgb+',.9)'; c.beginPath(); c.arc(x,y,1.6,0,Math.PI*2); c.fill(); return; }
@@ -462,6 +485,28 @@ function arrow(c,x0,y0,x1,y1,col,w){
   c.beginPath(); c.moveTo(x1,y1); c.lineTo(x1-hl*ux+hl*0.5*uy, y1-hl*uy-hl*0.5*ux); c.moveTo(x1,y1); c.lineTo(x1-hl*ux-hl*0.5*uy, y1-hl*uy+hl*0.5*ux); c.stroke();
 }
 function kvHtml(rows){ return '<div class="kv">'+rows.map(function(r){ return r.length===1?'<span class="hd">'+r[0]+'</span>':'<span>'+r[0]+'</span><span>'+r[1]+'</span>'; }).join('')+'</div>'; }
+/* 光る弦（折れ線）と D ブレーン（太い半透明の線） */
+function glowPath(c,pts,rgb){ [[10,0.09],[5,0.26],[2,1]].forEach(function(L){ c.lineWidth=L[0]; c.lineCap='round'; c.lineJoin='round'; c.strokeStyle='rgba('+rgb+','+L[1]+')'; c.beginPath(); for(let i=0;i<pts.length;i++){ if(i===0) c.moveTo(pts[i][0],pts[i][1]); else c.lineTo(pts[i][0],pts[i][1]); } c.stroke(); }); }
+function braneLine(c,x0,y0,x1,y1,col,lab){ c.lineCap='round'; c.lineWidth=9; c.strokeStyle=hexA(col,0.16); c.beginPath(); c.moveTo(x0,y0); c.lineTo(x1,y1); c.stroke(); c.lineWidth=1.6; c.strokeStyle=hexA(col,0.85); c.beginPath(); c.moveTo(x0,y0); c.lineTo(x1,y1); c.stroke(); if(lab) label(c,lab,x1+6,y1,{size:9.5,color:shade(col,-0.3),align:'left'}); }
+/* ハドロンの弦（QCD の弦）：Regge 軌道 J = α₀ + α′M²，α′ = 1/2πσ．質量は PDG 2024 [GeV] */
+const REGGE_M=[{n:'ρ(770)',J:1,M:0.7753},{n:'a₂(1320)',J:2,M:1.3182},{n:'ρ₃(1690)',J:3,M:1.6888},{n:'a₄(1970)',J:4,M:1.967},{n:'ρ₅(2350)',J:5,M:2.330},{n:'a₆(2450)',J:6,M:2.450}];
+const REGGE_D=[{n:'Δ(1232)',J:1.5,M:1.232},{n:'Δ(1950)',J:3.5,M:1.930},{n:'Δ(2420)',J:5.5,M:2.420},{n:'Δ(2950)',J:7.5,M:2.950}];
+const SIGMA_GEV2=K.sigma*K.hbarc/1e6;             // 弦張力 σ [GeV²] = 0.9 GeV/fm × 0.197 GeV fm = 0.178
+const ALPHA_P=1/(2*Math.PI*SIGMA_GEV2);            // Regge の傾き α′ = 1/2πσ [GeV⁻²] = 0.90（実測 ≈ 0.9）
+const REGGE_A0=0.5, REGGE_A0D=0.15;                // 切片（中間子 ρ 系列，バリオン Δ 系列）：端のクォークのスピン等の補正
+function reggeM(J,a0){ return Math.sqrt((J-(a0==null?REGGE_A0:a0))/ALPHA_P); }   // 弦の模型の質量 [GeV]
+function stringLen(M){ return 2*M/(Math.PI*K.sigma*1e-3); }                        // 端が光速で回る弦の長さ [fm]：M = πσL/2
+/* 「振動の型 → 粒子」：超弦理論（交差 D ブレーン模型）での対応 */
+const SCLASS={
+  photon:  {pill:'光子・W・Z', name:'光子・W・Z（ゲージ粒子）', kind:'開いた弦．両端が同じブレーン束の上', spin:'最低の横振動 1 個（ベクトル ε）→ スピン 1', charge:'U(1) ブレーン 1 枚 → 電荷なし（光子）．SU(2) 束の 2 枚をまたぐ → W±, Z', mass:'0（W, Z はヒッグス凝縮で 80–91 GeV）'},
+  gluon:   {pill:'グルーオン', name:'グルーオン', kind:'開いた弦．両端が色ブレーン束（3 枚）の上', spin:'ベクトル振動 1 個 → スピン 1', charge:'端 1 = 色，端 2 = 反色 → 3×3 − 1 = 8 種', mass:'0（閉じ込めで単独では見えない）'},
+  graviton:{pill:'グラビトン', name:'グラビトン（重力の量子）', kind:'閉じた弦．ブレーンに縛られず全次元に広がる', spin:'左回り × 右回りの最低振動 → 対称テンソル ε<sub>ij</sub> → スピン 2', charge:'なし（重力はすべてに働く）', mass:'0'},
+  quark:   {pill:'クォーク', name:'クォーク（u, d, c, s, t, b）', kind:'開いた弦．色ブレーン束と弱いブレーン束の交差点に住む', spin:'フェルミオン的振動（R セクター）の基底 → スピン ½', charge:'端 1 → 色（3），端 2 → 弱アイソスピン（2）：(3, 2) 表現．+2/3, −1/3 は U(1) の混合', mass:'基底状態では 0．ヒッグスとの湯川結合 ∝ e<sup>−面積/2πα′</sup> で 2 MeV〜173 GeV'},
+  lepton:  {pill:'電子・ν', name:'電子・μ・τ・ニュートリノ', kind:'開いた弦．弱いブレーン束と U(1) ブレーンの交差点', spin:'R セクターの基底 → スピン ½', charge:'色の端がない → 強い力を感じない．弱い束の上の枚 = ν，下の枚 = e', mass:'基底状態では 0．湯川結合で 0.5 MeV〜1.8 GeV（ν は ≪ 1 eV）'},
+  higgs:   {pill:'ヒッグス', name:'ヒッグス粒子', kind:'開いた弦．弱いブレーン束と U(1) ブレーンをつなぐスカラー', spin:'ブレーンに垂直な振動（位置の自由度）→ スピン 0', charge:'弱アイソスピン ½，超電荷 ½', mass:'125 GeV（凝縮して W, Z, クォーク, レプトンに質量を与える）'},
+  excited: {pill:'励起 N ≥ 1', name:'弦の励起状態（未発見）', kind:'開いた弦／閉じた弦の「倍音」', spin:'0, 1, 2, … 2N まで（Regge 軌道 J ≤ α′M² + 1）', charge:'基底状態と同じ電荷を持つ重い相棒', mass:'√N ħc/ℓ<sub>s</sub>（開）／2√N ħc/ℓ<sub>s</sub>（閉）≈ 10¹⁹ GeV'}
+};
+const PMASS=[['e',0.000511,'l'],['μ',0.1057,'l'],['τ',1.777,'l'],['u',0.00216,'q'],['d',0.0047,'q'],['s',0.0935,'q'],['c',1.27,'q'],['b',4.18,'q'],['t',172.6,'q'],['W',80.37,'b'],['Z',91.19,'b'],['H',125.2,'h']];  /* [名前, 質量 GeV, 種類]（PDG 2024） */
 
 /* ========================================================================
    3. 原子のデータ（核子の運動エネルギー等は GFMC, AV18/IL2: Pieper & Wiringa 2001）
@@ -476,6 +521,7 @@ const LEVELS = {
   nucleus: {name:'原子核',      scale:'10⁻¹⁴ m'},
   nucleon: {name:'核子',        scale:'10⁻¹⁵ m'},
   point:   {name:'クォーク',    scale:'< 10⁻¹⁸ m'},
+  string:  {name:'弦（超弦理論）', scale:'10⁻³⁵ m'},
   electron:{name:'原子の中の電子', scale:'10⁻¹⁰ m'},
   free:    {name:'真空中の電子', scale:'10⁻¹³ m'}
 };
@@ -489,6 +535,8 @@ function ZoomSim(root){
   this.cam={a:-0.55, b:0.32};
   this.speed=1; this.showCloud=true; this.showTrail=true;
   this.showUnc=true; this.uncG=-0.40;   /* 不確定性関係の表示．uncG = log10(σ_m/σ₀)：位置を測る分解能（右端 ≥0.99 は「測定なし」） */
+  this.strMode='vib'; this.strClass='photon'; this.strJ=1;   /* 弦の見方：vib（震える弦）／class（振動 → 粒子の分類）／hadron（QCD の弦・Regge 軌道），選んだ粒子，選んだ中間子 */
+  this.strN=0; this.strT=0; this.strXi=[]; for(let i=0;i<STR_NM;i++){ const m=[]; for(let k=0;k<6;k++) m.push(randn()); this.strXi.push(m); }  /* 弦：励起レベル N，位相，ゼロ点振動のモード振幅（単位分散の OU 過程） */
   this.selType='p'; this.selIdx=0; this.selE=0;
   this.freeMode='zbw'; this.Zhyd=1; this.sig0=1.0; this.packT=0;
   this.trans=null; this.demo=null; this.demoT=0;
@@ -546,8 +594,9 @@ ZoomSim.prototype.buildControls=function(){
       '<button class="pill" data-level="atom">原子</button><button class="pill" data-level="nucleus">原子核</button>'+
       '<button class="pill" data-level="nucleon" data-type="p">陽子</button><button class="pill" data-level="nucleon" data-type="n">中性子</button>'+
       '<button class="pill" data-level="point">クォーク（点）</button>'+
+      '<button class="pill" data-level="string">弦（超弦理論）</button>'+
       '<button class="pill" data-level="electron">原子の中の電子</button><button class="pill" data-level="free">真空中の電子</button></div>'+
-    '<span class="hint">ズームの階層：原子 10⁻¹⁰ m → 原子核 10⁻¹⁴ m → 核子 10⁻¹⁵ m → クォーク &lt;10⁻¹⁸ m．電子は 10⁻¹⁰ m（原子の中）と 10⁻¹³ m（真空中）の 2 つの見方があります．</span>';
+    '<span class="hint">ズームの階層：原子 10⁻¹⁰ m → 原子核 10⁻¹⁴ m → 核子 10⁻¹⁵ m → クォーク &lt;10⁻¹⁸ m → 弦 10⁻³⁵ m（超弦理論の仮説）．電子は 10⁻¹⁰ m（原子の中）と 10⁻¹³ m（真空中）の 2 つの見方があります．</span>';
   c.querySelectorAll('[data-atom]').forEach(function(b){ b.addEventListener('click', function(){ self.setAtom(this.dataset.atom); }); });
   c.querySelectorAll('[data-speed]').forEach(function(b){ b.addEventListener('click', function(){
     self.speed=parseFloat(this.dataset.speed); c.querySelectorAll('[data-speed]').forEach(function(x){ x.classList.toggle('on', x===b); }); }); });
@@ -600,6 +649,7 @@ ZoomSim.prototype.setLevel=function(level){
   if(level==='nucleon') this.initQuarks();
   if(level==='nucleus'){ this.demo=null; this.pion=null; }
   if(level==='free'){ this.packT=0; }
+  if(level==='string'){ this.strT=0; }
   this.level=level; this.rulerLevel='';
   this.renderPanel(); this.renderCrumbs();
 };
@@ -612,12 +662,13 @@ ZoomSim.prototype.click=function(x,y){
   else if(best.kind==='electron'){ this.selE=best.idx||0; this.go('electron', best.x, best.y); }
   else if(best.kind==='nucleon'){ this.selType=best.type; this.selIdx=best.idx; this.go('nucleon', best.x, best.y); }
   else if(best.kind==='quark') this.go('point', best.x, best.y);
+  else if(best.kind==='string') this.go('string', best.x, best.y);
   else if(best.kind==='freeE') this.go('free', best.x, best.y);
 };
 ZoomSim.prototype.renderCrumbs=function(){
   const self=this, L=this.level;
   const nucName = (this.selType==='p'?'陽子':'中性子');
-  const chain=[['atom','原子','10⁻¹⁰ m'],['nucleus','原子核','10⁻¹⁴ m'],['nucleon',(L==='nucleon'||L==='point')?nucName:'核子','10⁻¹⁵ m'],['point','クォーク','＜10⁻¹⁸ m']];
+  const chain=[['atom','原子','10⁻¹⁰ m'],['nucleus','原子核','10⁻¹⁴ m'],['nucleon',(L==='nucleon'||L==='point')?nucName:'核子','10⁻¹⁵ m'],['point','クォーク','＜10⁻¹⁸ m'],['string','弦（超弦理論）','10⁻³⁵ m']];
   const branch=[['electron','原子の中の電子','10⁻¹⁰ m'],['free','真空中の電子','10⁻¹³ m']];
   function btn(it, extra){ return '<button class="crumb'+(L===it[0]?' on':'')+(extra||'')+'" data-level="'+it[0]+'">'+it[1]+' <span class="sc">'+it[2]+'</span></button>'; }
   let h='<span>ズーム：</span>'+chain.map(function(it){ return btn(it); }).join('<span class="arrow">›</span>');
@@ -626,7 +677,8 @@ ZoomSim.prototype.renderCrumbs=function(){
   this.crumbs.querySelectorAll('[data-level]').forEach(function(b){ b.addEventListener('click', function(){ self.go(this.dataset.level); }); });
 };
 ZoomSim.prototype.renderRuler=function(){
-  const lo=-19, hi=-9, W=720, H=66, x0=44, x1=W-14;
+  const wide=(this.level==='string' && this.strMode!=='hadron');   /* 弦の階層では物差しを 10⁻³⁶ m まで伸ばす（ハドロンの弦は 1 fm なので通常） */
+  const lo=wide?-36:-19, hi=-9, W=720, H=66, x0=44, x1=W-14;
   const X=function(e){ return x0+(e-lo)/(hi-lo)*(x1-x0); };
   const wmax=this.vw, wmin=this.vw/500;
   let s='<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg"><style>text{font-family:Hiragino Kaku Gothic ProN,Yu Gothic,Noto Sans JP,sans-serif}</style>';
@@ -635,8 +687,10 @@ ZoomSim.prototype.renderRuler=function(){
   s+='<text x="'+((a+b)/2)+'" y="25" font-size="9" text-anchor="middle" fill="#0a355a" font-weight="700">いま見ている範囲</text>';
   s+='<line x1="'+x0+'" y1="43" x2="'+x1+'" y2="43" stroke="#1f2328" stroke-width="1.2"/>';
   for(let e=lo;e<=hi;e++){ s+='<line x1="'+X(e)+'" y1="39" x2="'+X(e)+'" y2="47" stroke="#1f2328"/>';
-    if(e%2===1 || e===lo){ s+='<text x="'+X(e)+'" y="60" font-size="9.5" text-anchor="middle" fill="#5c6670">10<tspan dy="-4" font-size="7">'+mn(e)+'</tspan><tspan dy="4"> m</tspan></text>'; } }
-  const regs=[[-18.4,'素粒子（点）','#6a3d9a'],[-15.08,'核子','#b03030'],[-14.3,'原子核','#8a2b2b'],[-13.4,'ƛ_C','#5c6670'],[-10.0,'原子','#0f4c81']];
+    if(wide ? ((e-lo)%3===0) : (e%2===1 || e===lo)){ s+='<text x="'+X(e)+'" y="60" font-size="9.5" text-anchor="middle" fill="#5c6670">10<tspan dy="-4" font-size="7">'+mn(e)+'</tspan><tspan dy="4"> m</tspan></text>'; } }
+  const regs=wide
+    ? [[-34.8,'弦・プランク長','#6a3d9a'],[-18.4,'素粒子（点）','#6a3d9a'],[-14.6,'原子核','#8a2b2b'],[-10.0,'原子','#0f4c81']]
+    : [[-18.4,'素粒子（点）','#6a3d9a'],[-15.08,'核子','#b03030'],[-14.3,'原子核','#8a2b2b'],[-13.4,'ƛ_C','#5c6670'],[-10.0,'原子','#0f4c81']];
   regs.forEach(function(r){ s+='<text x="'+X(r[0])+'" y="9" font-size="9.5" font-weight="700" text-anchor="middle" fill="'+r[2]+'">'+r[1]+'</text><line x1="'+X(r[0])+'" y1="11" x2="'+X(r[0])+'" y2="39" stroke="'+r[2]+'" stroke-dasharray="2 3"/>'; });
   s+='<text x="'+(x0-4)+'" y="31" font-size="9" text-anchor="end" fill="#5c6670">小さい</text><text x="'+(x1+2)+'" y="31" font-size="9" text-anchor="start" fill="#5c6670">大</text>';
   s+='</svg>';
@@ -693,6 +747,12 @@ ZoomSim.prototype.step=function(dt){
     this.sea.forEach(function(s){ s.t+=dt*sp; }); this.sea=this.sea.filter(function(s){ return s.t<s.life; });
     if(this.beta){ this.beta.t+=dt*sp; if(this.beta.t>0.5 && !this.beta.flipped){ this.beta.flipped=true; const q=this.quarks[this.beta.q]; q.f=(this.beta.kind==='n')?'u':'d'; } }
   }
+  if(L==='string'){
+    this.strT+=dt*sp;                                   /* 定在波の位相（画面時間） */
+    /* ゼロ点振動：各モードの振幅を単位分散の OU 過程で揺らす（相関時間 1.2 s）．分散 ∝ 1/n は描くときに掛ける */
+    const a=dt*sp/1.2, b=Math.sqrt(2*a);
+    this.strXi.forEach(function(m){ for(let k=0;k<6;k++) m[k]+=-m[k]*a+b*randn(); });
+  }
   if(L==='free'){
     /* Welton の震え：2 次元 OU（相関時間 0.12 s） */
     const tau=0.12, s=Math.sqrt(2*dt*sp/tau);
@@ -721,11 +781,12 @@ ZoomSim.prototype.draw=function(){
     case 'nucleon': this.drawNucleon(c,W,H); break;
     case 'point': this.drawPoint(c,W,H); break;
     case 'free': this.drawFree(c,W,H); break;
+    case 'string': this.drawString(c,W,H); break;
   }
   c.restore();
   if(alpha<1){ c.fillStyle='rgba(255,255,255,'+(1-alpha).toFixed(3)+')'; c.fillRect(0,0,W,H); }
   if(this.trans) this.hits=[];
-  if(this.rulerLevel!==this.level+this.freeMode){ this.rulerLevel=this.level+this.freeMode; this.renderRuler(); }
+  if(this.rulerLevel!==this.level+this.freeMode+this.strMode){ this.rulerLevel=this.level+this.freeMode+this.strMode; this.renderRuler(); }
 };
 ZoomSim.prototype.trail=function(c, tr, s, cx, cy, col){
   if(!this.showTrail || tr.length<2) return;
@@ -773,26 +834,28 @@ ZoomSim.prototype.drawAtom=function(c,W,H,zoomE){
       }
       this.hits.push({x:X,y:Y,r:14,kind:'electron',idx:it.i}); }
   }
+  const hl=[], hr=[];   /* 見出し行（左・右）．hdrLayout が折り返しと重なり回避をする */
   if(!zoomE){
-    label(c, A.name+'原子（'+A.sym+'）：電子 '+A.ne+' 個 ＋ 原子核（'+A.note.replace('原子核は','')+'）', 12, 16, {align:'left', size:12.5, bold:true});
-    label(c, '青い雲＝電子の確率密度 |ψ₁ₛ|²．中心の点が原子核（実寸は点の 1/10⁴ 以下）', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
-    label(c, '原子核・電子をクリックでズーム', W-12, 16, {align:'right', size:10.5, color:'#5c6670'});
+    hl.push([A.name+'原子（'+A.sym+'）：電子 '+A.ne+' 個 ＋ 原子核（'+A.note.replace('原子核は','')+'）', {size:12.5, bold:true}]);
+    hl.push(['青い雲＝電子の確率密度 |ψ₁ₛ|²．中心の点が原子核（実寸は点の 1/10⁴ 以下）', {size:10.5, color:'#5c6670'}]);
+    hr.push(['原子核・電子をクリックでズーム', {size:10.5, color:'#5c6670'}]);
   } else {
     const v=A.Zeff*K.alpha;
-    label(c, '原子の中の電子（'+A.sym+'，1s）：v_rms = Z′αc = '+(v*100).toFixed(2)+'% c = '+mn((v*K.c/1e3).toFixed(0))+' km/s', 12, 16, {align:'left', size:12.5, bold:true});
-    label(c, '軌道はない：確率密度の中を拡散係数 ħ/2m で歩き，内向きドリフト Z′αc と釣り合っている（Nelson）', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
+    hl.push(['原子の中の電子（'+A.sym+'，1s）：v_rms = Z′αc = '+(v*100).toFixed(2)+'% c = '+mn((v*K.c/1e3).toFixed(0))+' km/s', {size:12.5, bold:true}]);
+    hl.push(['軌道はない：確率密度の中を拡散係数 ħ/2m で歩き，内向きドリフト Z′αc と釣り合っている（Nelson）', {size:10.5, color:'#5c6670'}]);
     /* 揺らぎの物差し */
     const rr=Math.sqrt(3)/A.Zeff; c.setLineDash([4,4]); c.strokeStyle='rgba(15,76,129,.5)'; c.beginPath(); c.arc(cx,cy,rr*s,0,Math.PI*2); c.stroke(); c.setLineDash([]);
     label(c,'r_rms = √3 a₀/Z′ = '+(rr*K.a0).toFixed(2)+' Å', cx-rr*s*0.72, cy+rr*s*0.72+12, {size:10.5,color:'#0a355a',align:'right'});  /* 円の左下（右上は不確定さの数値と重なる） */
   }
   if(U){ /* 不確定さの数値（右上）と矢印の物差し（左下） */
     const kms=mn(Math.round(U.dv/1e3).toLocaleString('en-US'))+' km/s';
-    label(c,'Δx = '+mn(U.dx.toPrecision(3))+' pm，Δp = ħ/2Δx = '+mn((U.dp/1e3).toPrecision(3))+' keV/c（Δx·Δp = ħ/2）', W-12, 52, {align:'right',size:10.5,color:'#0a355a'});
-    label(c,'Δv = Δp/m = '+kms+' = '+mn((U.dv/K.c*100).toPrecision(3))+'% c（v_rms = Z′αc の '+(U.dv/U.vrms).toFixed(2)+' 倍）', W-12, 68, {align:'right',size:10.5,color:'#8a5a00'});
-    label(c, U.none?'測定なし：Δx = σ₀ = a₀/Z′（1s の拡がりそのもの．ぼかしの中心は原子核）':'位置を分解能 σₘ = '+mn(U.sm.toPrecision(3))+' pm で測った直後のガウス波束（中心は測定値≈点）', W-12, 84, {align:'right',size:10,color:'#5c6670'});
+    hr.push(['Δx = '+mn(U.dx.toPrecision(3))+' pm，Δp = ħ/2Δx = '+mn((U.dp/1e3).toPrecision(3))+' keV/c（Δx·Δp = ħ/2）', {size:10.5,color:'#0a355a'}]);
+    hr.push(['Δv = Δp/m = '+kms+' = '+mn((U.dv/K.c*100).toPrecision(3))+'% c（v_rms = Z′αc の '+(U.dv/U.vrms).toFixed(2)+' 倍）', {size:10.5,color:'#8a5a00'}]);
+    hr.push([U.none?'測定なし：Δx = σ₀ = a₀/Z′（1s の拡がりそのもの．ぼかしの中心は原子核）':'位置を分解能 σₘ = '+mn(U.sm.toPrecision(3))+' pm で測った直後のガウス波束（中心は測定値≈点）', {size:10,color:'#5c6670'}]);
     label(c,'橙の矢印：速度 × '+(K.tau_au/(3*A.Zeff*A.Zeff)*1e18).toFixed(1)+' as の移動距離（→ が v_rms = Z′αc）', 14, H-56, {align:'left',size:10,color:'#8a5a00'});
     arrow(c,14,H-42,14+sZ/3,H-42,'rgba(190,110,20,.9)',1.3);
   }
+  hdrLayout(c,W,hl,hr);
   scaleBar(c, 14, H-16, s/K.a0, '1 Å = 10⁻¹⁰ m');
 };
 /* ---- 不確定性関係（ガウス波束）の数値 ---- */
@@ -870,10 +933,10 @@ ZoomSim.prototype.drawNucleus=function(c,W,H){
       glow(c,X,Y,16,'rgba(224,161,0,.5)'); ball(c,X,Y,7,'#e0a100','#fff3c4'); label(c,'π'+this.pion.sign, X, Y-14, {size:11,bold:true,color:'#7a4a00'}); } }
   const np=A.nuc.filter(function(t){return t==='p';}).length, nn=A.nuc.length-np;
   const nm = A.sym==='H'?'水素の原子核（陽子）': A.sym==='D'?'重陽子（²H の原子核）':'α 粒子（⁴He の原子核）';
-  label(c, nm+'：陽子 '+np+' 個 ＋ 中性子 '+nn+' 個', 12, 16, {align:'left', size:12.5, bold:true});
-  if(A.nuc.length>1) label(c, '結合エネルギー '+A.B.toFixed(2)+' MeV（核子 1 個あたり '+(A.B/A.A).toFixed(2)+' MeV）．黄色の玉 π が核力を運び，π± を渡すと p ⇄ n が入れ替わる', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
-  else label(c, '陽子 1 個だけ．核力の出番はない（陽子をクリックするとクォークが見える）', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
-  label(c, '球の半径 0.84 fm は陽子の電荷半径（実寸）', W-12, 16, {align:'right', size:10.5, color:'#5c6670'});
+  hdrLayout(c,W,[[nm+'：陽子 '+np+' 個 ＋ 中性子 '+nn+' 個', {size:12.5, bold:true}],
+    [A.nuc.length>1 ? '結合エネルギー '+A.B.toFixed(2)+' MeV（核子 1 個あたり '+(A.B/A.A).toFixed(2)+' MeV）．黄色の玉 π が核力を運び，π± を渡すと p ⇄ n が入れ替わる'
+                    : '陽子 1 個だけ．核力の出番はない（陽子をクリックするとクォークが見える）', {size:10.5, color:'#5c6670'}]],
+    [['球の半径 0.84 fm は陽子の電荷半径（実寸）', {size:10.5, color:'#5c6670'}]]);
   scaleBar(c, 14, H-16, s, '1 fm = 10⁻¹⁵ m');
 };
 const QCOL={R:'#e53935',G:'#43a047',B:'#1e88e5'};
@@ -913,10 +976,10 @@ ZoomSim.prototype.drawNucleon=function(c,W,H){
   const flav=this.quarks.map(function(q){return q.f;}).join('');
   const chg=this.quarks.reduce(function(a,q){ return a+(q.f==='u'?2:-1); },0);
   const nowP = chg===3;
-  label(c, (nowP?'陽子':'中性子')+'（'+flav+'）：電荷 '+this.quarks.map(function(q){return q.f==='u'?'+2/3':'−1/3';}).join(' ')+' = '+(nowP?'+1':'0'), 12, 16, {align:'left', size:12.5, bold:true});
-  label(c, '質量 '+(nowP?K.mp:K.mn).toFixed(2)+' MeV/c²，うちクォーク 3 個の質量はわずか '+(nowP?'9.0':'11.6')+' MeV（≈1%）．残りはグルーオン場と運動のエネルギー', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
-  label(c, '点の実寸：< 4.3×10⁻¹⁹ m（この点の 1/70 以下）', W-12, 16, {align:'right', size:10.5, color:'#5c6670'});
-  label(c, '紫の小さな対 = 生まれては消える海クォーク（q q̄）', W-12, 34, {align:'right', size:10.5, color:'#5c6670'});
+  hdrLayout(c,W,[[(nowP?'陽子':'中性子')+'（'+flav+'）：電荷 '+this.quarks.map(function(q){return q.f==='u'?'+2/3':'−1/3';}).join(' ')+' = '+(nowP?'+1':'0'), {size:12.5, bold:true}],
+    ['質量 '+(nowP?K.mp:K.mn).toFixed(2)+' MeV/c²，うちクォーク 3 個の質量はわずか '+(nowP?'9.0':'11.6')+' MeV（≈1%）．残りはグルーオン場と運動のエネルギー', {size:10.5, color:'#5c6670'}]],
+    [['点の実寸：< 4.3×10⁻¹⁹ m（この点の 1/70 以下）', {size:10.5, color:'#5c6670'}],
+     ['紫の小さな対 = 生まれては消える海クォーク（q q̄）', {size:10.5, color:'#5c6670'}]]);
   scaleBar(c, 14, H-16, 0.5*s, '0.5 fm = 5×10⁻¹⁶ m');
 };
 ZoomSim.prototype.drawBeta=function(c,W,H,s,cx,cy,qs){
@@ -953,6 +1016,8 @@ ZoomSim.prototype.drawPoint=function(c,W,H){
   label(c,'クォークの大きさの上限 4.3×10⁻¹⁹ m（HERA）', cx, cy+22, {size:10.5,color:'#1f2328',bold:true});
   label(c,'——これより内側の構造は誰も見たことがない', cx, cy+38, {size:10.5,color:'#5c6670'});
   label(c,'電子も同じ：< 2.8×10⁻¹⁹ m（LEP）', cx, cy+54, {size:10.5,color:'#0a355a'});
+  label(c,'点をクリック → 超弦理論の「弦」10⁻³⁵ m（仮説）へ', cx, cy+72, {size:10.5,color:'#6a3d9a',bold:true});
+  this.hits.push({x:cx,y:cy,r:16,kind:'string'});
   /* 右：対数の物差し 10⁻¹⁸ → 10⁻³⁵ m */
   const x=W*0.66, y0=44, y1=H-40; const lo=-18, hi=-35; const Y=function(e){ return y0+(e-lo)/(hi-lo)*(y1-y0); };
   c.strokeStyle='#1f2328'; c.lineWidth=1.3; c.beginPath(); c.moveTo(x,y0); c.lineTo(x,y1); c.stroke();
@@ -962,8 +1027,198 @@ ZoomSim.prototype.drawPoint=function(c,W,H){
   marks.forEach(function(m){ const yy=Y(m[0]); const yl=Math.max(yy, prevY+14); prevY=yl; c.strokeStyle=m[2]; c.lineWidth=1.5; c.beginPath(); c.moveTo(x,yy); c.lineTo(x+14,yl); c.stroke(); label(c,m[1],x+18,yl,{size:10,align:'left',color:m[2]}); });
   c.fillStyle='rgba(106,61,154,.06)'; c.fillRect(x-2, Y(-20), W-x, y1-Y(-20));
   label(c,'未知の領域（実験はまだ届いていない）', x+18, (Y(-24)+Y(-31))/2, {size:11,align:'left',color:'#6a3d9a',bold:true});
-  label(c,'クォークと電子は「点」――大きさの上限と，その先の物差し', 12, 16, {align:'left', size:12.5, bold:true});
-  label(c,'左：核子の図の「点」と本当の上限の比較　右：10⁻¹⁸ m から 10⁻³⁵ m までの対数の物差し', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
+  hdrLayout(c,W,[['クォークと電子は「点」――大きさの上限と，その先の物差し', {size:12.5, bold:true}],
+    ['左：核子の図の「点」と本当の上限の比較　右：10⁻¹⁸ m から 10⁻³⁵ m までの対数の物差し', {size:10.5, color:'#5c6670'}]],[]);
+};
+/* ---- 弦（超弦理論）：3 つの見方 ----
+   vib   : ℓ_s ≈ ℓ_P の閉じた弦．基底状態（N = 0）はゼロ点振動だけで震える：モード n の振幅の分散 ∝ 1/n
+           （光錐ゲージの ⟨|α_n|²⟩ ∝ n を X_n ∝ α_n/n に入れたもの）．励起状態 N は N 個の山の定在波（振動数 ∝ N）．
+           右は分解能の限界：Heisenberg（Δx = ħc/E），弦の伸び（+ℓ_s²E/ħc），重力（Δx ≥ 2GE/c⁴）で ℓ_P あたりに床．
+   class : 「どの振動がどの粒子か」．スピンは振動の型（ベクトル／左右の積／フェルミオン的），電荷は弦の端が付く
+           D ブレーン，世代はブレーンの交差数．右は質量の梯子：既知の粒子はすべて N = 0．
+   hadron: 実測で確かめられている弦＝QCD の弦（1 fm）．端が光速で回る弦 J = α₀ + α′M²，α′ = 1/2πσ が
+           ρ, a₂, ρ₃, a₄, ρ₅, a₆ の質量を再現する（Chew–Frautschi 図）．
+   核子・クォークの図と同じく「漫画」だが，数値（質量・張力・周期）は実測と定数から計算している． */
+ZoomSim.prototype.drawString=function(c,W,H){
+  if(this.strMode==='class') this.drawStringClass(c,W,H);
+  else if(this.strMode==='hadron') this.drawStringHadron(c,W,H);
+  else this.drawStringVib(c,W,H);
+};
+ZoomSim.prototype.drawStringVib=function(c,W,H){
+  const R=Math.min(W,H)/2-40, cx=W*0.29, cy=H/2+22, self=this;
+  const lP=K.lP, s=R*0.62;                     /* s：ℓ_s（≈ ℓ_P）の画面上の長さ [px] */
+  this.vw=(W/s)*lP;
+  const EP=K.hbarc*1e-3/(lP*1e15), mP=Math.sqrt(K.hbar*K.c/K.G);   /* プランクエネルギー [GeV]，プランク質量 [kg] */
+  const N=this.strN, fuzz=0.045, r0=0.5, A=N>0?0.30:0, w1=2*Math.PI/2.4, ph=this.strT;   /* fuzz：ゼロ点振動の n=1 振幅（ℓ_s 単位），A：励起の定在波の振幅 */
+  const pts=[];
+  for(let i=0;i<=STR_NP;i++){ const sg=2*Math.PI*(i%STR_NP)/STR_NP, cs=Math.cos(sg), sn=Math.sin(sg);
+    let x=r0*cs, y=r0*sn, z=0;
+    for(let n=1;n<=STR_NM;n++){ const m=this.strXi[n-1], f=fuzz/Math.sqrt(n), cn=Math.cos(n*sg), snn=Math.sin(n*sg);
+      x+=f*(m[0]*cn+m[3]*snn); y+=f*(m[1]*cn+m[4]*snn); z+=f*(m[2]*cn+m[5]*snn); }
+    if(N>0){ const d=A*Math.cos(N*sg)*Math.cos(N*w1*ph); x+=d*cs; y+=d*sn; z+=0.7*A*Math.sin(N*sg)*Math.sin(N*w1*ph); }
+    const p=project(this.cam,x,y,z); pts.push([cx+s*p[0], cy-s*p[1], p[2]]);
+  }
+  const col=function(a){ return 'rgba(106,61,154,'+a.toFixed(3)+')'; };
+  [[11,0.09],[5.5,0.26],[2.2,1]].forEach(function(L){ c.lineWidth=L[0]; c.lineCap='round'; c.lineJoin='round';
+    for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i]; const dep=clamp((a[2]+b[2])/2/1.2+0.5,0,1);
+      c.strokeStyle=col(L[1]*(0.45+0.55*dep)); c.beginPath(); c.moveTo(a[0],a[1]); c.lineTo(b[0],b[1]); c.stroke(); } });
+  const lines = N===0
+    ? ['基底状態（N = 0）：質量 0 の弦', '光子・グラビトン，そして（ほぼ）電子やクォーク', 'ゼロ点振動：モード n の振幅 ∝ 1/√n．形は変わり続ける']
+    : ['第 '+N+' 励起状態（N = '+N+'）：Mc² = 2√N ħc/ℓ_s', '≈ '+fmtPowT(2*Math.sqrt(N)*EP,1)+' GeV（質量 ≈ '+(2*Math.sqrt(N)*mP*1e9).toFixed(0)+' µg）．振動数 ∝ N', '周期 ≈ '+fmtPowT(2*Math.PI*lP/K.c,1)+' s（画面は 10⁴³ 倍のスローモーション）'];
+  hdrLayout(c,W,[['超弦理論の「弦」：10⁻³⁵ m の震えるエネルギーの輪（仮説）', {size:12.5, bold:true}],
+    ['素粒子は 1 本の弦の異なる振動パターン．基底状態でも震え続ける', {size:10.5, color:'#5c6670'}],
+    [lines[0], {size:10.5, bold:true, color:'#4a2a70'}], [lines[1], {size:10, color:'#4a2a70'}], [lines[2], {size:10, color:'#5c6670'}]],[]);
+  scaleBar(c, 14, H-16, s, 'ℓ_P = √(ħG/c³) = 1.6×10⁻³⁵ m（≈ ℓ_s）');
+  /* ---- 右：分解能の限界 Δx(E) ---- */
+  const x0=W*0.60, x1=W-14, y0=56, y1=H-46, eLo=-6, eHi=22, dLo=-36, dHi=-9;
+  const X=function(le){ return x0+(le-eLo)/(eHi-eLo)*(x1-x0); }, Y=function(ld){ return y1-(clamp(ld,dLo,dHi)-dLo)/(dHi-dLo)*(y1-y0); };
+  const hc=K.hbarc*1e-3*1e-15;
+  const heis=function(le){ return Math.log10(hc)-le; };
+  const strg=function(le){ const E=Math.pow(10,le); return Math.log10(hc/E+lP*lP*E/hc); };
+  const grav=function(le){ const E=Math.pow(10,le); return Math.log10(2*lP*lP*E/hc); };
+  c.fillStyle='rgba(106,61,154,.07)'; c.beginPath(); c.moveTo(X(eLo),y1);
+  for(let i=0;i<=120;i++){ const le=eLo+(eHi-eLo)*i/120; c.lineTo(X(le),Y(Math.max(heis(le),grav(le)))); }
+  c.lineTo(X(eHi),y1); c.closePath(); c.fill();
+  c.strokeStyle='#5c6670'; c.lineWidth=1; c.strokeRect(x0,y0,x1-x0,y1-y0);
+  [-6,0,6,12,18].forEach(function(e){ c.strokeStyle='rgba(31,35,40,.09)'; c.beginPath(); c.moveTo(X(e),y0); c.lineTo(X(e),y1); c.stroke(); label(c,'10'+supT(e),X(e),y1+10,{size:9,color:'#5c6670',clamp:false}); });
+  [-9,-18,-27,-36].forEach(function(d){ c.strokeStyle='rgba(31,35,40,.09)'; c.beginPath(); c.moveTo(x0,Y(d)); c.lineTo(x1,Y(d)); c.stroke(); label(c,'10'+supT(d),x0-4,Y(d),{size:9,color:'#5c6670',align:'right',clamp:false}); });
+  label(c,'E [GeV]',x1,y1+21,{size:9,color:'#5c6670',align:'right',clamp:false}); label(c,'Δx [m]',x0+3,y0+9,{size:9,color:'#5c6670',align:'left'});
+  const lhc=Math.log10(1.36e4);
+  c.setLineDash([2,3]); c.strokeStyle='#5c6670'; c.beginPath(); c.moveTo(X(lhc),y0); c.lineTo(X(lhc),y1); c.stroke(); c.setLineDash([]);
+  label(c,'LHC 13.6 TeV',X(lhc)+3,y0+22,{size:9,color:'#5c6670',align:'left'});
+  [[-10,'原子','#0f4c81'],[Math.log10(1.7e-15),'原子核','#8a2b2b'],[Math.log10(2.8e-19),'電子・クォークの上限（実験）','#e53935'],[-20,'LHC の分解能','#5c6670']].forEach(function(m){
+    c.setLineDash([2,3]); c.strokeStyle=m[2]; c.lineWidth=1; c.beginPath(); c.moveTo(x0,Y(m[0])); c.lineTo(x1,Y(m[0])); c.stroke(); c.setLineDash([]);
+    label(c,m[1],x1-3,Y(m[0])-7,{size:9,color:m[2],align:'right'}); });
+  const curve=function(f,colr,w,dash){ c.setLineDash(dash||[]); c.strokeStyle=colr; c.lineWidth=w; c.beginPath(); let on=false;
+    for(let i=0;i<=160;i++){ const le=eLo+(eHi-eLo)*i/160, ld=f(le); if(ld<dLo-0.5||ld>dHi+0.5){ on=false; continue; } if(!on){ c.moveTo(X(le),Y(ld)); on=true; } else c.lineTo(X(le),Y(ld)); }
+    c.stroke(); c.setLineDash([]); };
+  curve(heis,'rgba(15,76,129,.9)',1.6,[5,4]); curve(grav,'rgba(141,110,99,.95)',1.6,[5,4]); curve(strg,'#6a3d9a',2.4);
+  const lfl=Math.log10(2*lP);
+  c.setLineDash([3,3]); c.strokeStyle='#6a3d9a'; c.lineWidth=1; c.beginPath(); c.moveTo(x0,Y(lfl)); c.lineTo(x1,Y(lfl)); c.stroke(); c.setLineDash([]);
+  label(c,'床：2ℓ_s ≈ ℓ_P より細かくは見えない',x0+4,Y(lfl)-8,{size:9.5,color:'#6a3d9a',align:'left',bold:true});
+  label(c,'Heisenberg Δx = ħc/E',X(-2)+4,Y(heis(-2))-9,{size:9.5,color:'#0a355a',align:'left'});
+  label(c,'重力：Δx ≥ 2GE/c⁴（ブラックホール）',x1-3,Y(-30.3),{size:9.5,color:'#6d4c41',align:'right'});
+  label(c,'弦：Δx = ħc/E + ℓ_s²E/ħc（伸びる）',x1-3,Y(-32),{size:9.5,color:'#6a3d9a',align:'right',bold:true});
+  label(c,'分解能の限界：ℓ_P より細かくは見えない', x0, y0-9, {size:10.5,bold:true,align:'left',color:'#1f2328'});
+};
+/* ---- class：どの振動がどの粒子か（左：弦とブレーンの漫画，右：質量の梯子） ---- */
+ZoomSim.prototype.drawStringClass=function(c,W,H){
+  const R=Math.min(W,H)/2-40, cx=W*0.28, cy=H/2+34, t=this.strT, k=this.strClass, self=this;
+  const hw=Math.min(175,W*0.235), bw=Math.min(150,W*0.2), gsp=Math.min(100,W*0.135);   /* ブレーンの半幅・世代の間隔（幅に比例） */
+  const lP=K.lP; this.vw=(W/(R*0.62))*lP;
+  const EP=K.hbarc*1e-3/(lP*1e15), V='106,61,154';
+  const wig=function(sg){ let d=0; for(let n=1;n<=6;n++){ d+=0.04/Math.sqrt(n)*self.strXi[n-1][0]*Math.sin(n*sg); } return d; };   /* ゼロ点振動の小さな揺れ（両端固定） */
+  const arch=function(A,B,h,extra){ const pts=[], dx=B[0]-A[0], dy=B[1]-A[1], L=Math.hypot(dx,dy)||1, nx=-dy/L, ny=dx/L;
+    for(let i=0;i<=60;i++){ const u=i/60, sg=Math.PI*u; const off=h*Math.sin(sg)+(extra?extra(sg):0)+L*wig(sg); pts.push([A[0]+dx*u+nx*off, A[1]+dy*u+ny*off]); } return pts; };
+  let lines=[];
+  if(k==='photon'){
+    const yb=cy+56; braneLine(c,cx-bw,yb,cx+bw,yb,'#0f4c81',null); label(c,'ブレーン（U(1) 1 枚／SU(2) 束）',cx-bw+4,yb+14,{size:9.5,color:'#0a355a',align:'left'});
+    const sw=18*Math.cos(2*Math.PI*t/2.0);
+    glowPath(c, arch([cx-32-sw,yb],[cx+32+sw,yb],-78,null), V);
+    arrow(c,cx-55,yb-100,cx+55,yb-100,'rgba(190,110,20,.9)',1.6); label(c,'偏光 ε（振動の向き，ブレーンに沿う）',cx,yb-112,{size:10,color:'#8a5a00'});
+    label(c,'開いた弦：両端が同じブレーン束の上',cx,yb+24,{size:10.5,color:'#4a2a70',bold:true});
+    lines=['光子・W・Z（ゲージ粒子）：スピン 1，質量 0','開いた弦の最低の横振動 1 個 ＝ ベクトル ε ＝ 偏光','端が同じ束 → 電荷なし（光子）．SU(2) 束なら W, Z'];
+  } else if(k==='gluon'){
+    const cols=['#e53935','#43a047','#1e88e5'], yb=cy+22;
+    cols.forEach(function(cl,i){ braneLine(c,cx-bw,yb+i*22,cx+bw,yb+i*22,cl,null); }); label(c,'色ブレーン束（3 枚：r, g, b）',cx-bw+4,yb+44+16,{size:9.5,color:'#5c6670',align:'left'});
+    const A=[cx-34,yb], B=[cx+34,yb+44];
+    glowPath(c, arch(A,B,-58,function(sg){ return 9*Math.sin(2*sg)*Math.cos(2*Math.PI*t/1.6); }), V);
+    ball(c,A[0],A[1],4,'#e53935'); ball(c,B[0],B[1],4,'#1e88e5');
+    label(c,'r',A[0]-9,A[1]-9,{size:10.5,bold:true,color:'#b71c1c'}); label(c,'b̄',B[0]+11,B[1]+10,{size:10.5,bold:true,color:'#0d47a1'});
+    label(c,'開いた弦：端が色ブレーン束の別々の枚に',cx,yb+80,{size:10.5,color:'#4a2a70',bold:true});
+    lines=['グルーオン：スピン 1，質量 0，色 × 反色を運ぶ','端 1 = 色（r），端 2 = 反色（b̄）→ 3×3 − 1 = 8 種','クォークの色を入れ替える（核子の図のグルーオン交換）'];
+  } else if(k==='graviton'){
+    const Rg=R*0.36, a=0.22*Math.cos(2*Math.PI*t/2.2), pts=[];
+    for(let i=0;i<=STR_NP;i++){ const sg=2*Math.PI*(i%STR_NP)/STR_NP; let x=(1+a)*Math.cos(sg), y=(1-a)*Math.sin(sg), z=0;
+      for(let n=2;n<=8;n++){ const m=self.strXi[n-1], f=0.03/Math.sqrt(n); x+=f*(m[0]*Math.cos(n*sg)+m[3]*Math.sin(n*sg)); y+=f*(m[1]*Math.cos(n*sg)+m[4]*Math.sin(n*sg)); z+=f*(m[2]*Math.cos(n*sg)+m[5]*Math.sin(n*sg)); }
+      const p=project(self.cam,x,y,z); pts.push([cx+Rg*p[0],cy-Rg*p[1]]); }
+    glowPath(c,pts,V);
+    label(c,'閉じた弦：左回りの波 1 個 × 右回りの波 1 個',cx,cy+Rg+40,{size:10.5,color:'#4a2a70',bold:true});
+    label(c,'楕円が縦横に脈動（四重極）＝ 180° で元に戻る ＝ スピン 2',cx,cy+Rg+56,{size:10,color:'#5c6670'});
+    lines=['グラビトン（重力の量子）：スピン 2，質量 0','閉じた弦の最低振動：左右 1 個ずつ → 対称テンソル ε_ij','重力波の偏光（+，×）と同じ形．ブレーンに縛られない'];
+  } else if(k==='excited'){
+    const Rg=R*0.36, N=2, pts=[];
+    for(let i=0;i<=STR_NP;i++){ const sg=2*Math.PI*(i%STR_NP)/STR_NP; const d=0.3*Math.cos(N*sg)*Math.cos(N*2*Math.PI*t/2.4); let x=(1+d)*Math.cos(sg), y=(1+d)*Math.sin(sg), z=0.2*Math.sin(N*sg)*Math.sin(N*2*Math.PI*t/2.4);
+      for(let n=1;n<=8;n++){ const m=self.strXi[n-1], f=0.03/Math.sqrt(n); x+=f*(m[0]*Math.cos(n*sg)+m[3]*Math.sin(n*sg)); y+=f*(m[1]*Math.cos(n*sg)+m[4]*Math.sin(n*sg)); z+=f*(m[2]*Math.cos(n*sg)+m[5]*Math.sin(n*sg)); }
+      const p=project(self.cam,x,y,z); pts.push([cx+Rg*p[0],cy-Rg*p[1]]); }
+    glowPath(c,pts,V);
+    label(c,'弦の「倍音」：N 個の山の定在波（図は N = 2）',cx,cy+Rg+40,{size:10.5,color:'#4a2a70',bold:true});
+    label(c,'M = 2√N ħc/ℓ_s ≈ '+fmtPowT(2*Math.sqrt(2)*EP,1)+' GeV：LHC の 10¹⁵ 倍．未発見',cx,cy+Rg+56,{size:10,color:'#5c6670'});
+    lines=['励起状態 N ≥ 1：質量 ≈ 10¹⁹ GeV の重い粒子（未発見）','基底状態と同じ電荷をもつ「倍音」の相棒．スピン 0〜2N','既知の粒子はすべて N = 0 ＝ 弦の「基音」'];
+  } else { /* quark / lepton / higgs：交差するブレーン束 */
+    const yb=cy-6, cols=['#e53935','#43a047','#1e88e5'], xs=[cx-gsp,cx,cx+gsp];
+    if(k==='quark'){ cols.forEach(function(cl,i){ braneLine(c,cx-hw,yb+i*16,cx+hw,yb+i*16,cl,null); }); label(c,'色ブレーン束（3 枚）',cx-hw+4,yb+32+13,{size:9.5,color:'#5c6670',align:'left'}); }
+    else { braneLine(c,cx-hw,yb+16,cx+hw,yb+16,'#5c6670',null); label(c,k==='lepton'?'レプトンの U(1) ブレーン':'U(1) ブレーン',cx-hw+4,yb+16+13,{size:9.5,color:'#5c6670',align:'left'}); }
+    const wk=['#c9812b','#8a5a00'];
+    xs.forEach(function(x0,g){ wk.forEach(function(cl,i){ braneLine(c,x0-42+i*14,yb+92,x0+42+i*14,yb-72,cl,null); }); });
+    label(c,'弱いブレーン束（2 枚）',Math.max(12,xs[0]-42),yb+92+12,{size:9.5,color:'#8a5a00',align:'left'});
+    ['第 1 世代','第 2 世代','第 3 世代'].forEach(function(nm,g){ label(c,nm,xs[g]+4,yb-86,{size:9.5,color:'#5c6670'}); });
+    const A=[cx+3,yb+(k==='quark'?0:16)], B=[cx+16,yb+40];
+    glowPath(c, arch(A,B,k==='higgs'?12:24,function(sg){ return 5*Math.sin(2*sg)*Math.cos(2*Math.PI*t/1.4); }), V);
+    ball(c,A[0],A[1],3.5,k==='quark'?'#e53935':'#5c6670'); ball(c,B[0],B[1],3.5,'#c9812b');
+    label(c,k==='quark'?'色 r':'U(1)',A[0]-8,A[1]-10,{size:9.5,bold:true,color:k==='quark'?'#b71c1c':'#5c6670',align:'right'}); label(c,'弱（上）',B[0]+10,B[1]+10,{size:9.5,bold:true,color:'#8a5a00',align:'left'});
+    label(c,'交差点に住む短い弦（トーラス上で 3 回交わる → 3 世代）',cx,yb+114,{size:10.5,color:'#4a2a70',bold:true});
+    if(k==='quark') lines=['クォーク：スピン ½．端 1 → 色，端 2 → 弱アイソスピン','R セクター（フェルミオン的な振動）の基底 ＝ スピン ½','質量は基底で 0．湯川結合 ∝ e^(−面積) で 2 MeV〜173 GeV'];
+    else if(k==='lepton') lines=['電子・ν：スピン ½．色の端がない → 強い力なし','弱い束の上の枚 = ν，下の枚 = e（弱アイソスピン）','質量は基底で 0．湯川結合で 0.5 MeV〜1.8 GeV'];
+    else lines=['ヒッグス：スピン 0．弱い束と U(1) をつなぐ弦','ブレーンに垂直な振動 ＝ ブレーンの位置の自由度','凝縮 → ブレーンが組み替わり，弦が伸びて質量が生まれる'];
+  }
+  hdrLayout(c,W,[['弦の振動 → 粒子の分類（超弦理論・交差 D ブレーン模型）', {size:12.5, bold:true}],
+    ['既知の粒子はすべて弦の基底状態．違いは振動の型・端の位置・幾何', {size:10.5, color:'#5c6670'}],
+    [lines[0], {size:10.5, bold:true, color:'#4a2a70'}], [lines[1], {size:10, color:'#4a2a70'}], [lines[2], {size:10, color:'#5c6670'}]],[]);
+  /* ---- 右：質量の梯子 ---- */
+  const x=W*0.72, y0=100, y1=H-48, lo=-4, hi=20; const Y=function(lg){ return y1-(clamp(lg,lo,hi)-lo)/(hi-lo)*(y1-y0); };
+  c.strokeStyle='#1f2328'; c.lineWidth=1.3; c.beginPath(); c.moveTo(x,y0); c.lineTo(x,y1); c.stroke();
+  for(let e=lo;e<=hi;e+=3){ c.beginPath(); c.moveTo(x-4,Y(e)); c.lineTo(x+4,Y(e)); c.stroke(); if(e!==-1&&e!==2) label(c,'10'+supT(e),x-8,Y(e),{size:9,align:'right',color:'#5c6670',clamp:false}); }
+  label(c,'質量の梯子 [GeV]：既知の粒子はすべて N = 0',x,y0-12,{size:9.5,color:'#1f2328',bold:true});
+  const hl={photon:['W','Z'],gluon:[],graviton:[],quark:['u','d','s','c','b','t'],lepton:['e','μ','τ'],higgs:['H'],excited:[]}[k];
+  const place=function(items,side){ items.sort(function(a,b){ return a[1]-b[1]; }); let prev=1e9;
+    items.forEach(function(it){ const yy=Y(Math.log10(it[1])), yl=Math.min(yy,prev-11); prev=yl; const bold=hl.indexOf(it[0])>=0; const cl=it[2]==='q'?'#b71c1c':it[2]==='l'?'#0a355a':it[2]==='b'?'#6a3d9a':'#8a5a00';
+      c.strokeStyle=cl; c.lineWidth=bold?1.8:1; c.beginPath(); c.moveTo(x,yy); c.lineTo(x+side*12,yl); c.stroke(); label(c,it[0]+(bold?' ◀':''),x+side*15,yl,{size:bold?10.5:9.5,color:cl,align:side>0?'left':'right',bold:bold}); }); };
+  place(PMASS.filter(function(p){ return p[2]==='q'; }),1); place(PMASS.filter(function(p){ return p[2]!=='q'; }),-1);
+  c.setLineDash([2,3]); c.strokeStyle='#5c6670'; c.beginPath(); c.moveTo(x-40,Y(Math.log10(1.36e4))); c.lineTo(x+40,Y(Math.log10(1.36e4))); c.stroke(); c.setLineDash([]);
+  label(c,'LHC 13.6 TeV（実験の上限）',x+46,Y(Math.log10(1.36e4)),{size:9,color:'#5c6670',align:'left'});
+  label(c,'大統一？ 10¹⁶',x+15,Y(16),{size:9,color:'#5c6670',align:'left'});
+  const yN1=Y(Math.log10(2*EP)), yN4=Y(Math.log10(4*EP));
+  c.fillStyle='rgba(106,61,154,.15)'; c.fillRect(x-6,yN4-2,12,yN1-yN4+4);
+  label(c,'弦の倍音 N = 1〜4：2.4〜4.9×10¹⁹ GeV（未発見）',x+15,(yN1+yN4)/2,{size:9.5,color:'#6a3d9a',align:'left',bold:true});
+  label(c,'γ・g・グラビトン：質量 0，ν：< 10⁻⁹',x,y1+14,{size:9.5,color:'#4a2a70'});
+};
+/* ---- hadron：実測で確かめられている弦（QCD の弦）― 回転する弦と Regge 軌道 ---- */
+ZoomSim.prototype.drawStringHadron=function(c,W,H){
+  const R=Math.min(W,H)/2-40, cx=W*0.28, cy=H/2+34, t=this.strT, self=this;
+  const it=REGGE_M[this.strJ-1], L=stringLen(it.M), sfm=R*0.95;     /* sfm：1 fm の画面上の長さ [px] */
+  this.vw=(W/sfm)*1e-15;
+  const Lpx=L*sfm, th=2*Math.PI*t/3.0, ux=Math.cos(th), uy=Math.sin(th);   /* 画面では 3 s で 1 回転 */
+  const A=[cx-ux*Lpx/2, cy+uy*Lpx/2], B=[cx+ux*Lpx/2, cy-uy*Lpx/2];
+  const pts=[]; for(let i=0;i<=40;i++){ const u=i/40, sg=Math.PI*u; let off=0; for(let n=1;n<=5;n++){ off+=Lpx*0.02/Math.sqrt(n)*self.strXi[n-1][0]*Math.sin(n*sg); } pts.push([A[0]+(B[0]-A[0])*u+uy*off, A[1]+(B[1]-A[1])*u+ux*off]); }
+  glowPath(c,pts,'46,125,50');
+  ball(c,A[0],A[1],6,'#e53935'); ball(c,B[0],B[1],6,'#1e88e5');
+  label(c,'q',A[0]-14*ux,A[1]+14*uy,{size:11,bold:true,color:'#b71c1c'}); label(c,'q̄',B[0]+14*ux,B[1]-14*uy,{size:11,bold:true,color:'#0d47a1'});
+  arrow(c,B[0],B[1],B[0]-34*uy,B[1]-34*ux,'rgba(190,110,20,.9)',1.5); arrow(c,A[0],A[1],A[0]+34*uy,A[1]+34*ux,'rgba(190,110,20,.9)',1.5);
+  label(c,'v ≈ c',B[0]-46*uy,B[1]-46*ux,{size:9.5,color:'#8a5a00'});
+  c.strokeStyle='rgba(46,125,50,.7)'; c.lineWidth=1.2; c.beginPath(); c.arc(cx,cy,22,-0.4*Math.PI,1.2*Math.PI); c.stroke();
+  label(c,'J = '+it.J,cx+30,cy-24,{size:10.5,bold:true,color:'#2e7d32',align:'left'});
+  const T=Math.PI*L*1e-15/K.c, Mm=reggeM(it.J);
+  hdrLayout(c,W,[['ハドロンの弦：実測と一致している「回転する弦」', {size:12.5, bold:true}],
+    ['クォークと反クォークを結ぶ色の力線（1 fm）が回る ― 弦理論の出発点', {size:10.5, color:'#5c6670'}],
+    [it.n+'：J = '+it.J+'，M = '+(it.M*1000).toFixed(0)+' MeV（実測，PDG）', {size:10.5,bold:true,color:'#1b5e20'}],
+    ['弦：M = √((J−α₀)/α′) = '+(Mm*1000).toFixed(0)+' MeV（'+mn(((Mm/it.M-1)*100).toFixed(1))+'%）', {size:10,color:'#2e7d32'}],
+    ['L = 2M/πσ = '+L.toFixed(2)+' fm，周期 πL/c = '+fmtPowT(T,1)+' s', {size:10,color:'#5c6670'}]],[]);
+  scaleBar(c, 14, H-16, sfm, '1 fm = 10⁻¹⁵ m');
+  /* ---- 右：Chew–Frautschi 図 J vs M² ---- */
+  const x0=W*0.58, x1=W-16, y0=64, y1=H-44; const X=function(m2){ return x0+m2/7.5*(x1-x0); }, Y=function(J){ return y1-J/8*(y1-y0); };
+  c.fillStyle='#fff'; c.fillRect(x0,y0,x1-x0,y1-y0); c.strokeStyle='#5c6670'; c.lineWidth=1; c.strokeRect(x0,y0,x1-x0,y1-y0);
+  for(let m2=0;m2<=7;m2++){ c.strokeStyle='rgba(31,35,40,.08)'; c.beginPath(); c.moveTo(X(m2),y0); c.lineTo(X(m2),y1); c.stroke(); label(c,String(m2),X(m2),y1+10,{size:9,color:'#5c6670',clamp:false}); }
+  for(let J=0;J<=8;J++){ c.strokeStyle='rgba(31,35,40,.08)'; c.beginPath(); c.moveTo(x0,Y(J)); c.lineTo(x1,Y(J)); c.stroke(); if(J%2===0) label(c,String(J),x0-5,Y(J),{size:9,color:'#5c6670',align:'right',clamp:false}); }
+  label(c,'M² [GeV²]',x1,y1+21,{size:9,color:'#5c6670',align:'right',clamp:false}); label(c,'J',x0+4,y0+9,{size:9.5,color:'#5c6670',align:'left'});
+  const line=function(a0,colr,dash){ c.setLineDash(dash||[]); c.strokeStyle=colr; c.lineWidth=1.8; c.beginPath(); c.moveTo(X(0),Y(a0)); c.lineTo(X(7.5),Y(a0+ALPHA_P*7.5)); c.stroke(); c.setLineDash([]); };
+  line(REGGE_A0,'rgba(46,125,50,.9)'); line(REGGE_A0D,'rgba(15,76,129,.7)',[5,4]);
+  REGGE_D.forEach(function(d){ const px=X(d.M*d.M), py=Y(d.J); c.fillStyle='#0f4c81'; c.beginPath(); c.moveTo(px,py-5); c.lineTo(px+5,py+4); c.lineTo(px-5,py+4); c.closePath(); c.fill(); label(c,d.n,px+7,py+3,{size:8.5,color:'#0a355a',align:'left'}); });
+  REGGE_M.forEach(function(m,i){ const px=X(m.M*m.M), py=Y(m.J), sel=(i===self.strJ-1); if(sel) glow(c,px,py,16,'rgba(229,57,53,.45)'); ball(c,px,py,sel?6:4.2,'#e53935'); label(c,m.n,px-8,py-(sel?10:8),{size:sel?9.5:8.5,color:'#b71c1c',align:'right',bold:sel}); });
+  label(c,'Regge 軌道 J = α₀ + α′M²（α′ = 1/2πσ）', x0, y0-9, {size:10.5,bold:true,align:'left',color:'#1f2328'});
+  label(c,'● 中間子 ρ, a₂, ρ₃, a₄, ρ₅, a₆（α₀ = 0.5）',x0+8,y0+24,{size:9,color:'#b71c1c',align:'left'});
+  label(c,'▲ バリオン Δ(1232)〜Δ(2950)（α₀ = 0.15，破線）',x0+8,y0+37,{size:9,color:'#0a355a',align:'left'});
+  label(c,'傾き 1/2πσ：張力 0.9 GeV/fm だけで決まる',x1-4,y1-10,{size:9,color:'#2e7d32',align:'right'});
 };
 ZoomSim.prototype.drawFree=function(c,W,H){
   const R=Math.min(W,H)/2-34, cx=W/2, cy=H/2+6, m=this.freeMode, t=this.time;
@@ -980,8 +1235,8 @@ ZoomSim.prototype.drawFree=function(c,W,H){
     c.strokeStyle='rgba(15,76,129,.35)'; c.lineWidth=1; c.beginPath(); c.arc(cx,cy,K.re*s,0,Math.PI*2); c.stroke(); label(c,'古典電子半径 2.8 fm（大きさではない）', cx+6, cy+14, {size:9.5,color:'#5c6670',align:'left'});
     glow(c,X,Y,22,'rgba(15,76,129,.4)'); ball(c,X,Y,5,'#0f4c81','#cfe3f7'); label(c,'e⁻',X+11,Y-10,{size:11.5,bold:true,color:'#0a355a',align:'left'});
     this.hits.push({x:X,y:Y,r:12,kind:'freeE'});
-    label(c,'真空中の電子（Dirac 方程式の「静止」解）：位置はコンプトン波長のスケールで震え続ける', 12, 16, {align:'left', size:12.5, bold:true});
-    label(c,'震えの振動数 2mc²/ħ = 1.55×10²¹ /s（表示は約 10²¹ 倍のスローモーション）．点の実寸 < 10⁻¹⁸ m はこの点の 1/10⁵ 以下', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
+    hdrLayout(c,W,[['真空中の電子（Dirac 方程式の「静止」解）：位置はコンプトン波長のスケールで震え続ける', {size:12.5, bold:true}],
+      ['震えの振動数 2mc²/ħ = 1.55×10²¹ /s（表示は約 10²¹ 倍のスローモーション）．点の実寸 < 10⁻¹⁸ m はこの点の 1/10⁵ 以下', {size:10.5, color:'#5c6670'}]],[]);
     scaleBar(c, 14, H-16, 100*s, '100 fm = 10⁻¹³ m');
   } else if(m==='packet'){
     const sig0=this.sig0; /* pm */ const tau=2*K.me_kg*(sig0*1e-12)*(sig0*1e-12)/K.hbar; /* 拡がりの時間定数 [s] */
@@ -998,8 +1253,8 @@ ZoomSim.prototype.drawFree=function(c,W,H){
     label(c,'|ψ(x,t)|²', cx-xr*s+6, y0-amp-8, {size:10.5,align:'left',color:'#0a355a',bold:true});
     label(c,'t = 0 の幅 σ₀ = '+sig0.toFixed(2)+' pm', cx+6, y0-amp*0.92, {size:10.5,align:'left',color:'#5c6670'});
     label(c,'いま σ(t) = '+mn(sig.toPrecision(3))+' pm，t = '+fmtPowT(tt,2)+' s', cx+6, y0-amp*(sig0/sig)-14, {size:11,align:'left',color:'#0a355a',bold:true});
-    label(c,'「静止」させたつもりの電子（幅 σ₀ の波束）は，σ(t) = √(σ₀² + (ħt/2mσ₀)²) で拡がる', 12, 16, {align:'left', size:12.5, bold:true});
-    label(c,'2 倍になる時間 √3·2mσ₀²/ħ = '+fmtPowT(Math.sqrt(3)*tau,2)+' s．狭く閉じ込めるほど速く拡がる（不確定性関係）', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
+    hdrLayout(c,W,[['「静止」させたつもりの電子（幅 σ₀ の波束）は，σ(t) = √(σ₀² + (ħt/2mσ₀)²) で拡がる', {size:12.5, bold:true}],
+      ['2 倍になる時間 √3·2mσ₀²/ħ = '+fmtPowT(Math.sqrt(3)*tau,2)+' s．狭く閉じ込めるほど速く拡がる（不確定性関係）', {size:10.5, color:'#5c6670'}]],[]);
     scaleBar(c, 14, H-16, 10*sig0*s, '10 σ₀ = '+mn((10*sig0).toPrecision(3))+' pm');
   } else { /* trap */
     const s=R/(0.30*1e9); /* px per m: 0.30 µm を R に */ this.vw=W/s;
@@ -1014,8 +1269,8 @@ ZoomSim.prototype.drawFree=function(c,W,H){
     c.strokeStyle='rgba(15,76,129,.5)'; c.beginPath(); c.ellipse(cx,cy-z,rc*s,rc*s*0.35,0,0,Math.PI*2); c.stroke();
     label(c,'サイクロトロン運動の基底状態 半径 ≈ 11 nm（≈150 GHz）', cx+rc*s+8, cy-z+14, {size:10,align:'left',color:'#5c6670'});
     glow(c,X,Y,20,'rgba(15,76,129,.4)'); ball(c,X,Y,5,'#0f4c81','#cfe3f7'); label(c,'e⁻',X+11,Y-10,{size:11.5,bold:true,color:'#0a355a',align:'left'});
-    label(c,'「静止した電子」に一番近い実験：Penning トラップの中の 1 個の電子', 12, 16, {align:'left', size:12.5, bold:true});
-    label(c,'それでもゼロ点振動は止められない：大きさ < 10⁻¹⁸ m の粒子が 10⁻⁷ m の範囲で揺らぐ（10¹¹ 倍）', 12, 34, {align:'left', size:10.5, color:'#5c6670'});
+    hdrLayout(c,W,[['「静止した電子」に一番近い実験：Penning トラップの中の 1 個の電子', {size:12.5, bold:true}],
+      ['それでもゼロ点振動は止められない：大きさ < 10⁻¹⁸ m の粒子が 10⁻⁷ m の範囲で揺らぐ（10¹¹ 倍）', {size:10.5, color:'#5c6670'}]],[]);
     scaleBar(c, 14, H-16, 100e-9*s, '100 nm = 10⁻⁷ m');
   }
 };
@@ -1119,13 +1374,54 @@ ZoomSim.prototype.renderPanel=function(){
       '<p>核子の図でクォークを半径 0.03 fm の点として描きましたが，実際のクォークの大きさは <b>4.3×10⁻¹⁹ m 以下</b>（HERA の電子–陽子散乱，2016），電子は <b>2.8×10⁻¹⁹ m 以下</b>（LEP の電子–陽電子散乱，2001）．<i>g</i>−2 の精密測定からは 10⁻²² m 程度まで構造がないと推定されます．一方，クォークは陽子の中で 0.6 fm，電子は原子の中で 0.5 Å の範囲を揺らいでいます：<b>揺らぎ／大きさ &gt; 10³（クォーク），&gt; 10⁸（電子）</b>．</p>'+
       kv([['電子の大きさ（上限）','< 2.8×10⁻¹⁹ m'],['クォークの大きさ（上限）','< 4.3×10⁻¹⁹ m'],['LHC が見分けられる長さ','≈ 10⁻²⁰ m'],['弱い力の到達距離 ħ/<i>m</i><sub>W</sub><i>c</i>','2.5×10⁻¹⁸ m'],['プランク長 √(ħ<i>G</i>/<i>c</i>³)','1.6×10⁻³⁵ m']])+
       '<div class="note">標準模型では電子もクォークも大きさゼロの点粒子として扱われ，10⁻¹⁹ m までの実験と矛盾はありません．「点」なのに質量やスピンや電荷をもつ——古典的な直観は通じません．その先（10⁻¹⁹ m〜10⁻³⁵ m）に何があるか，超弦理論などの仮説はあっても実験はまだ届いていません．</div>'+
-      '<p class="hint">パンくずで「陽子」「原子核」「原子」に戻れます．</p>';
+      '<p class="hint">点をクリック → 超弦理論の「弦」（10⁻³⁵ m，仮説）へ．パンくずで「陽子」「原子核」「原子」に戻れます．</p>';
+  }
+  if(L==='string'){
+    const lP=K.lP, EP=K.hbarc*1e-3/(lP*1e15), mP=Math.sqrt(K.hbar*K.c/K.G), T=K.hbar*K.c/(2*Math.PI*lP*lP), Tq=K.sigma*K.MeVfm_N, N=this.strN, M=this.strMode;
+    h+='<h3>弦 ― 10⁻³⁵ m：「点」の正体は震える弦かもしれない</h3>'+
+      '<div class="pills" data-role="strmode">'+[['vib','震える弦（基底と励起）'],['class','振動 → 粒子の分類'],['hadron','ハドロンの弦（実測）']].map(function(m){ return '<button class="pill'+(M===m[0]?' on':'')+'" data-strmode="'+m[0]+'">'+m[1]+'</button>'; }).join('')+'</div>';
+    if(M==='vib'){
+      h+='<div class="pills" data-role="smode">'+[0,1,2,3].map(function(n){ return '<button class="pill'+(N===n?' on':'')+'" data-smode="'+n+'">'+(n===0?'基底状態 N = 0':'励起 N = '+n)+'</button>'; }).join('')+'</div>'+
+        '<div data-role="skv">'+kv([['弦の数値（ℓ_s = ℓ_P として）'],['プランク長 ℓ<sub>P</sub> = √(ħ<i>G</i>/<i>c</i>³)',fmtPow(lP,2)+' m'],['弦の長さ ℓ<sub>s</sub> = √α′（結合定数 <i>g</i><sub>s</sub> に依存）','≈ ℓ<sub>P</sub> 〜 10 ℓ<sub>P</sub>'],['張力 <i>T</i> = ħ<i>c</i>/2πℓ<sub>s</sub>²',fmtPow(T,1)+' N'],['同／QCD の弦（クォークを縛る）0.9 GeV/fm',fmtPow(T/Tq,1)+' 倍'],['振動の周期 2πℓ<sub>s</sub>/<i>c</i>',fmtPow(2*Math.PI*lP/K.c,1)+' s'],['第 1 励起のエネルギー 2ħ<i>c</i>/ℓ<sub>s</sub>',fmtPow(2*EP,1)+' GeV = '+(2*EP*1e9*K.eV/1e9).toFixed(1)+' GJ（質量 '+(2*mP*1e9).toFixed(0)+' µg）'],['同／LHC の衝突エネルギー 13.6 TeV',fmtPow(2*EP/1.36e4,1)+' 倍'],['分解できる最小の長さ Δ<i>x</i><sub>min</sub> = 2ℓ<sub>s</sub>',fmtPow(2*lP,1)+' m'],['いま選んだ状態',N===0?'N = 0：質量 0（光子・グラビトン・ほぼ電子やクォーク）':'N = '+N+'：<i>Mc</i>² = 2√'+N+' ħ<i>c</i>/ℓ<sub>s</sub> = '+fmtPow(2*Math.sqrt(N)*EP,1)+' GeV']])+'</div>'+
+        '<h4>弦とは何か</h4>'+
+        '<p>超弦理論は，電子やクォークを大きさゼロの「点」ではなく，長さ ℓ<sub>s</sub> ≈ 10⁻³⁵ m の 1 次元の<b>弦</b>だと考える仮説です．弦は張力 <i>T</i> ≈ 10⁴³ N（プランク力 <i>c</i>⁴/<i>G</i> の 1/2π）で張られたエネルギーの糸で，エネルギーは張力 × 長さと振動から来ます．ギターの弦の倍音のように許される振動が離散的に決まり，<b>振動パターンの違いが粒子の種類の違い</b>（電荷・スピン・質量）になります．N = 0 は振動の量子が 1 個もない基底状態で，ゼロ点振動だけで震えています．光子・グラビトン，そして質量が弦のスケール（10¹⁹ GeV）に比べて実質ゼロの電子やクォークは，みなこの N = 0 の弦です．第 1 励起は 10¹⁹ GeV——ふだん見ている素粒子はすべて「基底状態の弦」なのです（「振動 → 粒子の分類」のボタンで中身を見てください）．</p>'+
+        '<h4>なぜ 10⁻³⁵ m なのか</h4>'+
+        '<p>弦理論は 1968–70 年に<b>ハドロンの理論</b>として生まれました（Veneziano 振幅，南部–後藤作用）．そのときの弦の長さは 1 fm，張力は 0.9 GeV/fm――「ハドロンの弦」のボタンで見られる，クォークを縛る QCD の弦そのものです．1974 年，Scherk–Schwarz と<b>米谷民明</b>は弦の質量ゼロ・スピン 2 の振動をグラビトン（重力の量子）と読み替えました．すると弦の長さは Newton 定数 <i>G</i> から決まり，ℓ<sub>s</sub> ≈ ℓ<sub>P</sub> = √(ħ<i>G</i>/<i>c</i>³) = 1.6×10⁻³⁵ m――ハドロンの弦の 10⁻²⁰ 倍――になります．正確には ℓ<sub>s</sub> は弦の結合定数 <i>g</i><sub>s</sub> にも依存し，ℓ<sub>P</sub> の数倍程度と考えられています．</p>'+
+        '<div class="note key"><b>空間はこれ以上細かく分解できない</b>：位置を Δ<i>x</i> まで細かく見るには Δ<i>p</i> ≳ ħ/Δ<i>x</i> の運動量，つまり <i>E</i> ≈ ħ<i>c</i>/Δ<i>x</i> のエネルギーが要ります（「原子」の階層の電子で見た不確定性関係）．ところが弦にエネルギーを注ぐと<b>弦そのものが ℓ<sub>s</sub>²Δ<i>p</i>/ħ だけ伸びる</b>ので，Δ<i>x</i> ≳ ħ/Δ<i>p</i> + ℓ<sub>s</sub>²Δ<i>p</i>/ħ となって Δ<i>x</i> は 2ℓ<sub>s</sub> より小さくできません（弦の不確定性関係：Veneziano，Gross–Mende，Amati–Ciafaloni–Veneziano，米谷，1987–89）．弦理論がなくても，<i>E</i> を Δ<i>x</i> に集めるとシュヴァルツシルト半径 2<i>GE</i>/<i>c</i>⁴ が Δ<i>x</i> を超えてブラックホールになるため，ℓ<sub>P</sub> より細かい構造は原理的に測れません．図の右がその「床」です．T 双対性（半径 <i>R</i> の空間と ℓ<sub>s</sub>²/<i>R</i> の空間が物理的に同じ）は，ℓ<sub>s</sub> より小さい幾何学がそもそも意味をもたないことを示唆します．</div>'+
+        '<div class="note"><b>空間そのものが弦でできている？</b>：弦理論では時空の幾何学（重力）は弦の振動状態の一つ，グラビトンから生じます．行列模型（BFSS 1997）では空間座標が行列の固有値として現れ，ループ量子重力は面積を ℓ<sub>P</sub>² の整数倍に量子化します．「空間は連続ではなく，ℓ<sub>P</sub> 程度の最小の目盛りをもつ」という直観の，異なる表現です．どれも実験では未検証です．</div>'+
+        '<div class="note warn"><b>これはまだ仮説です</b>：実験は 10⁻¹⁹ m（電子・クォークの大きさの上限）までしか届いておらず，弦の 10⁻³⁵ m まで 16 桁の隙間があります．第 1 励起（10¹⁹ GeV）を直接つくるには LHC の 10¹⁵ 倍のエネルギーが必要です．余剰次元が大きければ弦のスケールが TeV 程度まで下がる可能性もありますが，LHC はそのような弦の共鳴を数 TeV まで見つけていません．</div>';
+    }
+    if(M==='class'){
+      const k=this.strClass, C=SCLASS[k];
+      h+='<div class="pills" data-role="sclass">'+Object.keys(SCLASS).map(function(key){ return '<button class="pill'+(k===key?' on':'')+'" data-sclass="'+key+'">'+SCLASS[key].pill+'</button>'; }).join('')+'</div>'+
+        '<div data-role="skv">'+kv([['選んだ粒子：'+C.name],['弦の型',C.kind],['スピンの由来',C.spin],['電荷の由来',C.charge],['質量',C.mass]])+'</div>'+
+        '<h4>「振動の仕方が粒子を決める」の中身</h4>'+
+        '<p>ドキュメンタリーの「チェロの弦の音色が違えば別の音，弦の振動が違えば別の粒子」は正しい比喩です．ただし中身は 4 段階に分かれます．<b>(1) スピン</b>は振動の型で決まります：開いた弦の最低の横振動 1 個はベクトル（スピン 1：光子・グルーオン・W・Z），閉じた弦の左回り × 右回りの振動は対称テンソル（スピン 2：グラビトン），世界面のフェルミオン的な振動（Ramond セクター）の基底はスピノル（スピン ½：クォーク・レプトン），ブレーンに垂直な振動はスカラー（スピン 0：ヒッグス）．<b>(2) 電荷</b>は弦の端がどの D ブレーンに付くかで決まります：色ブレーン束（3 枚）に端をもてば色をもち，弱いブレーン束（2 枚）に端をもてば弱アイソスピンをもつ．クォークはその両方に端をもつ弦，レプトンは色の端をもたない弦です．<b>(3) 世代</b>はブレーン束がコンパクト空間（トーラス）で交わる回数＝3．<b>(4) 質量</b>は基底状態ではすべてゼロで，ヒッグスの凝縮と湯川結合（3 つの弦が張る世界面の面積 <i>A</i> で e<sup>−<i>A</i>/2πα′</sup>）が電子 0.5 MeV からトップ 173 GeV までの階層を作ります．</p>'+
+        kv([['振動の型 → 粒子（超弦理論）'],['開いた弦・ベクトル振動 1 個（NS セクター）','スピン 1：光子・グルーオン・W・Z'],['開いた弦・フェルミオン的振動の基底（R セクター）','スピン ½：クォーク・レプトン'],['開いた弦・ブレーンに垂直な振動','スピン 0：ヒッグス（ブレーンの位置）'],['閉じた弦・左 × 右（対称・トレースなし）','スピン 2：グラビトン'],['閉じた弦・左 × 右（反対称，トレース）','B 場・ディラトン（未発見）'],['弦の端が付くブレーン','電荷：色 3・弱 2・U(1)'],['ブレーンの交差数（トポロジー）','世代の数 3'],['励起 N ≥ 1（倍音）','10¹⁹ GeV の重い粒子（未発見）']])+
+        '<div class="note key"><b>既知の粒子はすべて「基音」</b>：右の質量の梯子のとおり，電子（0.5 MeV）からトップクォーク（173 GeV）まで，既知の粒子の質量は弦の第 1 励起（10¹⁹ GeV）の 10⁻¹⁷ 以下です．弦理論の立場では，これらはすべて振動の量子が 0 個の基底状態で，違いは振動の「型」（ベクトルか，フェルミオン的か，左右の積か）と端の位置と幾何にあります．「倍音」（N ≥ 1）はまだ誰も見ていません．</div>'+
+        '<div class="note warn"><b>まだ決まっていないこと</b>：どのブレーン配置・どの Calabi–Yau 空間が私たちの宇宙かは決まっておらず，候補は 10⁵⁰⁰ 通りとも言われます（ランドスケープ）．3 世代の SU(3)×SU(2)×U(1) だけを出す交差ブレーン模型は 2001 年に作られましたが（Ibáñez–Marchesano–Rabadán），電子の質量 0.511 MeV を予言した模型はありません．図はそうした模型の典型的な構図を描いた漫画です．</div>';
+    }
+    if(M==='hadron'){
+      const it=REGGE_M[this.strJ-1], Mm=reggeM(it.J), Ls=stringLen(it.M), Tr=Math.PI*Ls*1e-15/K.c, self2=this;
+      h+='<div class="pills" data-role="shad">'+REGGE_M.map(function(m,i){ return '<button class="pill'+(self2.strJ===i+1?' on':'')+'" data-shad="'+(i+1)+'">'+m.n+'</button>'; }).join('')+'</div>'+
+        '<div data-role="skv">'+kv([[it.n+'：J = '+it.J+' の回転する QCD の弦'],['質量（実測，PDG 2024）',(it.M*1000).toFixed(0)+' MeV'],['弦の模型 <i>M</i> = √((<i>J</i> − α₀)/α′)',(Mm*1000).toFixed(0)+' MeV（差 '+mn(((Mm/it.M-1)*100).toFixed(1))+'%）'],['弦張力 σ（格子 QCD・重いクォーク対）','0.9 GeV/fm = '+SIGMA_GEV2.toFixed(3)+' GeV² ≈ 15 トン重'],['Regge の傾き α′ = 1/2πσ',ALPHA_P.toFixed(3)+' GeV⁻²（実測 ≈ 0.9）'],['弦の長さ <i>L</i> = 2<i>M</i>/πσ',Ls.toFixed(2)+' fm'],['端（クォーク）の速さ','≈ <i>c</i>'],['回転の周期 π<i>L</i>/<i>c</i>',fmtPow(Tr,1)+' s']])+'</div>'+
+        '<h4>これは仮説ではない：クォークを縛る「弦」が回っている</h4>'+
+        '<p>クォークと反クォークの間には色の力線が細い管（弦）に束ねられ，張力 σ ≈ 0.9 GeV/fm（15 トン重）で引き合います（「核子」の階層の Y 字の弦，格子 QCD で確認）．この弦が端を光速近くで回すと，弦の質量とスピンは <i>M</i> = πσ<i>L</i>/2，<i>J</i> = πσ<i>L</i>²/8 で，長さ <i>L</i> を消すと <b><i>J</i> = <i>M</i>²/2πσ</b>：スピンが質量の 2 乗に比例します（Regge 軌道，Chew–Frautschi 1961）．傾き α′ = 1/2πσ = 0.90 GeV⁻² は張力だけで決まり，ρ → a₂ → ρ₃ → a₄ → ρ₅ → a₆（<i>J</i> = 1〜6）と，バリオンの Δ(1232) → Δ(2950)（<i>J</i> = 3/2〜15/2）が<b>同じ傾きの直線</b>に乗ります．切片 α₀ ≈ 0.5 は端のクォークのスピンと量子補正です．弦を半径方向に振動させた「娘」の軌道（ρ(1450), ρ(1700)…）もあります．</p>'+
+        kv([['中間子（ρ 系列）','J　実測 [MeV]　弦の模型 [MeV]']].concat(REGGE_M.map(function(m){ return [m.n,m.J+'　'+(m.M*1000).toFixed(0)+'　'+(reggeM(m.J)*1000).toFixed(0)]; })).concat([['バリオン（Δ 系列，α₀ = 0.15）','']]).concat(REGGE_D.map(function(d){ return [d.n,d.J+'　'+(d.M*1000).toFixed(0)+'　'+(reggeM(d.J,REGGE_A0D)*1000).toFixed(0)]; })))+
+        '<div class="note key"><b>弦理論はここから生まれた</b>：1968 年の Veneziano 振幅と 1970 年の南部・後藤の弦は，このハドロンの Regge 軌道を説明するための理論でした．ハドロンの弦は QCD の力線として今も生きており，「弦の振動と回転がハドロンを分類する」は実測で確かめられた事実です．1974 年にこの弦を 10⁻²⁰ 倍に縮めて重力の理論に読み替えたのが超弦理論（Scherk–Schwarz，米谷）――同じ式 <i>J</i> ≤ α′<i>M</i>² + 1 が，α′ = ℓ<sub>s</sub>² ≈ 10⁻⁷⁰ m² で成り立つと考えます．</div>'+
+        '<div class="note">重いクォーク（c, b）を端にもつ中間子では端の質量で軌道が曲がり，Sonnenschein–Weissman（2014）は端の質量を入れた回転弦で PDG の中間子を系統的に再現しています．格子 QCD の弦張力は √σ ≈ 0.42–0.44 GeV（σ ≈ 0.18–0.19 GeV²）．</div>';
+    }
+    h+='<p class="hint">ドラッグで回転．パンくずで「クォーク」「陽子」「原子」に戻れます．</p>';
   }
   this.info.innerHTML=h;
   /* パネル内の操作 */
   this.info.querySelectorAll('[data-demo]').forEach(function(b){ b.addEventListener('click', function(){ const d=this.dataset.demo; self.demo=d||null; self.demoT=0; self.demoSep=0.9; if(!d){ self.setAtom(self.atom); self.level='nucleus'; self.renderPanel(); self.renderCrumbs(); } }); });
   this.info.querySelectorAll('[data-beta]').forEach(function(b){ b.addEventListener('click', function(){ const k=this.dataset.beta; if(k==='reset'){ self.initQuarks(); return; } if(self.beta) return; const target = k==='n' ? self.quarks.findIndex(function(q){return q.f==='d';}) : self.quarks.findIndex(function(q){return q.f==='u';}); self.beta={kind:k,q:target,t:0,flipped:false,ang:Math.random()*Math.PI*2}; }); });
   this.info.querySelectorAll('[data-fmode]').forEach(function(b){ b.addEventListener('click', function(){ self.freeMode=this.dataset.fmode; self.packT=0; self.renderPanel(); }); });
+  this.info.querySelectorAll('[data-smode]').forEach(function(b){ b.addEventListener('click', function(){ self.strN=parseInt(this.dataset.smode,10); self.strT=0; self.renderPanel(); }); });
+  this.info.querySelectorAll('[data-strmode]').forEach(function(b){ b.addEventListener('click', function(){ self.strMode=this.dataset.strmode; self.strT=0; self.renderPanel(); }); });
+  this.info.querySelectorAll('[data-sclass]').forEach(function(b){ b.addEventListener('click', function(){ self.strClass=this.dataset.sclass; self.strT=0; self.renderPanel(); }); });
+  this.info.querySelectorAll('[data-shad]').forEach(function(b){ b.addEventListener('click', function(){ self.strJ=parseInt(this.dataset.shad,10); self.renderPanel(); }); });
   const zr=this.info.querySelector('[data-role="zhyd"]');
   if(zr){ const upd=function(){ self.Zhyd=parseInt(zr.value,10); self.renderZ(); }; zr.addEventListener('input', upd); upd(); }
   const sr=this.info.querySelector('[data-role="sig0"]');
