@@ -630,6 +630,7 @@ space group: Pm-3m (No. 221), tolerance 0.01
 
 ```
 data_221_PPOSCAR_SrTiO3
+_chemical_formula_sum              "Sr Ti O3"
 _symmetry_Int_Tables_number        221
 _symmetry_space_group_name_H-M     "Pm-3m"
 _cell_length_a                     3.9451
@@ -661,6 +662,16 @@ occupancy 1.0000). This differs from the pymatgen `CifWriter` layout;
 `--output` overrides the default `<POSCAR>.cif` path. Validated against a
 Bilbao reference file (identical operator set), the ITA Pnma general
 positions, and pymatgen round-trip re-reading.
+
+The [`_chemical_formula_sum`](https://www.iucr.org/__data/iucr/cifdic_html/1/cif_core.dic/Cchemical_formula.html)
+field carries the reduced formula in the conventional chemical order —
+cations before anions; among the cations, the element on the most special
+Wyckoff site (the letter closest to *a*) first, then increasing valence.
+That is what makes SrTiO3, KNbO3 and PbZrO3 come out in the familiar
+order (site tie broken by valence — electronegativity alone would write
+ZrPbO3), and La3Ni2O7 keep La first (the 2-fold site beats Ni's 4-fold
+one even though Ni carries the lower valence). Valences are
+oxidation-state guesses; electronegativity is the fallback.
 
 `--cif2poscar` accepts any CIF flavour (Bilbao or pymatgen), expands the
 symmetry operations, and writes the spglib-standardized primitive cell —
@@ -749,6 +760,109 @@ decompose completely — the Pbnm perovskite gives R4+ -> Imma and
 M3+ -> P4/mbm plus the inactive secondaries X5+/M2+/R5+. The direction and
 isotropy-subgroup columns are computed with the same induced-irrep machinery
 as `--supergroup` (section 13).
+
+### Order parameters at non-special k points
+
+A few materials condense modes at k points that are **not special points**
+of the parent — points on symmetry lines with a fractional free parameter.
+The classic case is the PbZrO3 antiferroelectric, whose Pbam ground state
+(8x the cubic primitive cell) involves the Sigma point (1/4,1/4,0) and the
+S point (1/4,1/2,1/4):
+
+```bash
+crystod-group --supergroup-cif POSCAR_PbZrO3_Pm-3m.cif --subgroup-cif POSCAR_PbZrO3_Pbam.cif
+```
+
+```
+* Symmetry-mode decomposition *
+k-vector         irrep   direction    isotropy subgroup   dim  amplitude (A)
+(0,1/2,0)        X3-     (a;0;0)      123 P4/mmm          2    0.0374
+(1/4,1/4,0)      SM2     (0;0;0;0;0;0;a;0.332a;0;0;0;0) 55 Pbam             5    1.2871
+(1/2,1/2,0)      M5-     (0,0;0,0;a,-a) 51 Pmma             3    0.0473
+(1/4,1/2,1/4)    S4      (0;0;a;0.332a;0;0;0;0;0;0;0;0) 64 Cmce             3    0.4470
+(1/2,1/2,1/2)    R4+     (a,a,0)      74 Imma             1    1.5232
+(1/2,1/2,1/2)    R5+     (a,-a,0)     74 Imma             2    0.0810
+```
+
+Every number agrees with the Bilbao AMPLIMODES reference — the dominant
+antipolar Pb mode `SM2` (1.2871 Å) and the octahedral tilt `R4+`
+(1.5232 Å), with the secondary `S4`, `R5+`, `X3-` and `M5-` — including
+each mode's isotropy subgroup, which is verified internally by freezing the
+single-mode displacement field and re-measuring its space group with
+spglib. Small irreps at such points are computed with spgrep at the exact
+k and named/represented through the bundled ISO-IR tables (SM2, S4, ...);
+since the ISOTROPY *web* tables fix their order-parameter axes with a phase
+gauge that is not part of the bundled data, the direction *pattern* of a
+line mode may differ from ISOSUBGROUP's while the subgroup, dimension and
+amplitude — gauge-independent quantities — always agree.
+
+A second line-point case, the K2SeO4 lock-in ferroelectric
+(Pnma -> Pna2₁ at 3x the cell along *a*, SM = (1/3,0,0)):
+
+```bash
+crystod-group --supergroup-cif POSCAR_K2SeO4_Pnma.cif --subgroup-cif POSCAR_K2SeO4_Pna21.cif
+```
+
+```
+* Symmetry-mode decomposition *
+k-vector         irrep   direction    isotropy subgroup   dim  amplitude (A)
+(0,0,0)          GM1+    (a)          62 Pnma             13   0.9467
+(0,0,0)          GM4-    (a)          33 Pna2_1           8    0.4230
+(1/3,0,0)        SM2     (0.254a;-a)  33 Pna2_1           16   1.2885
+(1/3,0,0)        SM3     (0.254a;-a)  62 Pnma             26   0.1727
+
+Decomposition table saved to sym_mode_K2SeO4
+```
+
+again matching AMPLIMODES entry by entry (including the polar `GM4-` that
+carries the spontaneous polarization of the lock-in phase). The
+decomposition table of every run is also **saved as a text file**,
+`sym_mode_{formula}`, named by the parent composition in the conventional
+chemical order of the `_chemical_formula_sum` rule of section 15
+(`sym_mode_K2SeO4`, `sym_mode_SrTiO3`, `sym_mode_La3Ni2O7`, ...), so a
+batch of analyses leaves one table per compound.
+
+### Comparing with the Bilbao and ISOTROPY web tools
+
+The physically meaningful columns — which irreps are active, their k-vectors,
+isotropy subgroups, dimensions and amplitudes — reproduce AMPLIMODES and
+ISODISTORT case for case. Four things can legitimately read differently, and
+none of them is a disagreement about the distortion:
+
+- **The origin of a polar subgroup is free**, so the amplitude of a polar
+  irrep depends on where it is pinned. CrystOD places it at the minimum of
+  the total distortion (the AMPLIMODES convention) and prints a `note: the
+  subgroup is polar` line when it does. ISODISTORT pins the first orbit
+  instead, which typically leaves its polar amplitude larger by exactly the
+  removed rigid translation: the two differ by that translation and nothing
+  else, so every other irrep is untouched.
+- **Parity superscripts of a k ≠ 0 irrep depend on the parent's origin.**
+  Two descriptions of the same crystal related by a translation that is in
+  the Euclidean normalizer but not in the space group (rutile VO₂ with the
+  metal at 2a rather than 2b) give the same subgroup and the same amplitude,
+  but swap `R1+` and `R1-`.
+- **The k-vector is printed in the parent's primitive basis**, while Bilbao
+  quotes the conventional one. For a C-centred monoclinic parent the M point
+  reads `(1/2,1/2,1/2)` here and `(0,1,1/2)` there — the same point.
+- **Order-parameter direction labels use whatever basis the bundled ISO-IR
+  tables fix for that irrep**, so the letter pattern can differ (`(a,-a,-a)`
+  against `(a,a,a)`) while naming the same stratum; the isotropy subgroup
+  column, which is basis-independent, is the one to compare.
+
+Two differences are *not* conventions and mean the input needs attention. If
+the reported distortion is far larger than expected, check that the reference
+cell the other program used really is the strain-free parent supercell — a
+transformation matrix that misplaces it by a fraction of a cell dumps the
+whole rigid offset into the fully symmetric mode. And if the analysis reports
+no distortion at all, the child was probably symmetrized away during
+`--poscar2cif`: displacements below the tolerance are averaged out (the
+conversion warns about this), so pass a smaller `--tolerance`.
+
+A symmetry lowering can also be **purely a spontaneous strain**: in
+La₃Ni₂O₇ I4/mmm → Fmmm the atoms keep every parent operation exactly and only
+the orthorhombic metric breaks the four-fold axis. The displacive
+decomposition then holds a single fully symmetric mode, and the report says
+which part of the symmetry lowering it is not carrying.
 
 ```{seealso}
 **Theory:** [Symmetry-mode analysis internals](theory-isotropy-subgroups.md) — the lattice and origin handling, the completeness checks, the validation against Bilbao AMPLIMODES, and the citation to give if you use this feature.

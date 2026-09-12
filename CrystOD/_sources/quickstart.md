@@ -1,13 +1,76 @@
 # Quick start
 
+## No input file needed
+
+A few small inputs ship inside the package, so the first analysis runs right
+after `pip install CrystOD`, in any empty directory:
+
+```bash
+crystod --example ScF3_d
+```
+
+```
+Wrote 221_PPOSCAR_ScF3 (bundled example input)
+Running: crystod -c 221_PPOSCAR_ScF3 --element Sc --orbital d
+
+ ### Inputed cell was converted into primitive cell. ###
+
+ * Space group *
+ Pm-3m (221)
+
+ * Element (number of atoms) *
+ Sc (1)
+
+ * Wyckoff letters and site symmetry letters *
+ ['a']
+ ['m-3m']
+
+ * Atomic Orbital *
+ d
+
+ * Crystal Orbitals *
+ k point (primitive):  GM [0.0, 0.0, 0.0]
+ little group of k  :  Pm-3m (221)
+ irreps             :  1.0 [GM3+(2)] + 1.0 [GM5+(3)]
+
+ k point (primitive):  R [0.5, 0.5, 0.5]
+ little group of k  :  Pm-3m (221)
+ irreps             :  1.0 [R3+(2)] + 1.0 [R5+(3)]
+
+ k point (primitive):  X [0.0, 0.5, 0.0]
+ little group of k  :  P4/mmm (123)
+ irreps             :  1.0 [X1+(1)] + 1.0 [X2+(1)] + 1.0 [X4+(1)] + 1.0 [X5+(2)]
+
+ k point (primitive):  M [0.5, 0.5, 0.0]
+ little group of k  :  P4/mmm (123)
+ irreps             :  1.0 [M1+(1)] + 1.0 [M2+(1)] + 1.0 [M4+(1)] + 1.0 [M5+(2)]
+```
+
+`--example NAME` copies the input files of that example into the working
+directory (an existing file with different content is never overwritten),
+prints the equivalent ordinary command line after `Running:` and runs it;
+any further option on the line is passed on (`crystod --example ScF3_d
+--kpoint 0 0 0`). The copied `221_PPOSCAR_ScF3` is then there to edit and
+re-run with the printed command. `--example` alone lists the examples bundled
+with a command:
+
+```bash
+crystod --example            # ScF3_d, SrTiO3_d, ScF3_diagram
+crystod-phonon --example     # SrTiO3 (--irreps), SrTiO3_subgroup (--subgroup --qpoint R)
+crystod-mol --example        # CH4, NH3 (--diagram)
+crystod-bz --example         # ScF3
+```
+
 Show global help (the epilog lists all sectioned commands):
 
 ```bash
 crystod --help
 ```
 
-A first analysis — the crystal-orbital irreps of the Ti *d* manifold of SrTiO3
-at every special k point. All you need is a POSCAR:
+## With your own structure
+
+The same analysis on your own file — the crystal-orbital irreps of the Ti *d*
+manifold of SrTiO3 at every special k point. All you need is a POSCAR:
 
 ```bash
 crystod -c example/test_POSCARs/221_PPOSCAR_SrTiO3 --element Ti --orbital d
@@ -31,7 +94,8 @@ structure by symmetry alone. Every other command follows the same shape:
 a structure file (or nothing at all, for the pure group theory of
 `crystod-group`), one mode flag, and a printed result.
 
-Three commands worth trying next:
+Three commands worth trying next (the first two are also bundled examples:
+`crystod --example ScF3_diagram`, `crystod-phonon --example SrTiO3_subgroup`):
 
 ```bash
 # an interactive crystal-orbital diagram, one page per k point
@@ -43,6 +107,10 @@ crystod-phonon --subgroup -c 221_PPOSCAR_SrTiO3 --dim "4 4 4"
 # the octahedral-tilt classification of perovskites, no input file needed
 crystod-group --supergroup Pm-3m --irrep R4+
 ```
+
+The next pages walk through a complete first analysis
+({doc}`first-analysis`) and the phonon workflow for phonopy users
+({doc}`for-phonopy-users`).
 
 ## Shared section numbering
 
@@ -74,6 +142,7 @@ with the `--subgroup` mode documented in
 
 ## Command summary
 
+- `crystod --example [NAME]`   (bundled examples: `ScF3_d`, `SrTiO3_d`, `ScF3_diagram`; without a name the list is printed)
 - `crystod -c POSCAR --element ELEMENT --orbital ORBITAL [--kpoint kx ky kz] [--spinor] [--show-irrep-table]` (k omitted: all special k points; `--spinor`: double-group irreps)
 - `crystod -c POSCAR --atomic-orbital Ni_d O_p --kpoint kx ky kz`
 - `crystod --diagram -c POSCAR --co-left FORMULA --co-right FORMULA [--oxidation EL=Q ...] [--electrons N]`   (crystal-orbital diagram: full-electron basis + point-charge ligand field)
@@ -99,9 +168,11 @@ with the `--subgroup` mode documented in
 - `crystod-group --poscar2cif -c POSCAR [--tolerance 0.01] [--output FILE.cif]`
 - `crystod-group --cif2poscar -c FILE.cif [--conventional] [--tolerance 0.01] [--output POSCAR]`
 - `crystod-group --supergroup-cif HIGH.cif --subgroup-cif LOW.cif [--tolerance 0.01]`
+- `crystod-bz --example [NAME]`   (bundled example: `ScF3`)
 - `crystod-bz -c POSCAR [--band ... --band-labels ...] [--output FILE.html]`
 - `crystod-bz -c POSCAR --trans-mat "t11 t12 t13  t21 t22 t23  t31 t32 t33"`
 - `crystod-bz --show-kpoint --space-group SG`
+- `crystod-phonon --example [NAME]`   (bundled examples: `SrTiO3` = `--irreps`, `SrTiO3_subgroup` = `--subgroup --qpoint R`, both with a 4x4x4 `FORCE_SETS`)
 - `crystod-phonon --irreps --dim "nx ny nz" -c POSCAR [--readfc] [--all-irreps]` (`--all-irreps`: symmetry lines too)
 - `crystod-phonon --fatband --dim nx ny nz -c POSCAR [--element EL] [--nac] [--npoints N] [--projection-direction "0 0 1"]`
 - `crystod-phonon --lt --dim nx ny nz -c POSCAR [--nac]`
@@ -112,6 +183,7 @@ with the `--subgroup` mode documented in
 - `crystod-mag -c POSCAR --element EL [--qpoint Q] [--format vasp|qe] [--conventional] [--amplitude A]`
 - `crystod-md --adp --dim nx ny nz [--start-step N] [--xdatcar XDATCAR] [--output ADP.cif] [--grouping-tolerance TOL]`
 - `crystod-md --summary [--start-step N] [--end-step M] [--xdatcar XDATCAR]`
+- `crystod-mol --example [NAME]`   (bundled examples: `CH4`, `NH3`, both `--diagram`)
 - `crystod-mol --symmetry --xyz FILE.xyz [--tolerance TOL]`
 - `crystod-mol --xyz FILE.xyz --element EL --orbital s|p|d|f [--align] [--show-matrix] [--visualize]`
 - `crystod-mol --diagram --xyz FILE.xyz [--center EL] [--tolerance TOL] [-o FILE.html]`
@@ -119,10 +191,10 @@ with the `--subgroup` mode documented in
 
 ## Notes
 
-- The pre-v0.3.0 flat modes (`crystod --<mode>`) were removed in v0.3.0; invoking
-  one prints the equivalent sectioned command.
 - `--show-irrep-table` in SALC mode prints the little-group irrep table at the
   selected k point; in `--product` mode it prints the point-group character table.
+- The `--pyscf` forms need the optional PySCF dependency:
+  `pip install "CrystOD[quantum]"` (see {doc}`install`).
 - Some workflows depend on the versions of `phonopy`, `spglib`, and `spgrep`.
   CrystOD includes compatibility helpers for newer environments, but keeping
   these packages reasonably up to date is recommended. All irreducible-representation

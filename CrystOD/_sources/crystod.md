@@ -146,8 +146,8 @@ arrows and HOMO/LUMO markers. Hover any level for its **wave-function sketch**
 +/- lobes, drag-rotatable):
 
 ```{raw} html
-<iframe src="_static/embed/CrystalOD_221_PPOSCAR_ScF3.html" width="100%" height="660" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
-<p style="margin-top:0.3em"><a href="_static/embed/CrystalOD_221_PPOSCAR_ScF3.html" target="_blank">Open the ScF3 crystal-orbital diagram full-screen</a></p>
+<iframe src="_static/embed/CrystalOD_221_PPOSCAR_ScF3.html?k=R" width="100%" height="1300" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
+<p style="margin-top:0.3em"><a href="_static/embed/CrystalOD_221_PPOSCAR_ScF3.html?k=R" target="_blank">Open the ScF3 crystal-orbital diagram full-screen</a></p>
 ```
 
 Options: `--electrons N` overrides the electron count (default: all electrons
@@ -155,6 +155,11 @@ of the neutral atoms); `--kpoint GM` restricts the diagram to one special
 point; `--conventional` draws the hover sketches in the conventional cell;
 `--output`/`--tolerance` as usual. Elements H-Bi of the standard
 extended-Hückel tables are parameterized.
+
+The page itself keeps every k point, and the one it opens on can be chosen in
+the URL — `CrystOD_POSCAR.html?k=R` (or `#R`) — which is what the embedded
+diagram above does. That makes a single file embeddable anywhere in the star
+without regenerating it; the k buttons still switch freely afterwards.
 
 ```{seealso}
 **Theory:** [How the orbital diagrams are computed](theory-orbital-diagrams.md)
@@ -166,7 +171,9 @@ point-charge ligand field, the overlap-catastrophe cut-off and their validation.
 
 `--pyscf` replaces the extended-Hueckel model by three **periodic PySCF
 calculations** that share one atomic-orbital space — the crystalline
-counterpart of `crystod-mol --diagram --pyscf`:
+counterpart of `crystod-mol --diagram --pyscf`. It needs the optional PySCF
+dependency, `pip install "CrystOD[quantum]"` (see [Installation](install.md));
+without it the run stops with a one-line `ERROR:` naming this command.
 
 ```bash
 crystod --diagram -c 221_PPOSCAR_ScF3 --pyscf --co-left Sc --co-right F3
@@ -192,6 +199,20 @@ removes it by **deep-level (XPS-style) alignment** against the deepest
 chemically inert fragment level (printed with anchor, purity and k-spread),
 and `--no-align` keeps the raw references instead.
 
+`--oxidation Al=0 N=0` switches the model to **neutral-atom sublattices**
+(the extended-Hückel engine's convention): the point-charge lattice then
+vanishes, and a sublattice with an odd electron count per cell (neutral
+Al: 3) is solved spin-restricted with **Fermi smearing** — the run says so,
+and `--sigma` sets the width (default 0.2 eV for such cells; integer aufbau
+would silently drop the unpaired electron). The isolated-atom columns pick
+their ground spin state by scanning the parity-consistent spins and keeping
+the lowest energy — a neutral N atom takes the Hund spin-3 ⁴S state, not a
+spin-1 doublet. Open-shell atomic columns display the **alpha channel**
+(said in the tooltip); for main-group atoms the alpha inter-shell spacings
+match the spin-averaged ones to ~0.1 eV, but for high-spin d/f atoms the
+exchange splitting can shift them by ~1 eV against the spin-restricted
+sublattice reference.
+
 Crystal-orbital lines are colored by **bonding character** (blue = bonding,
 black = nonbonding, red = antibonding) from the COOP-style left-right overlap
 population of each eigenstate, and the fragment columns are drawn in the VESTA
@@ -206,6 +227,34 @@ Hartree), `--kmesh` (default `round(8 A / |a_i|)`), `--max-l L` (drop basis
 shells above l = L), `--projection lowdin|mulliken`, `--no-ghost`,
 `--no-symmetrize`, and `--chk` (below). The same-irrep resonance-integral
 tables are written to `<output-stem>_coupling.txt` next to the HTML.
+
+Because a three-SCF `--pyscf` run is expensive, the converged densities are
+**cached automatically** as `CHK_{formula}.chk` (rutile TiO2: `CHK_TiO2.chk`,
+the reduced formula in conventional chemical order). The next run on the same
+structure with the same options reads it and skips all three SCFs; a run whose
+options differ says so and recomputes, overwriting the file. `--chk FILE`
+keeps the strict behaviour instead: that file is *yours*, so a parameter
+mismatch aborts with `crystod --chk-info` guidance rather than overwriting it.
+
+`crystod --help` lists every value these take. The short version — of the
+GTH basis sets PySCF ships, **only `gth-szv-molopt-sr` and
+`gth-dzvp-molopt-sr` cover the transition metals and beyond** (H–Rn, with
+the lanthanides La–Lu absent from *every* GTH set, so `--pyscf` cannot run
+on a rare-earth compound at all — the extended-Hückel engine can); the
+larger sets (`gth-tzvp`, `gth-qzv2p`, the `gth-aug-*` and `gth-cc-*`
+families, …) stop at Ar or cover a handful of light elements, so they buy
+diffuse and polarization freedom only for main-group compounds. A basis or
+pseudopotential without an entry for one of the elements is refused with the
+list of sets that do cover the structure. For `--pseudo`, `gth-pbe`,
+`gth-pade` (LDA), `gth-lda` and `gth-hfrev` span H–Rn, `gth-blyp` reaches
+Bi, and the rest are light-element only. `--xc` accepts most libxc names (a name libxc does not know, and a VV10
+functional such as `wb97m-v` — PySCF's periodic code has no nonlocal
+correlation — are both refused up front with the reason);
+LDA (`lda`, `svwn`), GGA (`pbe`, `pbesol`, `revpbe`, `blyp`, `bp86`,
+`pw91`, `b97-d`), meta-GGA (`scan`, `r2scan`, `tpss`, `revtpss`) and
+hybrids (`b3lyp`, `pbe0`, `hse06`, `m06`, `wb97x`, …) all run here, plus
+`hf` for Hartree–Fock; hybrids evaluate exact exchange on the FFT grid, so
+give them `--ke-cutoff 150` or more.
 
 **`--onsite` — the single-Hamiltonian diagram.** Only the crystal SCF runs, and
 the fragment columns are the per-(element, shell) **on-site multiplets of the
@@ -414,6 +463,19 @@ vectors as short pastel arrows (a<sub>prim</sub>, b<sub>prim</sub>,
 c<sub>prim</sub> — the face diagonals) and the conventional vectors of the
 displayed cell as full-color arrows (a<sub>conv</sub>, b<sub>conv</sub>,
 c<sub>conv</sub> — the cubic axes):
+
+Throughout CrystOD, `--kpoint` is given in the **primitive** reciprocal
+basis. With `--conventional` the sidebar therefore lists the k point in
+both bases —
+
+```
+k point   X [0.0, 0.0, 0.5] (primitive)
+k point   X [0.5, 0.5, 0.0] (conventional)
+```
+
+(the X point of I4/mmm La3Ni2O7) — which says at a glance why the display
+needs the supercell it shows: the conventional coordinates (1/2,1/2,0) make
+the Bloch phases commensurate only over 2 x 2 x 1 conventional cells.
 
 ```{raw} html
 <iframe src="_static/embed/SALC_Ce_f_GM_conv.html" width="100%" height="660" loading="lazy" style="border:1px solid #8884; border-radius    :8px; background:#fff;"></iframe>

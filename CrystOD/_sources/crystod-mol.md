@@ -271,7 +271,10 @@ and its two fragments, the latter carrying **ghost basis functions** on the
 removed atoms (the Boys-Bernardi counterpoise construction). The fragment
 levels are therefore true pre-bonding states described in the full molecular
 basis, the molecular MOs are projected exactly onto them, and the printed
-interaction energy E(mol) − E(left) − E(right) is BSSE-free:
+interaction energy E(mol) − E(left) − E(right) is BSSE-free. `--pyscf` needs
+the optional PySCF dependency, `pip install "CrystOD[quantum]"` (see
+[Installation](install.md)); without it the run stops with a one-line
+`ERROR:` naming this command:
 
 ```bash
 crystod-mol --diagram --xyz XYZ_H2O.xyz --pyscf                # H2 | H2O | O
