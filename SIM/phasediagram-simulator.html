@@ -623,7 +623,7 @@ function dispX(s, x, d){ return (100*toDisp(s, x)).toFixed(d == null ? 1 : d); }
    そのまま絵の面積になります．
    ======================================================================== */
 const MW = 288, MH = 132, NSEED = 30;
-let CELL = null, RANK = null, EDGE = null, SEEDXY = null;
+let CELL = null, RANK = null, EDGE = null, SEEDXY = null, GBSEG = null;
 function buildCells(){
   if (CELL) return;
   let s = 20260811 >>> 0;
@@ -664,6 +664,30 @@ function buildCells(){
     if ((x+1 < MW && CELL[y*MW+x+1] !== c) || (y+1 < MH && CELL[(y+1)*MW+x] !== c))
       EDGE[y*MW+x] = 1;
   }
+  /* 粒界の線分（点線で描くとき用）：隣り合う 2 つのセルの境目は 2 つの種の垂直二等分線の上にあるので，
+     境目の画素をその線に射影して両端を求めます */
+  const acc = {};
+  const addPt = function(c1, c2, px, py){
+    const a = Math.min(c1, c2), b2 = Math.max(c1, c2), k = a*NSEED + b2;
+    const e = acc[k] || (acc[k] = {a:a, b:b2, t0:Infinity, t1:-Infinity, n:0});
+    const s1 = sd[a], s2 = sd[b2];
+    const mx = (s1[0]+s2[0])/2, my = (s1[1]+s2[1])/2;
+    let ux = -(s2[1]-s1[1]), uy = s2[0]-s1[0]; const L = Math.hypot(ux, uy) || 1; ux /= L; uy /= L;
+    const t = (px - mx)*ux + (py - my)*uy;
+    if (t < e.t0) e.t0 = t; if (t > e.t1) e.t1 = t; e.n++;
+    e.mx = mx; e.my = my; e.ux = ux; e.uy = uy;
+  };
+  for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
+    const c = CELL[y*MW+x];
+    if (x+1 < MW && CELL[y*MW+x+1] !== c) addPt(c, CELL[y*MW+x+1], x+1, y+0.5);
+    if (y+1 < MH && CELL[(y+1)*MW+x] !== c) addPt(c, CELL[(y+1)*MW+x], x+0.5, y+1);
+  }
+  GBSEG = [];
+  Object.keys(acc).forEach(function(k){
+    const e = acc[k];
+    if (e.n < 3) return;
+    GBSEG.push([e.mx + e.t0*e.ux, e.my + e.t0*e.uy, e.mx + e.t1*e.ux, e.my + e.t1*e.uy]);
+  });
 }
 function hex2rgb(h){ return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
 const RGB = CI_COL.map(hex2rgb);
@@ -675,11 +699,13 @@ let MIMG = null;
 function renderMicro(ctx, W, H, spec){
   buildCells();
   if (!MIMG) MIMG = ctx.createImageData(MW, MH);
-  const d = MIMG.data;
+  if (!renderMicro.cat) renderMicro.cat = new Uint8Array(MW*MH);
+  const d = MIMG.data, cat = renderMicro.cat;   /* cat：0 ＝ 液相，1 ＝ 固相，2 ＝ ガラス */
+  let anyLiq = false, nLiq = 0, nSol = 0;
   for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
     const i = y*MW + x, c = CELL[i], r = RANK[i];
     const sp = spec[c];
-    let col = RGB[0], hit = false;
+    let col = RGB[0], hit = false, ct = 1;
     for (let k = 0; k < sp.layers.length; k++){
       /* 層は色を直に持つ場合（Scheil のミクロ偏析）と，相の番号で指す場合があります */
       if (r < sp.layers[k].upto){ col = sp.layers[k].col || RGB[sp.layers[k].ci]; hit = true; break; }
@@ -694,14 +720,31 @@ function renderMicro(ctx, W, H, spec){
         const n = ((x*7919 + y*104729) % 97)/97;
         const g = RGB[GLASS];
         col = [g[0] - 10 + 20*n | 0, g[1] - 10 + 20*n | 0, g[2] - 10 + 20*n | 0];
-      } else col = RGB[rs.ci];
+        ct = 2;
+      } else {
+        col = RGB[rs.ci];
+        if (rs.ci === 0) ct = 0;
+        else if (rs.ci === GLASS) ct = 2;
+      }
     }
-    let rr = col[0], gg = col[1], bb = col[2];
-    /* ガラスには粒界がありません */
-    const noEdge = (!sp.layers.length && sp.rest.type === 'glass');
-    if (EDGE[i] && !noEdge){ rr = rr*0.55 | 0; gg = gg*0.55 | 0; bb = bb*0.55 | 0; }
+    if (ct === 0){ anyLiq = true; nLiq++; } else if (ct === 1) nSol++;
+    cat[i] = ct;
     const o = i*4;
-    d[o] = rr; d[o+1] = gg; d[o+2] = bb; d[o+3] = 255;
+    d[o] = col[0]; d[o+1] = col[1]; d[o+2] = col[2]; d[o+3] = 255;
+  }
+  /* 粒界は «固相の粒どうしが接するところ» にだけ描きます．
+     液相には粒界がなく，液相が少しでも残っている間（L ＋ 固相）は粒どうしがまだ液相で隔てられているので描きません．
+     完全に固まった（液相がなくなった）ときに初めて粒界が現れます．ガラスにも粒界はありません． */
+  if (!anyLiq){
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
+      const i = y*MW + x;
+      if (!EDGE[i] || cat[i] !== 1) continue;
+      const c = CELL[i];
+      const nb = (x+1 < MW && CELL[i+1] !== c) ? i+1 : ((y+1 < MH && CELL[i+MW] !== c) ? i+MW : -1);
+      if (nb < 0 || cat[nb] !== 1) continue;
+      const o = i*4;
+      d[o] = d[o]*0.55 | 0; d[o+1] = d[o+1]*0.55 | 0; d[o+2] = d[o+2]*0.55 | 0;
+    }
   }
   if (!renderMicro.buf){
     renderMicro.buf = document.createElement('canvas');
@@ -710,10 +753,32 @@ function renderMicro(ctx, W, H, spec){
   const b = renderMicro.buf.getContext('2d');
   b.putImageData(MIMG, 0, 0);
   ctx.imageSmoothingEnabled = true;
-  const sc = Math.min(W/MW, H/MH), dw = MW*sc, dh = MH*sc;
-  ctx.drawImage(renderMicro.buf, (W-dw)/2, (H-dh)/2, dw, dh);
+  const sc = Math.min(W/MW, H/MH), dw = MW*sc, dh = MH*sc, ox = (W-dw)/2, oy = (H-dh)/2;
+  ctx.drawImage(renderMicro.buf, ox, oy, dw, dh);
+  /* 固相と液相が共存している間（L ＋ 固相）は，もとの粒界（＝粒の境目．液相の膜が入り込んでいる）を点線で描きます．
+     液相の割合 f_L が増えて粒が溶けて小さくなるほど薄くし，f_L ≥ 0.8 で消えます */
+  renderMicro.gbA = 0;
+  if (anyLiq && nSol > 0 && GBSEG){
+    const fL = nLiq/(MW*MH), a = Math.max(0, Math.min(1, 1 - fL/0.8));
+    if (a > 0.02){
+      renderMicro.gbA = a;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(ox, oy, dw, dh); ctx.clip();
+      const dsh = Math.max(3, 1.6*sc);
+      ctx.setLineDash([dsh, dsh]);
+      ctx.lineWidth = Math.max(1, 0.55*sc);
+      ctx.strokeStyle = 'rgba(31,35,40,' + (0.75*a).toFixed(3) + ')';
+      ctx.beginPath();
+      for (let k = 0; k < GBSEG.length; k++){
+        const g = GBSEG[k];
+        ctx.moveTo(ox + g[0]*sc, oy + g[1]*sc); ctx.lineTo(ox + g[2]*sc, oy + g[3]*sc);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
   ctx.strokeStyle = 'rgba(31,35,40,.35)'; ctx.lineWidth = 1;
-  ctx.strokeRect((W-dw)/2 + 0.5, (H-dh)/2 + 0.5, dw-1, dh-1);
+  ctx.strokeRect(ox + 0.5, oy + 0.5, dw-1, dh-1);
 }
 /* 平衡状態から «セルごとの積み方» を作ります */
 function specFromState(s, st){
@@ -1372,7 +1437,9 @@ Sim.prototype.draw = function(){
   }).join('') +
   '<span><i class="ln" style="background:#7b1fa2"></i>共役線（＝共通接線）</span>' +
   '<span><i class="ln" style="background:#c62828"></i>いま見ている点</span>' +
-  (this.key === 'cool' ? '<span><i style="background:' + CI_COL[GLASS] + '"></i>ガラス（非晶質）</span>' : '');
+  (this.key === 'cool' ? '<span><i style="background:' + CI_COL[GLASS] + '"></i>ガラス（非晶質）</span>' : '') +
+  (renderMicro.gbA > 0 ? '<span><i class="ln" style="background:repeating-linear-gradient(90deg,#1f2328 0 3px,transparent 3px 6px)"></i>' +
+    (this.key === 'cool' ? '点線：粒の境目（まだ液相の膜が残っていて，固まりきると粒界になる）' : '点線：もとの粒界（液相が入り込み，溶けるにつれて消える）') + '</span>' : '');
   this.readout(st, T);
 };
 
