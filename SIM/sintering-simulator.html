@@ -95,8 +95,13 @@ html, body { margin:0; background:#fafafa; }
   display:flex; align-items:center; gap:7px; flex-wrap:wrap;
   font-size:.76rem; color:var(--sub); margin-top:9px;
 }
-#qsim .ctlrow > span:first-child{flex:0 0 auto; min-width:104px; font-variant-numeric:tabular-nums}
+#qsim .ctlrow > span:first-child{flex:0 0 auto; min-width:8.55em; font-variant-numeric:tabular-nums}  /* 8.55em ≈ 104px（文字を大きくしても見出しの幅の余裕が同じ割合で残る） */
 #qsim .ctlrow input[type=range]{flex:1 1 90px; min-width:76px; accent-color:var(--accent)}
+/* 値の桁数で見出しの幅が変わるスライダー：見出しを 1 行目，つまみを 2 行目の全幅に置いて，
+   動かしている間につまみの位置と長さが変わらない（次の行へ押し出されない）ようにする */
+#qsim .ctlrow.stack > span:first-child{flex:1 1 100%; min-width:0; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis}  /* 見出しは 1 行に固定（ブラウザの文字をかなり大きくしたときだけ末尾を「…」で省く） */
+#qsim .ctlrow.stack input[type=range]{flex:1 1 100%; min-width:0; margin-left:0; margin-right:0}
 #qsim select.wide{
   font:inherit; font-size:.84rem; width:100%; padding:6px 8px; border-radius:9px;
   border:1px solid var(--line); background:#fff; color:var(--fg); cursor:pointer;
@@ -317,8 +322,8 @@ function ctlHead(p,t){p.appendChild(el('p','ctlhead',t));}
 function sep(p){p.appendChild(el('hr','sep'));}
 /* 各タブの末尾に置く，解説ページ（付録 A）へのリンク */
 function more(p,id,n){p.appendChild(el('p','more','詳しい解説：<a href="sintering-derivation.html#'+id+'" target="_blank" rel="noopener noreferrer">sintering-derivation.html 付録 A.'+n+'</a>'));}
-function slider(p,label,min,max,step,val,fn){
-  const row=el('div','ctlrow'), lab=el('span',null,label);
+function slider(p,label,min,max,step,val,fn,stack){
+  const row=el('div','ctlrow'+(stack?' stack':'')), lab=el('span',null,label);
   const i=document.createElement('input');
   i.type='range'; i.min=min; i.max=max; i.step=step; i.value=val;
   i.setAttribute('aria-label',label.replace(/<[^>]*>/g,''));
@@ -1532,12 +1537,16 @@ Sim.prototype.dHelp=function(){
    すると全エネルギーは E ＝ Ω N_AB ＋ 定数（N_AB は A–B の最近接の対の数）．
    交換の受理確率：min(1, exp(−ΔE/k_BT)) × exp(−E_m/k_BT)．E_m は動く原子の障壁（C が近くにあれば aidDrop だけ下げ，0 未満にはしない）．
    障壁の因子は行きと帰りで同じなので詳細つり合いを満たす．
-   1 MC ステップ ＝ 空孔の数と同じ回数の試行（空孔 1 個あたり平均 1 回）．エネルギー・k_BT は相対単位． */
+   1 MC ステップ ＝ 空孔の数と同じ回数の試行（空孔 1 個あたり平均 1 回）．
+   エネルギーの単位 ε₀ ＝ k_B × 1000 K（≈ 0.0862 eV）．内部では k_BT を ε₀ 単位で持ち，画面では温度 T ＝ 1000 K × (k_BT/ε₀) を K で表示する．
+   移動の障壁などは計算を速くするため実際（≈ 1 eV）より小さい教育用の値． */
 const CAL={ /* E_f：空孔の形成エネルギー（教育用），c_v は exp(−E_f/k_BT) を [cvMin, cvMax] に丸める */
   NX:48, NY:28, seed:20260916, Ef:3.0, cvMin:0.005, cvMax:0.03, EmA:0.4, EmC:0.4, aidDrop:1.2, aidFrac:0.02, aidBand:[21,26],
-  heavyB:1.6, kJ:0.02,
+  heavyB:1.6, kJ:0.02, TK:1000, eVe0:0.08617,   /* TK：ε₀ に当たる温度 [K]，eVe0：ε₀ [eV] */
   speeds:[30,100,300,1000,3000],
   presets:[{name:'秩序化合物 AB になる（Ω < 0）', Om:-1.5},{name:'固溶体になる（Ω ≈ 0）', Om:0},{name:'混ざらない（Ω > 0）', Om:1.5}]};
+function calTK(kT){ return Math.round(kT*CAL.TK); }
+function calTtxt(kT){ const T=calTK(kT); return T+' K（'+Math.round(T-273.15)+' ℃）'; }
 function calVacFrac(kT){ const raw=Math.exp(-CAL.Ef/kT); return {raw:raw, used:clamp(raw,CAL.cvMin,CAL.cvMax)}; }
 /* 格子を作る．0 空孔，1 A，2 B，3 C（焼結助剤） */
 function calNew(kT,aid,seed){
@@ -1697,35 +1706,37 @@ Sim.prototype.bCalcine=function(){
   this.btnRun=button(pr,'再生','primary b-half',function(){ self.calToggle(); });
   button(pr,'リセット','b-half',function(){ self.calReset(); self.draw(); });
   this.slSpeed=slider(c,'速さ',0,CAL.speeds.length-1,1,this.speedIx,function(v,l){
-    self.speedIx=v|0; l.innerHTML='速さ ＝ '+CAL.speeds[self.speedIx]+' MC ステップ/コマ'; });
-  this.slT=slider(c,'<i>k</i><sub>B</sub><i>T</i>',0.5,2.5,0.05,0.8,function(v,l){
-    self.P.kT=v; l.innerHTML='<i>k</i><sub>B</sub><i>T</i> ＝ '+fmt(v,2); if(!self.running) self.draw(); });
-  c.appendChild(el('p','hint2','空孔の数は，リセットしたときの温度に合わせて決まります．'));
+    self.speedIx=v|0; l.innerHTML='速さ ＝ '+CAL.speeds[self.speedIx]+' MC ステップ/コマ'; },true);
+  this.slT=slider(c,'<i>T</i>',500,2500,50,Math.round(this.P.kT*CAL.TK),function(v,l){
+    self.P.kT=v/CAL.TK; l.innerHTML='<i>T</i> ＝ '+calTtxt(self.P.kT); if(!self.running) self.draw(); },true);
+  this.slT.label.innerHTML='<i>T</i> ＝ '+calTtxt(this.P.kT);
+  c.appendChild(el('p','hint2','空孔の数は，リセットしたときの温度に合わせて決まります．エネルギーは <i>ε</i><sub>0</sub> ＝ <i>k</i><sub>B</sub> × '+CAL.TK+' K（≈ '+fmt(CAL.eVe0,3)+' eV）を単位とする教育用の値です．計算を速くするため移動の障壁は実際（≈ 1 eV）よりずっと小さいので，温度の数値は目安です．'));
   ctlHead(c,'混ざりやすさ Ω');
   const pb=el('div','btnrow'); c.appendChild(pb);
   this.preBtns=CAL.presets.map(function(p){ return button(pb,p.name,'b-full',function(){ self.calPreset(p.Om); }); });
   this.slOm=slider(c,'Ω',-2,2,0.05,0,function(v,l){
-    self.P.Om=v; l.innerHTML='Ω ＝ '+fmt(v,2).replace('-','−'); self.calMarkPreset(); if(!self.running) self.draw(); });
+    self.P.Om=v; l.innerHTML='Ω ＝ '+fmt(v,2).replace('-','−')+' <i>ε</i><sub>0</sub>'; self.calMarkPreset(); if(!self.running) self.draw(); },true);
+  this.slOm.label.innerHTML='Ω ＝ '+fmt(this.P.Om,2).replace('-','−')+' <i>ε</i><sub>0</sub>';
   c.appendChild(el('div','eq',
     '<math display="block"><mrow><mi>Ω</mi><mo>=</mo><msub><mi>ε</mi><mtext>AB</mtext></msub><mo>−</mo>'
    +'<mfrac><mrow><msub><mi>ε</mi><mtext>AA</mtext></msub><mo>+</mo><msub><mi>ε</mi><mtext>BB</mtext></msub></mrow><mn>2</mn></mfrac></mrow></math>'
    +'<span class="cmt">Ω &lt; 0 なら A と B が隣り合うほうが得</span>'));
   ctlHead(c,'B の拡散しにくさ');
   this.slEmB=slider(c,'<i>E</i><sub>m,B</sub>',0.4,2.4,0.05,CAL.EmA,function(v,l){
-    self.P.EmB=v; l.innerHTML='<i>E</i><sub>m,B</sub> ＝ '+fmt(v,2)+'（<i>E</i><sub>m,A</sub> ＝ '+fmt(CAL.EmA,2)+'）';
+    self.P.EmB=v; l.innerHTML='<i>E</i><sub>m,B</sub> ＝ '+fmt(v,2)+' <i>ε</i><sub>0</sub>（<i>E</i><sub>m,A</sub> ＝ '+fmt(CAL.EmA,2)+' <i>ε</i><sub>0</sub>）';
     if(self.btnHeavy) self.btnHeavy.textContent=(v>CAL.EmA+1e-9)?'B を A と同じ動きやすさに戻す':'B を重い・結合の強い元素にする';
-    if(!self.running) self.draw(); });
+    if(!self.running) self.draw(); },true);
   const hb=el('div','btnrow'); c.appendChild(hb);
   this.btnHeavy=button(hb,'B を重い・結合の強い元素にする','b-full',function(){
     self.calSetSlider(self.slEmB,(self.P.EmB>CAL.EmA+1e-9)?CAL.EmA:CAL.heavyB); });
   ctlHead(c,'焼結助剤');
   this.chkAid=checkbox(c,'焼結助剤 C（赤）を界面の近くに 2 % 加える（リセットします）',false,function(v){
     self.aid=v; self.calReset(); self.draw(); });
-  c.appendChild(el('p','hint2','C の隣では移動の障壁が '+fmt(CAL.aidDrop,1)+' 下がります（融点を下げる助剤の模式）．'));
+  c.appendChild(el('p','hint2','C の隣では移動の障壁が '+fmt(CAL.aidDrop,1)+' <i>ε</i><sub>0</sub> 下がります（融点を下げる助剤の模式）．'));
   sep(c);
   ctlHead(c,'粉末のスケール（Jander の式）');
-  slider(c,'<i>r</i>',0.5,5,0.1,this.rJ,function(v,l){ self.rJ=v; l.innerHTML='粒子半径 <i>r</i> ＝ '+fmt(v,1)+' μm'; if(!self.running) self.draw(); });
-  slider(c,'<i>t</i>',0,24,0.25,this.tJ,function(v,l){ self.tJ=v; l.innerHTML='仮焼時間 <i>t</i> ＝ '+fmt(v,2)+' h'; if(!self.running) self.draw(); });
+  slider(c,'<i>r</i>',0.5,5,0.1,this.rJ,function(v,l){ self.rJ=v; l.innerHTML='粒子半径 <i>r</i> ＝ '+fmt(v,1)+' μm'; if(!self.running) self.draw(); },true);
+  slider(c,'<i>t</i>',0,24,0.25,this.tJ,function(v,l){ self.tJ=v; l.innerHTML='仮焼時間 <i>t</i> ＝ '+fmt(v,2)+' h'; if(!self.running) self.draw(); },true);
   c.appendChild(el('div','eq',
     '<math display="block"><mrow><msup><mrow><mo>[</mo><mn>1</mn><mo>−</mo><msup><mrow><mo>(</mo><mn>1</mn><mo>−</mo><mi>α</mi><mo>)</mo></mrow><mrow><mn>1</mn><mo>/</mo><mn>3</mn></mrow></msup><mo>]</mo></mrow><mn>2</mn></msup>'
    +'<mo>=</mo><mfrac><mrow><mi>k</mi><mi>t</mi></mrow><msup><mi>r</mi><mn>2</mn></msup></mfrac></mrow></math>'
@@ -1820,7 +1831,7 @@ Sim.prototype.dCalcine=function(){
     ctx.fillStyle='#8a96a3';
     for(let k=0;k<S.vpos.length;k++){ const i=S.vpos[k]; ctx.fillRect(X0+(i%NX)*cs+cs/2-1,Y0+((i/NX)|0)*cs+cs/2-1,2,2); }
     const yb=Y0+NY*cs+26;
-    txtR(ctx,'経過 '+fmt(S.mcs,0)+' MC ステップ　Ω ＝ '+fmt(this.P.Om,2).replace('-','−')+'　k_{B}T ＝ '+fmt(this.P.kT,2),X0,yb,'left','#15202b',12,true,true);
+    txtR(ctx,'経過 '+fmt(S.mcs,0)+' MC ステップ　Ω ＝ '+fmt(this.P.Om,2).replace('-','−')+' ε_{0}　T ＝ '+calTK(this.P.kT)+' K',X0,yb,'left','#15202b',12,true,true);
     tbox(ctx,st.t,X0+NX*cs,yb,'right',st.k==='order'?'#7b1fa2':(st.k==='sep'?'#c62828':(st.k==='ss'?'#0f4c81':'#5c6670')),12,true);
   }
   /* ---- 中段：濃度分布と Fick の第 2 法則 ---- */
@@ -1932,7 +1943,7 @@ Sim.prototype.dCalcine=function(){
     ['秩序度 <i>η</i>（7×7 の窓の市松模様のそろい具合）', isFinite(ord.eta)?fmt(ord.eta,2):'—（混ざった場所が少ない）', 'mod'],
     ['AB 結合の割合 ÷ ランダム混合の期待値', isFinite(ord.R)?fmt(ord.R,2):'—', 'mod'],
     ['状態', st.t, 'hi'],
-    ['秩序–無秩序の目安 <i>k</i><sub>B</sub><i>T</i><sub>c</sub> ≈ 1.13|Ω|', Math.abs(this.P.Om)<0.05?'—':fmt(Tc,2)+'（'+(this.P.Om<0?'秩序化':'相分離')+'）'],
+    ['秩序–無秩序の目安 <i>T</i><sub>c</sub> ≈ 1.13|Ω|/<i>k</i><sub>B</sub>', Math.abs(this.P.Om)<0.05?'—':calTK(Tc)+' K（'+(this.P.Om<0?'秩序化':'相分離')+'）'],
     ['――　Fick の第 2 法則との比較'],
     ['相互拡散係数 <i>D̃</i>', !fitOK?'—（格子の幅を超えた）':(isFinite(D)?sciHTML(D)+' <i>a</i>²/MC ステップ':'—'), 'hi'],
     ['拡散距離 √(<i>D̃t</i>)', !fitOK?'—（格子の幅を超えた）':(S.mcs>0?fmt(Math.sqrt(Dt),2)+' <i>a</i>':'0'), 'hi'],
