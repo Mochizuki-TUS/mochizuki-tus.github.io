@@ -393,7 +393,7 @@ crystod-phonon --modulation -c 221_PPOSCAR_ScF3 \
 The soft octahedral-rotation triplet of ScF3 is the lowest R4+ set, modes 1-3;
 applying all three with equal amplitudes condenses the `(a,a,a)` direction, and
 the space group of the modulated structure is detected and printed as **R-3c** —
-matching the `--supergroup Pm-3m --irrep R4+` isotropy table of `crystod-group`
+matching the `--parent Pm-3m --irrep R4+` isotropy table of `crystod-group`
 (section 13). The output name follows
 `MPOSCAR_{q}_{mode}_{irrep}_{subgroup}` unless `--output` is given, and a single
 `--amplitude` applies to all selected modes.
@@ -404,7 +404,12 @@ a nearly-symmetric distortion read as the symmetric one. Pass `--tolerance 1e-5`
 to classify the structure at the tolerance the order-parameter direction implies:
 `--mode 1 2 3 --amplitude 0.3 0.15 0.075` is the direction `(a,b,c)` and prints
 `P-1` at 1e-5, but `C2/c` at the default, because the smallest of the three
-displacements is below 0.1 Å.
+displacements is below 0.1 Å. For a parent structure that is itself
+symmetric at 1e-5, the modes are exact to rounding error, so the symmetry of a
+direction holds at 1e-5 too; a space group that appears only at the default
+tolerance belongs to a nearby, more symmetric direction, not to the one frozen
+in, and the 1e-5 result is the one to report. `--tolerance` also sets the
+tolerance of the mode construction itself (default 1e-5).
 ```
 
 Different q points can be combined with numbered argument sets
@@ -420,7 +425,128 @@ crystod-phonon --modulation --yaml phonopy_params.yaml \
 
 The star of q is displayed for each selected q point, which is what makes
 combining arms of the same star (the three X or M arms of a perovskite)
-straightforward.
+straightforward. The X point of body-centred tetragonal Sr3Ti2O7 has two arms,
+`(0,0,1/2)` and `(1/2,1/2,0)`; its lowest mode, X3-, frozen into both with
+equal amplitudes is the direction `X3-(a;a)`:
+
+```bash
+cd example/25_modulation/Sr3Ti2O7_I4mmm
+crystod-phonon --modulation --yaml phonopy_params.yaml \
+  --qpoint1 0 0 0.5 --mode1 1 --amplitude1 0.3 \
+  --qpoint2 0.5 0.5 0 --mode2 1 --amplitude2 0.3
+```
+
+```
+Generating modulated structure...
+  Term 1: q = [0.0, 0.0, 0.5], modes = [1], amplitudes (A) = [0.3]
+  Term 2: q = [0.5, 0.5, 0.0], modes = [1], amplitudes (A) = [0.3]
+
+Symmetry of the generated structure:
+Space group: P4_2/mnm (#136)
+Hall symbol: -P 4n 2n
+
+Modulated structure written to: MPOSCAR_X_mode1_X3-_X_mode1_X3-_P4_2mnm
+```
+
+One arm alone gives `X3-(0;a)`, Cmcm, and unequal amplitudes `X3-(a;b)`, Pnnm
+(check it with `--tolerance 1e-5`: at the default tolerance, amplitudes as
+different as 0.3 and 0.16 still read as P4_2/mnm) — the rows of
+`crystod-group --parent I4/mmm --irrep X3-`. `--qpoint2 -0.5 0.5 0`, the same
+point written with another reciprocal lattice vector, writes the same
+structure.
+
+### What is frozen in
+
+The displacement of atom *j* in the cell at lattice translation **R** is
+
+```
+u_j(R) = A Re[ v_j exp(2 pi i q.R) ],   v_j = e_j exp(2 pi i q.x_j) / sqrt(m_j)
+```
+
+with `A` the `--amplitude`, `e` phonopy's eigenvector of the mode (the
+mass-weighted eigenvector of phonopy's dynamical matrix, in its atom-position
+phase convention), `x_j` and `m_j` the fractional position and the mass of atom
+*j*, and `v` normalized over the primitive cell. This is the harmonic
+eigen-displacement of the mode — heavy atoms move less than light ones — and for
+a non-degenerate mode at a time-reversal-invariant q it is, up to its sign, the
+pattern phonopy's own `MODULATION` freezes in (the test suite compares the two,
+section 25).
+
+- **`--amplitude` (Å) is the norm of the displacement of one primitive cell.**
+  At a time-reversal-invariant q (`2q` a reciprocal lattice vector: Γ and the
+  zone-boundary points such as X, M, R, N) `v` is real, and a mode frozen in
+  with amplitude `A` displaces every primitive cell of the supercell by a
+  pattern of norm exactly `A` (the default 0.3 Å). At any other q the complex
+  vector `A v` has the norm `A`, and the real displacement varies from cell to
+  cell along the modulation.
+- **q may be written any way.** It does not have to be the arm a table lists,
+  and `q + G` is the same modulation as `q`: `(0.5, 0.5, 0)` and
+  `(-0.5, 0.5, 0)` of Sr3Ti2O7 differ by a reciprocal lattice vector and write
+  the same structure. Two different arms of the star are two different
+  modulations (domains related by a rotation of the parent); the printed star
+  lists them.
+- **Degenerate levels at a time-reversal-invariant q.** The mode vectors are
+  real, and the partners of a degenerate level are orthonormal real patterns
+  along directions that symmetry operations fix up to sign; single partners and
+  equal-amplitude combinations give order-parameter directions of the irrep
+  (`--mode 1 2 3` of the R4+ triplet of ScF3 is `(a,a,a)`, R-3c). Where several
+  such bases exist (the `(a,0)` and `(a,a)` directions of a two-dimensional
+  irrep), the one whose single partners freeze into the most symmetric
+  subgroups is taken — the largest point group, then the lowest space-group
+  number — and the partners are listed in that order, so which subgroup
+  `--mode N` gives does not depend on the origin, the orientation or the
+  lattice basis of the input cell. (This is not always ISOTROPY's `(a,0)`: for
+  the M5- pair of ScF3 a single partner gives Pmma, which ISOTROPY lists as
+  `(a,a)`; `--subgroup --modulate` generates every direction either way.)
+  Equivalent partners (domains of one direction) are listed along the
+  conventional crystal axes where those tell them apart: `--mode 1`, `2` and
+  `3` of the R4+ triplet of ScF3 rotate the octahedra about a, b and c, and the
+  x partner of a tetragonal pair comes before the y partner. Where they do not
+  — the two Pnma partners of the X point of diamond Si, whose mirrors have the
+  same orientations but lie in different places — the displacement patterns
+  decide (read along the crystal axes, atom by atom, so this order follows the
+  order of the atoms in the cell). Which domain comes out is a convention, but
+  neither an origin shift nor a rigid rotation of the input changes it. The
+  signs are conventions too: at Γ a partner has its largest component along
+  the crystal axes positive; at any other such q reversing a partner only
+  translates it by a lattice vector (which of the two copies is written
+  depends on the origin), and the partners of one level are signed relative
+  to each other, so `--mode 1 2 3` freezes into the same domain for every
+  origin. The arms of a star are signed independently of each other: two
+  arms differ at most by a translation, but with three or more (the M arms of
+  a cubic crystal) an origin shift can turn a sum over arms into another
+  domain of the same subgroup. At Γ, where no lattice translation can undo a
+  sign, a partner that one of those operations reverses freezes into a
+  lower-symmetry direction than its companion (a Γ E pair of a trigonal or
+  hexagonal crystal, for instance). Where time reversal pairs a complex irrep
+  with its conjugate, the pair forms one real level of twice the dimension
+  (the Degeneracy column says so), whose partners are real but not all along
+  such directions (the displacement patterns fix them instead, again
+  independently of the origin).
+- **At any other q the global phase is a convention.** The mode is a complex
+  Bloch wave, and its overall phase — a shift of the modulation along the
+  lattice — is fixed by a convention, not by the physics: the atom with the
+  largest displacement is placed at the end of the major axis of the ellipse
+  it moves on, in the cell at R = 0 (its largest component along the crystal
+  axes positive). The rule does not depend on the orientation of the input,
+  and an origin shift at most translates the result by a lattice vector. A
+  structure frozen there is one member of a family related by that phase, and
+  its space group is the one of that member; a single partner of a degenerate
+  level is a complex Bloch partner, and its structure depends on the phase in
+  the same way.
+- **The cell is used as it is.** The analysis runs on the primitive cell of the
+  phonopy object — its origin, orientation and lattice basis are kept in the
+  output (the atoms are only grouped by species, as a POSCAR needs), nothing
+  is re-standardized. That cell must be primitive
+  (`primitive_matrix="auto"`, which `-c` uses); a `phonopy_params.yaml` that
+  stores the conventional cell of a centred lattice as its primitive cell is
+  refused with a message saying so. A structure that is symmetric only within a
+  loose `--tolerance` is refused as well: symmetrize it before the force
+  calculation.
+- **q must be commensurate.** A q that no supercell of at most 12 cells per axis
+  holds (`0.15`, for instance) is refused before any mode is computed; give q
+  as fractions with a denominator of at most 12 (`1/7`). The mode table at such
+  a q can still be previewed without `--mode`.
 
 ### Scanning a symmetry line (`--keep-q-coords`)
 
@@ -485,6 +611,65 @@ crystod-phonon --vibration -c 221_PPOSCAR_ScF3 --qpoint R \
 high-symmetry label. Add `--export-npz mode_data.npz` to save positions,
 displacement vectors, symbols, and lattice for notebook-side visualization.
 
+### What is written
+
+The component is frozen in as
+
+```
+u_j(R) = A Re[ w_j exp(2 pi i q.R) ]
+```
+
+with `A` the `--amplitude` and `w` a unit-norm symmetry-adapted partner of the
+selected mode space, which includes the Bloch factor `exp(2 pi i q.x_j)` of the
+position `x_j` of atom *j* in the primitive cell that is written out. There are
+no force constants and no masses here: `w` is a displacement pattern that
+transforms as its irrep, not a normal mode. Its partners follow the conventions
+of `--modulation` ([What is frozen in](#what-is-frozen-in)), with every mode
+space treated as one level:
+
+- **At a time-reversal-invariant q** (Γ and zone-boundary points such as X, M,
+  R, N, Y) every component is real, and the displacement of each primitive cell
+  has the norm `A`. A single component freezes into an isotropy subgroup of its
+  irrep: for a one-dimensional irrep the single-arm subgroup that
+  `crystod-group --parent SG --irrep IR` lists (all six X3- spaces of Sr3Ti2O7
+  give Cmcm, the Y2- spaces of a Cmcm crystal give Pnma), and for the partners
+  of a larger space the directions `--mode` takes in `--modulation` (the three
+  R4+ components of ScF3 are the I4/mcm rotations about a, b and c, in that
+  order). Where an irrep occurs once at q, the written pattern is the
+  `--modulation` mode of that irrep. An origin shift of the input gives every
+  component of an irrep the same space group (a shift that makes spglib put
+  the origin on another site of full symmetry, such as the empty cube centre
+  of ScF3, renames the irreps with it, as it does in every analysis).
+- **How a time-reversal-invariant q is written** (`q`, `q + G` or `-q`) does not
+  change the structure of a given irrep label, occurrence and component: the
+  k-th mode space carrying a label writes the same file for every spelling. The
+  mode-space numbers themselves follow the order in which the irreps are
+  listed at the q given, and that order can differ between spellings (SrTiO3
+  I4/mcm lists M3+ first at `0.5 0.5 -0.5` and M1+ first at `1.5 0.5 -0.5`), so
+  pick the mode space by its label in the listing of the q you use.
+- **An irrep that occurs several times** has one mode space per occurrence.
+  Without force constants nothing selects a combination of them, and any
+  combination freezes into the same subgroup. The spaces are an orthonormal
+  basis of all the patterns of that irrep fixed by the structure itself, not
+  the copies the projection happens to return (those depend on how q is
+  written): they are split by the atom orbit they live on (in the order of
+  the first atom of each orbit), then by how the atoms move along the
+  conventional crystal axes, then by the products of the displacements of
+  neighbouring atoms, and listed in that order.
+- **A complex irrep and its conjugate**, which time reversal joins into one real
+  space at a time-reversal-invariant q, share the real partners of that space:
+  the first half belongs to the irrep whose label comes first (T1 before T2,
+  GM2+ before GM3+), whichever of the two is listed first.
+- **At any other q** the component is a complex Bloch wave whose global phase is
+  a convention, as in `--modulation`, and the space group of the structure
+  depends on it; for an irrep of dimension two or more the phases of the
+  components relative to the first follow the irrep matrices built at the q
+  given, so `q + G` can write another structure for them.
+- **The cell is the spglib primitive cell of the input** (the
+  `Inputed cell was converted into primitive cell` note), which is also the cell
+  the supercell is built from; the q coordinates and the Bloch factors refer to
+  it.
+
 ## 27. Subgroups from imaginary modes (`--subgroup`)
 
 *Testsuite section 27*
@@ -519,8 +704,9 @@ Without `--qpoint`, every q point commensurate with the supercell is scanned
 unstable first, so the unstable q points do not have to be known in advance.
 With `--qpoint R` (a label or three coordinates) only that q point is analyzed.
 `--threshold` sets the frequency below which a mode counts as imaginary
-(default `-0.1` THz), and `--yaml phonopy_params.yaml` may be used instead of
-`--dim`/`-c`.
+(default `-0.1` THz; the acoustic modes at Γ, rigid translations, are never
+listed, whatever the threshold), and `--yaml phonopy_params.yaml` may be used
+instead of `--dim`/`-c`.
 
 Each listed direction is one order-parameter direction of the degenerate
 level. Freezing in a single eigenvector explores only one of them: the R-point
@@ -558,6 +744,11 @@ R5-(a,b,c)             P-1        -> MPOSCAR_R_R5-_a-b-c_P-1
 One POSCAR per direction, plus the `--modulation` command that reproduces it —
 copy-paste it as printed and it rewrites exactly that file, so an amplitude or
 a mode can be changed afterwards without working out the combination again.
+The file is named after the space group `--modulate` measured at 1e-5; the
+command reports the one at `--modulation`'s default 0.1 Å, where a direction
+with a small component can read as a more symmetric neighbour (`R5-(a,b,c)`
+above prints `C2/c`): add `--tolerance 1e-5` to the command to see the same
+group.
 `--amplitude` scales all of them (default 0.3 Å). The names read
 `MPOSCAR_{q}_{irrep}_{direction}_{spacegroup}`; when one q point carries two
 imaginary levels of the *same* irrep, the second gains a `_mode{n}` suffix
@@ -565,7 +756,9 @@ imaginary levels of the *same* irrep, the second gains a `_mode{n}` suffix
 
 Which combination of the degenerate modes realizes which direction is not fixed
 by any convention CrystOD could assume, so it is **measured, not assumed**:
-candidate combinations are generated, the space group of each generated
+candidate combinations are generated (all with positive coefficients first,
+then the same ones with sign changes, which directions such as
+`N1+(a;-a;a;a)` need), the space group of each generated
 structure is determined with spglib, and the (space group, cell size, index)
 triple is matched against the enumerated table. When two directions of one
 irrep share that triple — `R5+` of Pm-3m puts both `(0,a,b)` and `(a,a,b)` at
@@ -580,9 +773,11 @@ A direction that no candidate reproduces is **reported**, never guessed at:
 ```
 
 Every enumerated row therefore ends up either as a file or as a note. The
-directions that need a note are the low-symmetry ones of large order
-parameters (a multi-arm star times a degenerate level), where the candidate
-search is cut off before it reaches them.
+directions that need a note belong to large order parameters (a multi-arm star
+times a degenerate level), where the candidate search is cut off before it
+reaches them — not only low-symmetry ones: for X5- of cubic ScF3 (three arms
+times a pair) the six-component directions such as `X5-(a,a;a,a;a,a)` (R-3c)
+are among them.
 
 A star with several arms is handled the same way, through the multi-q form of
 `--modulation` — the M point of a perovskite needs one arm for `M3+(0;0;a)`,

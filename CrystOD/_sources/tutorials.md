@@ -37,7 +37,7 @@ a short experiment shows why freezing one eigenvector at a time finds I4/mcm and
 C2/m but never R-3c or Imma. The candidate structures are then generated with
 `crystod-phonon --subgroup --modulate` and their space groups re-measured with
 spglib. Documentation: [27. Subgroups from imaginary modes](crystod-phonon.md#27-subgroups-from-imaginary-modes---subgroup),
-[13. Isotropy subgroups](crystod-group.md#13-isotropy-subgroups---supergroup),
+[13. Isotropy subgroups](crystod-group.md#13-isotropy-subgroups---parent),
 [Isotropy subgroups (theory)](theory-isotropy-subgroups.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/02_isotropy_subgroup_search.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/02_isotropy_subgroup_search.ipynb)

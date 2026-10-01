@@ -49,7 +49,7 @@ labels every degenerate level at every special q point of the space group in
 one run, with the ISO-IR labels (`GM4-`, `R5-`, `X5+`, ... - the Miller-Love
 convention of the ISOTROPY Software Suite, `GM4-` being `T1u` in m-3m). These
 are the labels the isotropy-subgroup tables and the direct-product tables use,
-so a level can be carried straight into `crystod-group --supergroup` or
+so a level can be carried straight into `crystod-group --parent` or
 `--product`.
 
 ```bash
@@ -250,6 +250,15 @@ equal amplitudes is `(a,a,a)`. It also prints the irrep and degeneracy of every
 mode, the star of q, and the space group of the structure it wrote, which it
 names after that space group.
 
+What is frozen in is the same physical displacement: phonopy's eigenvector
+divided by the square root of the atomic mass, with its Bloch phase, so for a
+non-degenerate mode at a time-reversal-invariant q the pattern is the one
+`MODULATION` writes, up to its sign. Only the amplitude is counted differently.
+phonopy multiplies that field by its amplitude divided by the square root of
+the number of supercell atoms (a quantity in Å·√amu); `--amplitude` is in Å,
+the norm of the displacement of one primitive cell. See
+[What is frozen in](crystod-phonon.md#what-is-frozen-in).
+
 Without `--mode`, the mode table is printed so the modes can be chosen:
 
 ```bash
@@ -307,7 +316,8 @@ of `FORCE_SETS`, and always prints which. `--yaml phonopy_params.yaml` in
 place of `-c` writes the same file byte for byte. Several q points combine
 through `--qpoint1/--mode1/--amplitude1`, `--qpoint2/...`, which is how the
 arms of a multi-arm star (the three M points of a perovskite) are frozen in
-together.
+together. Any arm, written as any `q + G`, is accepted: `-0.5 0.5 0` and
+`0.5 0.5 0` differ by a reciprocal lattice vector and give one structure.
 Documentation: [25. Phonon modulation](crystod-phonon.md#25-phonon-modulation---modulation),
 [Where the supercell comes from](crystod-phonon.md#where-the-supercell-comes-from).
 
@@ -467,5 +477,5 @@ Documentation: [Phonon modes and their irreps](python-api.md#phonon-modes-and-th
   subgroup search, including the experiment that shows what freezing one
   eigenvector at a time misses).
 - [crystod-phonon](crystod-phonon.md): the reference of every mode flag, and
-  [13. Isotropy subgroups](crystod-group.md#13-isotropy-subgroups---supergroup)
-  for the same tables from `crystod-group --supergroup Pm-3m --irrep R5-`.
+  [13. Isotropy subgroups](crystod-group.md#13-isotropy-subgroups---parent)
+  for the same tables from `crystod-group --parent Pm-3m --irrep R5-`.

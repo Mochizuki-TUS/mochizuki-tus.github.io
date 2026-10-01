@@ -274,6 +274,260 @@ the deep-level alignment anchor is chosen, and why `--onsite` takes the
 fragment columns from the crystal Fock.
 ```
 
+### Quantitative crystal-orbital diagrams from VASP (`--diagram --vasp`)
+
+`--vasp` builds the same three columns from **finished VASP runs** instead of
+from an internal SCF: the crystal run supplies the middle column, and two
+sublattice runs — each keeping one sublattice and replacing the other by
+classical point charges — supply the two fragment columns. Nothing is
+computed here; CrystOD reads `POSCAR`, `PROCAR` (`LORBIT = 12`) and a handful
+of `OUTCAR` facts from each directory (gzipped files are accepted).
+
+```bash
+crystod --diagram [-c POSCAR] --co-left SrTi --co-right O3 --vasp-setup [ROOT]
+#   writes ROOT/BAND_sublattice1 and ROOT/BAND_sublattice2 (POSCAR, KPOINTS,
+#   INCAR, POTCAR) and prints the three run commands
+crystod --diagram --co-left SrTi --co-right O3 --vasp                 [ROOT]
+#   -> CrystOD_{formula}_{space group}_vasp.html + _levels.txt + _levels.json
+crystod --diagram -c POSCAR --co-left SrTi --co-right O3 --vasp       [ROOT]
+#   -> CrystOD_{cell}_vasp.html  +  CrystOD_{cell}_vasp_levels.txt
+#      +  CrystOD_{cell}_vasp_levels.json (the same content, machine-readable)
+```
+
+| directory                | column  | real atoms                  | removed sublattice |
+|--------------------------|---------|-----------------------------|--------------------|
+| `ROOT/BAND`              | crystal | everything                  | —                  |
+| `ROOT/BAND_sublattice1`  | either  | its own real species        | `Va` point charges |
+| `ROOT/BAND_sublattice2`  | either  | its own real species        | `Va` point charges |
+
+**The forms of `--vasp`.** It takes **no path** (the current directory is the
+`ROOT`), **one `ROOT`** with the three directories of the table above, or **the
+three run directories in any order** — whatever they are named and wherever
+they live:
+
+```bash
+crystod --diagram --co-left SrTi --co-right O3 --vasp .
+crystod --diagram --co-left SrTi --co-right O3 \
+        --vasp ./BAND ./BAND_sublattice1 ./BAND_sublattice2
+```
+
+With three paths the **crystal run is the one whose POSCAR carries no `Va`
+species**, and the order they are given in makes no difference to the output.
+Two paths, or more than three, are refused in one line that shows the accepted
+forms. `DIR/band` is used when it carries the `PROCAR`. Which sublattice
+directory is the left and which the right column is decided from the **real
+(non-`Va`) elements of its POSCAR**, never from the number in its name;
+`--vasp-crystal DIR --vasp-left DIR --vasp-right DIR` override any one column
+in any of the three forms.
+
+**`-c` is optional, and it fixes the setting.** Without it the structure is
+the crystal run's own `POSCAR`. With it, the analysis is done in the primitive
+cell of that file — so the irreps agree level for level with the other engines
+and with `crystod -c FILE --element … --orbital …` on the same file — and each
+run is **mapped** onto that setting: one global origin shift, a permutation of
+the atoms and lattice-vector wraps, with `Va` atoms mapping onto the removed
+ones. The run's lattice matrix has to be the `-c` primitive one within a
+relative 1e-3. A `-c` file with Sr at the origin and runs written with Ti
+there is therefore the same analysis, not an error:
+
+```bash
+crystod --diagram -c POSCAR-finish --co-left SrTi --co-right O3 --vasp .
+#  * Setting *
+#   ./BAND/POSCAR = the -c cell shifted by (1/2, 1/2, 1/2);
+#   atom order Sr Ti O O O -> Sr#1 Ti#2 O#5 O#3 O#4
+#   irrep labels refer to the POSCAR-finish setting
+```
+
+The mapping is stated in the terminal report, in the level table, in the JSON
+(`"setting"`) and as a chip on the page whenever it is not the identity:
+**irrep labels at R, X and M depend on the choice of origin**, so it matters
+which file they belong to. The energies, the projected weights, the site
+shifts and the connector weights do not — they are the same numbers in either
+setting. If the `-c` file and the crystal run are the same crystal in
+genuinely different bases, the analysis falls back to the crystal run's own
+setting and says so; if they are not the same crystal, the run stops with one
+line naming what differs and suggesting `-c BAND/POSCAR`.
+
+**`--vasp-setup` writes in the crystal run's setting.** `-c` is optional there
+too: without it the structure is `ROOT/BAND/POSCAR`. With it, the `-c` file
+names the fragments and fixes the formal charges, but the POSCARs that are
+written **always follow the crystal run's own cell, origin and ion order** —
+they are `ROOT/BAND/POSCAR` with one sublattice renamed to `Va<q><sign>`, line
+for line. The assignment travels there through the same mapping `--vasp` uses,
+and the setting is printed (` setting       : …`). Otherwise the two fragment
+runs would sit on another origin — and, through the `-c` file's own lattice
+constant, on a slightly different cell — than the crystal run they are
+compared with. A `-c` file that is not the crystal run's cell in another
+setting stops `--vasp-setup` in one line suggesting `-c BAND/POSCAR`.
+
+A run directory that already holds a **finished** calculation (`OUTCAR`,
+`PROCAR` or `vasprun.xml`) is **not** rewritten: `--vasp-setup` stops in one
+line naming the directory and the files, because the `INCAR` it would write is
+not the `INCAR` that was run. `--force` overwrites anyway.
+
+**Names.** With an ordinary `-c` file the page is `CrystOD_{cell}_vasp.html`,
+as in the other engines. Without `-c`, or when the `-c` file lives inside one
+of the run directories, the name comes from the composition and the space
+group — `CrystOD_SrTiO3_Pm-3m_vasp.html`, titled `SrTiO3, Pm-3m` — so that it
+is never the run directory's `BAND`.
+
+**The point-charge sublattices.** A sublattice run names its switched-off
+atoms `Va<q><sign>` (`Va2-`, `Va4+`) — a species of a **modified VASP** that
+represents them as a smeared Coulomb charge plus a short repulsive wall, the
+wall standing for the Pauli repulsion of the removed ion's core, as in
+total-ion-potential embedding. The formal charges come from CrystOD's own
+oxidation-state resolution (`--oxidation`), so the cell stays neutral and each
+fragment is one sublattice in the Madelung field of the other. VASP itself is
+proprietary and is not distributed with CrystOD; the patch that adds the `Va`
+species is available to VASP licensees on request. `--vasp` itself needs no
+patched VASP — it only reads the output files.
+
+The wall is what a point charge needs to stop being a bare `−q/r` well, and it
+is calibrated: `--vasp-setup` writes `VACSIGMA 0.5`, `VACRWALL 0.45` and
+`VACWALL = 2.5 q e²√(2/π)/σ` (`--vasp-sigma`, `--vasp-rwall`,
+`--vasp-wall-factor` change them; one height is written per `Va` species, so
+the charge scaling stays automatic). A 72-point scan on SrTiO₃ and ScF₃ shows
+the whole family organized by one coordinate, the radius `r₁₀ = b√(2 ln(A/10
+eV))` at which the wall still repels by 10 eV: below 0.7 Å the anion
+sublattice collapses into the bare well (bands below the projection floor,
+metallic points), above 1.4 Å the wall expels the anion valence shell (an O 2p
+manifold three times too wide). The setting above sits at `r₁₀ = 0.99 Å` for
+`q = +2` and 1.13 Å for `q = +4` — the middle of the 0.85–1.25 Å plateau, one
+setting for every charge — and is the joint minimum of the anchor-residual rms
+on both test systems while matching the crystal's anion p-manifold width to
+0.1 eV. Fluorite CaF₂, a third space group with a tetrahedral anion cage,
+transfers without retuning. What the wall chooses is the anion column's
+*position*: over the whole scan the shift ranges over 45 eV while the
+residual rms on the plateau moves by 0.1 eV.
+
+**Irreps from the projections.** A `LORBIT = 12` `PROCAR` lists the complex
+projections ⟨Y_lm at atom | ψ_nk⟩. CrystOD treats that vector as a vector in
+an AO-like (atom, l, m) basis and classifies it with the **same representation
+matrices and character projectors** it builds for a genuine AO basis — the
+Bloch-phased site permutation times the real Wigner matrices, with **no
+further gauge conjugation**, because the PROCAR coefficients are already in
+that Bloch gauge — after reordering VASP's `m = −l..l` rows into its own
+component order. Degenerate
+bands are grouped adaptively until the irrep multiplicities come out integral.
+The result is checked against the site-symmetry induced representation
+(the SALC decomposition the report prints for every element and shell), and a
+level whose best irrep weight falls below 0.9 is listed in a purity warning.
+PAW sphere projections do not sum to one, so levels whose projected weight per
+degenerate partner falls below `--vasp-projection-floor` (0.30) are
+free-electron-like and are dropped; the report prints the weights bracketing
+the cut.
+
+**Alignment.** Each of the three runs pins its own G = 0 average potential to
+zero, so the raw columns are offset by one constant each. The **crystal column
+is the reference** (shift 0) and every fragment level is raised onto it by a
+**site-resolved shift**: one constant per (column, *element*), because the
+shells of one atom move together but different *sites* do not — a cation that
+receives covalent back-donation in the crystal has all its levels raised by the
+intra-atomic Coulomb repulsion the bare-point-charge fragment lacks (on SrTiO₃
+the Ti site moves 11.7 eV more than the ionic Sr site). Each element's shift is
+fitted to the **symmetry-forbidden probes** alone wherever it has any — fragment
+levels whose irrep has no partner in the other sublattice at that k, which
+therefore *must* coincide with their crystal counterpart, an exact constraint.
+The **pure XPS-style counterparts** (absolute composition ≥ 0.80) are then
+reported as what they are, the measured bonding shift of each pair, instead of
+being averaged into the scale; an element with no forbidden probe (CaF₂ Ca) is
+fitted to them and flagged, because their residuals average to zero by
+construction. The anchor pool is
+cut at the *default* window, never at `--vasp-window`, so the drawn range
+cannot move the energy scale. The report lists every anchor, the per-shell
+means, the spread per element and the site-potential difference between the
+elements of one column, plus an independent occupied-band **trace diagnostic**
+that uses no projection at all. `--vasp-zero vbm|efermi|raw` sets the energy
+zero of the page and the tables (default `E − E_VBM`, the VBM being the highest
+occupied crystal eigenvalue over all k of the crystal run). `--vasp-align
+rigid` falls back to one shift per column (whose numbers are printed as a
+diagnostic in either mode), `--vasp-anchor EL nl` pins a column on a shell of
+your choice — and selects `rigid`, since that is what it means — and
+`--no-align` keeps the raw VASP energies.
+
+**Bond character.** A plane-wave calculation has no overlap matrix, so there
+is no COOP population to quote. The character is read from the aligned
+energies instead: a crystal level carrying 95 % or more of its projected
+weight on one sublattice is nonbonding; otherwise it is bonding when it lies
+below, and antibonding when it lies above, the composition-weighted energy of
+the fragment levels its connectors point at (0.3 eV deadband, quoted beside
+the alignment residual the run itself measures — the centre-of-gravity sum
+rule over every complete (k, irrep) manifold, 0.59 eV mean on SrTiO₃ and
+0.19 eV on CaF₂ — so a colour inside the noise says so). A level with a
+parent on an *element* whose own anchors disagree by more than 1 eV keeps the
+neutral grey stroke, and so does one whose drawn parents hold less than half
+of it or whose character would change if the levels the window hides were
+drawn: one shift does not describe that site, so the sign of
+E − E(parents) carries no chemistry there. With bare point charges that
+happens on the site whose shells disagree most — on SrTiO₃ the Sr site, whose
+empty, diffuse 4d shell sits 1.5 eV away from what its own semicore says.
+
+```
+ * Site-resolved alignment (reference = the crystal column, shift 0) *
+   energy zero: E - E_VBM  (VBM 2.604 eV, highest occupied crystal eigenvalue over all k of the crystal run)
+   left  SrTi   (column mean +7.658 eV)
+     Sr  delta =   +3.530 eV   14 anchors (5 symmetry-forbidden), shell spread 1.26 eV -> NOT one scale (> 1 eV)
+     Ti  delta =  +15.255 eV   8 anchors (2 symmetry-forbidden), shell spread 0.00 eV -> shells agree
+        fitted to the symmetry-forbidden probes ALONE
+        Ti 3d     +16.131  n=8  spread  2.95  *
+        symmetry-forbidden probes only: +15.255 eV (n=2, spread 0.15 eV); after the shift they close to 0.078 eV
+          GM   Ti 3d GM5+       forbidden w=0.983 -> GM5+ #1       +15.177 eV   closes to -0.078
+          GM   Ti 3d GM3+       pure      w=0.949 -> GM3+ #2       +17.152 eV   bonding shift +1.897
+     Ti - Sr: +11.73 eV -- the site-potential change between the point-charge model and the
+          self-consistent crystal
+   right O3   (column mean +6.147 eV)
+     O   delta =   +6.091 eV   14 anchors (2 symmetry-forbidden), shell spread 0.12 eV -> shells agree
+
+ * Measured alignment residual (centre of gravity of every complete (k, irrep) manifold) *
+   22 complete manifolds: mean |residual| 0.594 eV, max 1.248 eV (M M4+, +1.248 eV)
+
+ * k point R (1/2,1/2,1/2) *
+   site-symmetry induced representations (SALC decomposition):
+     Ti 3d   = R3+ + R5+
+     O 2p    = R1+ + R3+ + R4+ + R5+
+   crystal   :
+     R3+ #1         -4.18 eV  x2  4e   Ti 3d R3+ 50.5%  O 2p R3+ 49.5%
+     R5+ #2         -3.73 eV  x3  6e   O 2p R5+ 64.0%  Ti 3d R5+ 29.3%  Sr 4p R5+ 6.8%
+```
+
+```{figure} images/crystal_orbital_vasp_SrTiO3.png
+:name: fig-crystal-orbital-vasp-srtio3
+:width: 80%
+
+`CrystOD_SrTiO3_Pm-3m_vasp.html` for SrTiO₃ at R: the cation sublattice SrTi⁶⁺ (left)
+and the anion sublattice O₃⁶⁻ (right), both computed with the removed
+sublattice replaced by `Va` point charges, against the crystal levels in the
+middle; the selected R3+ band is the even Ti 3d / O 2p mixture the excerpt
+above quantifies. With the site-resolved shift the Ti 3d fragment levels sit
+just below the crystal t₂g/e_g bands they mix into, and the bands are coloured
+bonding / nonbonding / antibonding again; only the levels with an Sr parent
+keep the neutral grey stroke.
+```
+
+Main options: `--vasp-align site|rigid`, `--vasp-zero vbm|efermi|raw`,
+`--vasp-window EMIN EMAX` (drawn range relative to the VBM,
+default up to +10 eV), `--vasp-projection-floor W`, `--vasp-anchor EL nl`,
+`--vasp-mesh N N N` and `--potcar-dir` / `--potcar-map EL=NAME` / `--vasp-bin`
+/ `--vasp-rwall` / `--vasp-sigma` / `--vasp-wall-factor` for `--vasp-setup`. Limitations: **non-spin-polarized runs
+only** (a spin-polarized run is refused with one `ERROR:` line), the three
+runs must share one **primitive cell** with the same atom order, and every
+share and connector weight is a **PAW-sphere projection**, which is blind to
+the radial channel — a semicore and a valence shell of the same (atom, l) are
+not orthogonal in it, so the shares and the connectors are resolved by the
+PAW valence *n* of each channel (a `Sr 5s` share can never be handed to the
+`Sr 4s` semicore level) and a channel with no fragment level on the page is
+dropped rather than re-routed.
+
+```{seealso}
+`example/03_hybridization/vasp_SrTiO3/` holds a trimmed copy of the three
+SrTiO₃ runs (the four special k points only) that reproduces every number
+above offline, and `example/03_hybridization/vasp_CaF2/` the same for
+fluorite. CaF₂ is there for a reason: its F sites sit on quarter coordinates
+of the primitive basis, where the PROCAR's Bloch gauge can be tested, and it
+is the ionic control of the site-resolved alignment — Ca +4.54 and F +4.42 eV
+move together to 0.1 eV, against 11.7 eV between Ti and Sr in SrTiO₃.
+```
+
 ### Band structure, fatbands and DOS (`--band`, `--dos`)
 
 Before zooming into the special k points with the diagram, read the whole band

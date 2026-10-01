@@ -1,7 +1,7 @@
 # API reference
 
 Every CrystOD analysis is a Python function or class as well as a command.
-The public API is split into seven domain modules, one per command; each
+The public API is split into nine domain modules, one per command; each
 module carries the vocabulary of the command it mirrors (ISO-IR irrep labels,
 k-point names, order-parameter directions), and the pages below are generated
 from the docstrings of those modules.
@@ -15,12 +15,14 @@ from the docstrings of those modules.
 | [`crystod.mag`](mag.md) | `crystod-mag` | spin representations at q and their symmetry-adapted bases, cluster-multipole (FM/AFM) classification |
 | [`crystod.md`](md.md) | `crystod-md` | XDATCAR trajectories, site-symmetry constraints on anisotropic displacement parameters |
 | [`crystod.mol`](mol.md) | `crystod-mol` | molecular point groups, molecular SALCs, MO diagrams (extended Hueckel, fragments, PySCF) |
+| [`crystod.xrd`](xrd.md) | `crystod-xrd` | powder X-ray diffraction patterns: Bragg peaks for a radiation, broadening, table and figure writers |
+| [`crystod.search`](search.md) | `crystod-search` | Materials Project search (formula, chemical system, elements, IDs, filters), structure download in the standardized cells, POSCAR writers |
 
 ```{note}
-Importing these modules is cheap. `import crystod` and the seven domain
+Importing these modules is cheap. `import crystod` and the nine domain
 modules pull in nothing heavier than NumPy: each name is resolved on first
-access (PEP 562), and phonopy, spgrep, spglib, seekpath, pymatgen and PySCF
-are imported only by the function or class that needs them. Bad input raises
+access (PEP 562), and phonopy, spgrep, spglib, seekpath, pymatgen, requests
+and PySCF are imported only by the function or class that needs them. Bad input raises
 `ValueError` from the functions of these namespaces, where the command line
 prints `ERROR: ...` and exits; the classes are the implementation classes
 themselves and raise `SystemExit` as the command does.
@@ -45,4 +47,6 @@ bz
 mag
 md
 mol
+xrd
+search
 ```

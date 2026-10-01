@@ -5,8 +5,10 @@
 - Python 3.10 or later
 - Main Python dependencies (installed automatically):
   `phonopy`, `spglib`, `spgrep`, `ase`, `seekpath`, `pymatgen`,
-  `numpy`, `scipy`, `sympy`, `pandas`, `matplotlib`
+  `numpy`, `scipy`, `sympy`, `pandas`, `matplotlib`, `requests`
 - Optional: `pyscf`, for the quantitative `--pyscf` engines only (see below)
+- For `crystod-search` only: a network connection and a free Materials
+  Project API key (see below)
 
 ## From PyPI (Recommended)
 
@@ -14,7 +16,7 @@
 pip install CrystOD
 ```
 
-This installs the seven commands and their dependencies: everything needed for
+This installs the nine commands and their dependencies: everything needed for
 the symmetry analysis, the extended-Hückel crystal-orbital diagrams, the phonon
 irreps and the MO diagrams. A few example inputs are bundled, so the first run
 needs no file of your own (`crystod --example ScF3_d`; see {doc}`quickstart`).
@@ -39,6 +41,31 @@ because PySCF 2.14.0 cannot run a cell with zero electrons, which is what a
 fully ionized fragment (Al³⁺ of AlN, for example) becomes under a GTH
 pseudopotential in `--diagram --pyscf`.
 
+### Materials Project API key (`crystod-search`)
+
+`crystod-search` searches the Materials Project and downloads structures from
+it, and the Materials Project API needs a personal key. The key is free: log
+in at <https://next-gen.materialsproject.org/api> and copy the key shown
+there. Then either export it (add the line to `~/.bashrc` or `~/.zshrc` to
+keep it),
+
+```bash
+export MP_API_KEY=<your key>
+```
+
+or store it once in the pymatgen settings file, where pymatgen's own
+`MPRester` finds it as well:
+
+```bash
+pmg config --add PMG_MAPI_KEY <your key>
+```
+
+Nothing else has to be installed: the HTTP client, `requests`, is a dependency
+of CrystOD. Current keys have 32 characters; a 16-character key belongs to
+the retired legacy API and is refused with a message saying so. The other
+commands never go online and need no key. See
+[The API key](crystod-search.md#the-api-key) for the details.
+
 ## Setup for following this manual (conda + git clone)
 
 ```bash
@@ -62,7 +89,7 @@ to run the tutorial notebooks (Sphinx, ruff, nbconvert, ipykernel).
 Run the full test suite in the repository root (inside the `crystod` environment):
 
 ```bash
-python3 testsuite.py           # run everything (35 sections)
+python3 testsuite.py           # run everything (37 sections)
 python3 testsuite.py 13 16     # run selected sections only
 ```
 
@@ -110,9 +137,9 @@ python -m crystod --help
 python -m crystod.cli.bz -c POSCAR --band "0 0 0  0 1/2 0" --band-labels "GM X"
 ```
 
-`crystod.cli.bz`, `.group`, `.phonon`, `.mag`, `.md`, `.mol` correspond to
-`crystod-bz`, `crystod-group`, `crystod-phonon`, `crystod-mag`, `crystod-md`,
-`crystod-mol`.
+`crystod.cli.bz`, `.group`, `.phonon`, `.mag`, `.md`, `.mol`, `.xrd`, `.search`
+correspond to `crystod-bz`, `crystod-group`, `crystod-phonon`, `crystod-mag`,
+`crystod-md`, `crystod-mol`, `crystod-xrd`, `crystod-search`.
 
 ### PySCF uses only one CPU core on macOS (`--pyscf` features)
 

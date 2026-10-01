@@ -16,12 +16,14 @@ crystod.bz        # Brillouin zones, k paths        (crystod-bz)
 crystod.mag       # symmetry-adapted spin bases     (crystod-mag)
 crystod.md        # MD-trajectory analyses          (crystod-md)
 crystod.mol       # molecular SALCs, MO diagrams    (crystod-mol)
+crystod.xrd       # powder XRD patterns             (crystod-xrd)
+crystod.search    # Materials Project search        (crystod-search)
 ```
 
 *Testsuite section 35 checks everything documented on this page.*
 
 ```{note}
-Importing CrystOD is cheap: `import crystod` and the seven domain modules pull
+Importing CrystOD is cheap: `import crystod` and the nine domain modules pull
 in nothing heavier than NumPy. phonopy, spgrep, spglib, PySCF and matplotlib
 are imported only when a function that needs them is actually called, so a
 program that uses one corner of CrystOD does not pay for the rest.
@@ -30,7 +32,7 @@ program that uses one corner of CrystOD does not pay for the rest.
 ## Isotropy subgroups of an irrep
 
 `crystod.group.isotropy_subgroups` is the API form of
-[`crystod-group --supergroup`](crystod-group.md): given a space group and one
+[`crystod-group --parent`](crystod-group.md): given a space group and one
 of its irreps, it enumerates the order-parameter directions and the subgroup
 each of them condenses into.
 
@@ -213,6 +215,8 @@ from crystod.bz import get_brillouin_zone_3d, get_seekpath_kpath
 from crystod.mag import get_spin_representation
 from crystod.md import read_xdatcar, build_symmetry_projector
 from crystod.mol import load_molecule, project_salcs, MODiagram
+from crystod.xrd import load_structure, compute_xrd_pattern, smear_pattern
+from crystod.search import search_materials, fetch_materials, write_poscar
 ```
 
 `dir()` on any domain module lists everything it exports:

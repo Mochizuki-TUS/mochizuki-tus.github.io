@@ -2,7 +2,7 @@
 
 The point/space-group representation-theory calculator. One mode flag per task:
 `--product`, `--table`, `--decompose`, `--ligand-field`, `--basis`,
-`--generate-basis`, `--coset`, `--supergroup`, `--multiplet`, `--poscar2cif`,
+`--generate-basis`, `--coset`, `--parent`, `--multiplet`, `--poscar2cif`,
 `--cif2poscar`, `--supergroup-cif`.
 Point groups are selected with `--pg`/`--pointgroup`/`--point-group` and
 space groups with `--sg`/`--spacegroup`/`--space-group`, by symbol or by
@@ -15,7 +15,7 @@ file is needed.
 | see a character table | `crystod-group --table --pg 3m` |
 | split an orbital in a crystal field | `crystod-group --ligand-field d --pg m-3m` |
 | classify basis functions | `crystod-group --basis x y z --pg m-3m` |
-| know which subgroup a distortion gives | `crystod-group --supergroup Pm-3m --irrep R4+` (`--parent` = same) |
+| know which subgroup a distortion gives | `crystod-group --parent Pm-3m --irrep R4+` (`--supergroup` = same) |
 | get the term symbols of a configuration | `crystod-group --multiplet T2g2 --pg m-3m --orbital d` |
 | convert POSCAR <-> CIF | `crystod-group --poscar2cif -c POSCAR` |
 | decompose an observed distortion | `crystod-group --supergroup-cif HIGH.cif --subgroup-cif LOW.cif` |
@@ -368,20 +368,21 @@ of the star printed by `crystod --star-of-k`. For the point-group mode, H must
 be expressed in the same axes convention as G; a clear error message is printed
 otherwise.
 
-## 13. Isotropy subgroups (`--supergroup`)
+## 13. Isotropy subgroups (`--parent`)
 
 *Example directory: `example/13_isotropy_subgroup` (testsuite section 13)*
 
 When a distortion transforming as an irrep condenses, the symmetry drops from
-the supergroup to the **isotropy subgroup** H(eta) = {g : D(g) eta = eta},
+the parent group to the **isotropy subgroup** H(eta) = {g : D(g) eta = eta},
 which depends on the order-parameter direction eta. The value the flag takes is
-the **parent** group, so `--parent` is accepted as an alias of `--supergroup`
-throughout this section:
+the **parent** group; `--supergroup SG` is kept as an alias of `--parent SG`
+(backward compatibility) and should not be confused with `--supergroup-cif`,
+the symmetry-mode analysis of section 16.
 
 Omit `--order-parameter` to enumerate every direction type:
 
 ```bash
-crystod-group --supergroup Pm-3m --irrep R4+
+crystod-group --parent Pm-3m --irrep R4+
 ```
 
 ```
@@ -403,7 +404,7 @@ one command. Give a direction to get that subgroup in full, with the cell
 relation you need to build it:
 
 ```bash
-crystod-group --supergroup Pm-3m --irrep GM4- --order-parameter 0 0 a
+crystod-group --parent Pm-3m --irrep GM4- --order-parameter 0 0 a
 ```
 
 ```
@@ -430,7 +431,7 @@ When the induced irrep is of complex or pseudoreal type (Frobenius-Schur
 indicator 0 or -1), the real order parameter transforms as the physically
 irreducible **doubled real form**: the order-parameter dimension doubles and
 the irrep is reported under an ISOTROPY-style pair label
-(`crystod-group --supergroup Ia-3d --irrep P2` prints `P1P2`, order-parameter
+(`crystod-group --parent Ia-3d --irrep P2` prints `P1P2`, order-parameter
 dimension 8). Separately tabulated +k/-k stars pair across the stars in the
 same way (`P1` of I-42d -> `P1PA1`, `H1` of P3 -> `H1HA1`).
 
@@ -446,7 +447,7 @@ irreps, i.e. the space groups reached when several distortions condense
 simultaneously:
 
 ```bash
-crystod-group --supergroup I4/mmm --irrep X3- X2+
+crystod-group --parent I4/mmm --irrep X3- X2+
 ```
 
 ```
@@ -484,11 +485,11 @@ rotation (X2+) and tilt (X3-) at the *same* X arm gives the polar
 hybrid-improper ferroelectric ground state `Cmc2_1` (= A2_1am, as in
 Ca3Ti2O7), while *crossed* arms give nonpolar `Pnma`. `--order-parameter`
 then takes the concatenated components (`--order-parameter 0 a 0 c` above
-resolves to Cmc2_1), and `--supergroup Pm-3m --irrep R4+ M3+` reproduces the
+resolves to Cmc2_1), and `--parent Pm-3m --irrep R4+ M3+` reproduces the
 full Howard-Stokes table of *mixed* perovskite tilt systems (a-a-c+ =
 `R4+(0,a,a) M3+(a;0;0)` -> Pnma, a+a+c- -> P4_2/nmc, a0b-c+ -> Cmcm, ...).
 
-`--supergroup` is the offline counterpart of **ISOSUBGROUP** of the ISOTROPY
+`--parent` is the offline counterpart of **ISOSUBGROUP** of the ISOTROPY
 Software Suite (https://iso.byu.edu) and reproduces its published strata
 tables. Where crystod's ISO-IR data or a stratum's enantiomorphic partner
 differs from the ISOTROPY software, a note is printed under the output.
@@ -697,7 +698,7 @@ crystod-group --supergroup-cif 221_PPOSCAR_SrTiO3.cif --subgroup-cif 140_PPOSCAR
 ```
 * Symmetry-mode decomposition *
 k-vector         irrep   direction    isotropy subgroup   dim  amplitude (A)
-(1/2,1/2,1/2)    R5-     (0,0,a)      140 I4/mcm          1    0.3303
+(1/2,1/2,1/2)    R5-     (a,0,0)      140 I4/mcm          1    0.3303
 ```
 
 A second example, the n = 2 Ruddlesden-Popper nickelate La3Ni2O7
@@ -716,11 +717,13 @@ Cmcm (No. 63)
 
 * Cell relation *
 child primitive basis in parent primitive units (rows):
-  (-1, 0, 0)
-  (0, -1, 0)
-  (1, 1, 2)
-origin shift (parent primitive fractional): (1/2, 1, 1/2)
+  (0, 0, -1)
+  (1, 1, 1)
+  (1, -1, 0)
+origin shift (parent primitive fractional): (1/2, 0, 1/2)
 primitive cell multiplication: 2
+(setting: of 8 equivalent sublattice bases the one closest to the orientation of the
+ input files; the child axes are rotated 98.4 deg against the parent axes)
 
 maximum atomic displacement: 0.4097 A
 total distortion amplitude : 1.1489 A
@@ -729,7 +732,7 @@ total distortion amplitude : 1.1489 A
 * Symmetry-mode decomposition *
 k-vector         irrep   direction    isotropy subgroup   dim  amplitude (A)
 (0,0,0)          GM1+    (a)          139 I4/mmm          4    0.1313
-(0,0,1/2)        X3-     (a;0)        63 Cmcm             6    1.1413
+(0,0,1/2)        X3-     (0;a)        63 Cmcm             6    1.1413
 
 * Mode displacement VESTA files (parent conventional basis) *
 display cell in parent primitive units (rows):
@@ -759,7 +762,27 @@ primitive cell of the distorted structure). Multi-irrep distortions
 decompose completely — the Pbnm perovskite gives R4+ -> Imma and
 M3+ -> P4/mbm plus the inactive secondaries X5+/M2+/R5+. The direction and
 isotropy-subgroup columns are computed with the same induced-irrep machinery
-as `--supergroup` (section 13).
+as `--parent` (section 13).
+
+**Which of the equivalent settings is reported?** A symmetric parent leaves
+the sublattice basis degenerate: every basis S·W (W a point operation of the
+parent) pairs the atoms equally well and merely presents the *same*
+distortion in a rotated setting — 24 of them for a cubic parent. CrystOD
+picks the one whose child axes are rotated least against the parent axes,
+both lattices taken as the input files orient them (a CIF is placed with *c*
+along *z* and *a* in the *xz* plane; a POSCAR keeps its lattice vectors as
+written), so the displacement table and the per-irrep VESTA files follow the
+axes of the subgroup file: PbTiO3 P4mm polarized along *c* is shown
+polarized along *c* of the cubic cell, not along *b*, and a POSCAR whose
+polar axis lies along Cartesian *y* comes out along *b*. When no setting
+aligns the axes — standard settings that permute them, a √2×√2 cell, a
+rhombohedral child in its hexagonal setting — the residual rotation is
+printed with the cell relation, as in the La3Ni2O7 example above (Cmcm puts
+the long axis first: 90° plus the 45° in-plane rotation of the √2 cell). The
+direction label of each irrep is written in the ISO-IR order-parameter basis
+of that setting, so a domain-equivalent form can appear — `(a,0,0)` rather
+than `(0,0,a)` for the I4/mcm tilt above; irrep, isotropy subgroup, number
+of modes and amplitude do not depend on the setting.
 
 ### Order parameters at non-special k points
 

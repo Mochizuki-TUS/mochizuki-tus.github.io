@@ -59,6 +59,8 @@ crystod --example            # ScF3_d, SrTiO3_d, ScF3_diagram
 crystod-phonon --example     # SrTiO3 (--irreps), SrTiO3_subgroup (--subgroup --qpoint R)
 crystod-mol --example        # CH4, NH3 (--diagram)
 crystod-bz --example         # ScF3
+crystod-xrd --example        # ScF3 (CuKa), SrTiO3 (CuKa1, gaussian)
+crystod-search --example     # SrTiO3, Sr-Ti-O (--experimental), mp-5229 (--get); need an API key
 ```
 
 Show global help (the epilog lists all sectioned commands):
@@ -94,6 +96,16 @@ structure by symmetry alone. Every other command follows the same shape:
 a structure file (or nothing at all, for the pure group theory of
 `crystod-group`), one mode flag, and a printed result.
 
+No POSCAR at hand? `crystod-search` finds the compound in the Materials
+Project and downloads its structure (a free API key is needed; see
+{doc}`install`):
+
+```bash
+crystod-search SrTiO3            # the SrTiO3 entries, experimentally observed ones starred
+crystod-search --get mp-5229     # writes POSCAR_SrTiO3_Pm-3m_mp-5229
+crystod -c POSCAR_SrTiO3_Pm-3m_mp-5229 --element Ti --orbital d
+```
+
 Three commands worth trying next (the first two are also bundled examples:
 `crystod --example ScF3_diagram`, `crystod-phonon --example SrTiO3_subgroup`):
 
@@ -105,7 +117,7 @@ crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
 crystod-phonon --subgroup -c 221_PPOSCAR_SrTiO3 --dim "4 4 4"
 
 # the octahedral-tilt classification of perovskites, no input file needed
-crystod-group --supergroup Pm-3m --irrep R4+
+crystod-group --parent Pm-3m --irrep R4+
 ```
 
 The next pages walk through a complete first analysis
@@ -125,14 +137,16 @@ The numbers are grouped by command:
 | Sections | Command | Features |
 |---|---|---|
 | 1 | (library core) | Wigner D matrices — see [1. Theoretical background](theory-representations.md) |
-| 2–6 | `crystod` | 2 SALC (incl. `--spinor`), 3 hybridization & crystal-orbital diagrams (`--diagram`, plus `--band`/`--dos` from the same checkpoint), 4 star of k, 5 SALC viewer & eigen-level viewer, 6 CLI regression |
-| 7–17 | `crystod-group` | 7 product, 8 decompose, 9 ligand field, 10 basis, 11 generate-basis, 12 coset, 13 isotropy subgroups (`--supergroup`), 14 multi-electron terms (`--multiplet`), 15 POSCAR <-> Bilbao-style CIF (`--poscar2cif` / `--cif2poscar`), 16 symmetry-mode analysis (`--supergroup-cif`), 17 CLI regression |
+| 2–6 | `crystod` | 2 SALC (incl. `--spinor`), 3 hybridization & crystal-orbital diagrams (`--diagram` in all three engines: extended Hückel, `--pyscf`, `--vasp`, plus `--band`/`--dos` from the same checkpoint), 4 star of k, 5 SALC viewer & eigen-level viewer, 6 CLI regression |
+| 7–17 | `crystod-group` | 7 product, 8 decompose, 9 ligand field, 10 basis, 11 generate-basis, 12 coset, 13 isotropy subgroups (`--parent`), 14 multi-electron terms (`--multiplet`), 15 POSCAR <-> Bilbao-style CIF (`--poscar2cif` / `--cif2poscar`), 16 symmetry-mode analysis (`--supergroup-cif`), 17 CLI regression |
 | 18–20 | `crystod-bz` | 18 Brillouin zone, 19 supercell BZ, 20 CLI regression |
 | 21–27 | `crystod-phonon` | 21 irreps, 22 fatband, 23 LT bands, 24 eigenvectors, 25 modulation, 26 vibration, 27 subgroups from imaginary modes (`--subgroup`) + CLI regression |
 | 28–29 | `crystod-mag` | 28 spin bases, 29 CLI regression |
 | 30–31 | `crystod-md` | 30 ADPs (`--adp`) and `--summary`, 31 CLI regression |
 | 32–34 | `crystod-mol` | 32 molecular point groups & SALCs, 33 MO diagrams (`--diagram`, incl. `--pyscf`), 34 CLI regression |
 | 35 | (library API) | The Python API of every command — see [Python API](python-api.md) |
+| 36 | `crystod-xrd` | 36 powder X-ray diffraction patterns (`--xraytype`, `--peak-profile`) |
+| 37 | `crystod-search` | 37 Materials Project search and POSCAR download (`--get`, `--cell`) |
 
 Sections 6, 17, 20, 29, 31, and 34 are command-line-interface regression tests
 (every argument form plus removed-flag errors); they have no documentation
@@ -147,6 +161,8 @@ with the `--subgroup` mode documented in
 - `crystod -c POSCAR --atomic-orbital Ni_d O_p --kpoint kx ky kz`
 - `crystod --diagram -c POSCAR --co-left FORMULA --co-right FORMULA [--oxidation EL=Q ...] [--electrons N]`   (crystal-orbital diagram: full-electron basis + point-charge ligand field)
 - `crystod --diagram --pyscf -c POSCAR --co-left FORMULA --co-right FORMULA [--xc XC] [--kmesh N N N] [--ke-cutoff E] [--max-l L] [--onsite] [--chk FILE]`
+- `crystod --diagram --vasp [ROOT | DIR DIR DIR] [-c POSCAR] --co-left FORMULA --co-right FORMULA [--vasp-crystal/-left/-right DIR] [--vasp-align site|rigid] [--vasp-zero vbm|efermi|raw] [--vasp-window EMIN EMAX] [--vasp-anchor EL nl] [--no-align]`   (from finished VASP runs: `ROOT/BAND` and `ROOT/BAND_sublattice*`, or the three run directories in any order; without `-c` the structure is the crystal run's POSCAR)
+- `crystod --diagram --vasp-setup [ROOT] -c POSCAR --co-left FORMULA --co-right FORMULA [--potcar-dir DIR] [--potcar-map EL=NAME] [--vasp-mesh N N N] [--vasp-bin PATH]`   (writes those runs' inputs and prints the VASP commands)
 - `crystod --band [--fatband] --pyscf -c POSCAR ... --chk FILE [--window LO HI] [--align vbm|absolute] [--band-points N]`
 - `crystod --dos --pyscf -c POSCAR ... --chk FILE [--dos-kmesh N N N] [--projection lowdin|mulliken]`
 - `crystod --chk-info FILE`   (what a checkpoint stores, plus the option string that reproduces it)
@@ -163,7 +179,7 @@ with the `--subgroup` mode documented in
 - `crystod-group --generate-basis --point-group PG [--order 1 2 3]`
 - `crystod-group --coset --point-group PG --subgroup H`
 - `crystod-group --coset --space-group SG --kpoint kx ky kz`
-- `crystod-group --supergroup SG --irrep IR [IR2 ...] [--order-parameter 0 0 a]`   (`--parent SG` is the same option, named after the value it takes)
+- `crystod-group --parent SG --irrep IR [IR2 ...] [--order-parameter 0 0 a]`   (`--supergroup SG` is kept as an alias; the value is the parent group)
 - `crystod-group --multiplet IRREP^N|IRREPN [IRREP^N|IRREPN ...] --point-group PG [--orbital s|p|d|f] [--visualize [--output FILE.html]]`
 - `crystod-group --poscar2cif -c POSCAR [--tolerance 0.01] [--output FILE.cif]`
 - `crystod-group --cif2poscar -c FILE.cif [--conventional] [--tolerance 0.01] [--output POSCAR]`
@@ -188,6 +204,11 @@ with the `--subgroup` mode documented in
 - `crystod-mol --xyz FILE.xyz --element EL --orbital s|p|d|f [--align] [--show-matrix] [--visualize]`
 - `crystod-mol --diagram --xyz FILE.xyz [--center EL] [--tolerance TOL] [-o FILE.html]`
 - `crystod-mol --diagram --xyz FILE.xyz --pyscf [--basis BAS] [--theory scf|dft] [--xc XC] [--charge N] [--spin 2S] [--ao-left FORMULA --ao-right FORMULA]`
+- `crystod-xrd --example [NAME]`   (bundled examples: `ScF3` = defaults, `SrTiO3` = `--xraytype CuKa1 --peak-profile gaussian`)
+- `crystod-xrd -c POSCAR [--xraytype CuKa|CuKa1|MoKa|...] [--peak-profile lorentzian|gaussian] [--two-theta MIN MAX] [--width W] [--min-intensity PERCENT] [-o PREFIX] [--show]`
+- `crystod-search --example [NAME]`   (bundled searches: `SrTiO3`, `Sr-Ti-O` = `--experimental`, `mp-5229` = `--get`; a Materials Project API key is needed)
+- `crystod-search QUERY [--experimental] [--stable] [--ehull MAX] [--band-gap MIN MAX] [--sites MIN MAX] [--spg SG] [--exclude EL ...] [--subsystems] [--sort ehull|gap|sites|id|formula|spg] [--max N]`   (QUERY: `SrTiO3`, `Sr-Ti-O`, `Sr,Ti,O`, `ABO3`, `mp-5229`)
+- `crystod-search --get MPID [MPID ...] [--cell primitive|conventional|mp] [--tolerance 0.1] [-o FILE | --directory] [--force]`   (or a bare `--get` after a query: every listed material)
 
 ## Notes
 

@@ -92,7 +92,7 @@ name the interpreter). With `uv` installed, once the package is on PyPI:
 
 | Tool | Command it wraps | Inputs |
 |---|---|---|
-| `crystod_isotropy_subgroups` | [`crystod-group --supergroup`](crystod-group.md) | `parent` (`Pm-3m` or `221`), `irrep` (`R4+`; two labels for a coupled order parameter), `order_parameter` (optional, `"0 0 a"`) |
+| `crystod_isotropy_subgroups` | [`crystod-group --parent`](crystod-group.md) | `parent` (`Pm-3m` or `221`), `irrep` (`R4+`; two labels for a coupled order parameter), `order_parameter` (optional, `"0 0 a"`) |
 | `crystod_irrep_product` | [`crystod-group --product`](crystod-group.md) | `space_group` (a point-group symbol such as `m-3m` selects the point-group product), `irreps` (list) |
 | `crystod_decompose_representation` | [`crystod-group --decompose`](crystod-group.md) | `point_group`, `characters` (one per class, E first) |
 | `crystod_ligand_field` | [`crystod-group --ligand-field`](crystod-group.md) | `point_group`, `orbital` (`s`/`p`/`d`/`f`) |
@@ -148,7 +148,7 @@ Acta Cryst. A69, 388 (2013), https://iso.byu.edu). CrystOD: H. Koiso and
 Y. Mochizuki et al., Phys. Rev. B 110, 064104 (2024).
 ```
 
--- the same six subgroups as [`crystod-group --supergroup Pm-3m --irrep R4+`](crystod-group.md)
+-- the same six subgroups as [`crystod-group --parent Pm-3m --irrep R4+`](crystod-group.md)
 and the [Python API](python-api.md), with the citation footer every result
 carries.
 

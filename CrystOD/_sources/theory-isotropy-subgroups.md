@@ -2,7 +2,7 @@
 
 Background for the symmetry-lowering tools of `crystod-group`: how a complex or
 pseudoreal irrep is turned into the physically irreducible real form that an
-order parameter actually lives in (`--supergroup`, section 13), how the
+order parameter actually lives in (`--parent`, section 13), how the
 symmetry-mode decomposition of a distorted structure is constructed
 (`--supergroup-cif`, section 16), and how both are validated against the
 ISOTROPY and Bilbao reference implementations.
@@ -14,11 +14,11 @@ type) or is -1 (pseudoreal type) — as at zone-boundary points of
 non-symmorphic space groups, where the translation phases are genuinely
 complex — the real order parameter transforms as the **physically
 irreducible doubled real form** (the realification of D + D*), the
-dimension doubles, and the output of `crystod-group --supergroup` carries
+dimension doubles, and the output of `crystod-group --parent` carries
 the ISOTROPY-style pair label:
 
 ```bash
-crystod-group --supergroup Ia-3d --irrep P2
+crystod-group --parent Ia-3d --irrep P2
 ```
 
 ```
@@ -47,7 +47,7 @@ through the antilinear real structure of the group-averaged intertwiner.
 In the symmetry-mode analysis of `crystod-group --supergroup-cif`
 (section 16 of the `crystod-group` page), the direction and
 isotropy-subgroup columns are computed with the same induced-irrep
-machinery as `crystod-group --supergroup` (the isotropy-subgroup
+machinery as `crystod-group --parent` (the isotropy-subgroup
 construction described on this page),
 non-invariant subgroup lattices are enlarged to the largest
 parent-invariant sublattice (complete k stars, exact amplitude rescaling),
@@ -63,9 +63,9 @@ D. Orobengoa, C. Capillas, M. I. Aroyo and J. M. Perez-Mato, "AMPLIMODES:
 symmetry-mode analysis on the Bilbao Crystallographic Server",
 J. Appl. Cryst. 42, 820-833 (2009).
 
-## Validation of `crystod-group --supergroup` against ISOSUBGROUP
+## Validation of `crystod-group --parent` against ISOSUBGROUP
 
-`crystod-group --supergroup` is the offline counterpart of **ISOSUBGROUP**
+`crystod-group --parent` is the offline counterpart of **ISOSUBGROUP**
 of the ISOTROPY Software Suite (https://iso.byu.edu), and is validated
 against it exhaustively: a
 sweep over the 910 downloaded ISOSUBGROUP tables in `SUBGROUP/` (space

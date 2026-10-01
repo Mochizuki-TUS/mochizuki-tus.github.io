@@ -80,6 +80,8 @@ per research domain.
 | `crystod-mag` | symmetry-adapted spin bases (cluster multipoles / SAMM) |
 | `crystod-md` | MD-trajectory analyses (ADPs, lattice summary) |
 | `crystod-mol` | molecular point groups, molecular SALCs, and MO diagrams (XYZ files) |
+| `crystod-xrd` | powder X-ray diffraction patterns (Bragg peak list and broadened pattern) |
+| `crystod-search` | Materials Project search (formula, chemical system, elements, ID) and POSCAR download |
 
 Every feature carries a shared section number used consistently across this
 documentation, `testsuite.py`, and the `example/` directories of the repository:
@@ -89,30 +91,33 @@ feature *N* is tested by `python testsuite.py N` and demonstrated in `example/<N
 
 Every command prints its answer to the terminal; the ones that draw something
 also write a standalone HTML page, a PDF, or a VESTA file. A POSCAR (or an XYZ,
-or nothing at all) is the only input. The "Try it" column holds the bundled
+or nothing at all) is the only input, and `crystod-search` fetches the POSCAR of
+any compound of the Materials Project. The "Try it" column holds the bundled
 example closest to each question: `--example NAME` copies the input files into
 the working directory, prints the equivalent ordinary command line and runs it
 (`--example` alone lists the names).
 
-| | Question | Command | Try it | Section |
-|---|---|---|---|---|
-| 📊 | Which irreps does this shell span at each k point? | `crystod -c POSCAR --element Ti --orbital d` | `crystod --example SrTiO3_d` | [2](crystod.md#2-irreps-of-salc) |
-| 🔗 | Which orbitals are allowed to hybridize here? | `crystod -c POSCAR --atomic-orbital Sc-d F-p --kpoint R` | | [3](crystod.md#3-crystal-orbital-diagrams) |
-| 📈 | What does the orbital diagram of this crystal look like? | `crystod --diagram -c POSCAR --co-left Sc --co-right F3` | `crystod --example ScF3_diagram` | [3](crystod.md#3-crystal-orbital-diagrams) |
-| 🎚️ | ... and its band structure and DOS? | `crystod --band --pyscf -c POSCAR --chk FILE`, then the same with `--dos` | | [3](crystod.md#band-structure-fatbands-and-dos---band---dos) |
-| 🧊 | What do these SALCs look like in 3D? | `crystod --visualize -c POSCAR --element Sc --orbital d` | | [5](crystod.md#5-salc-basis-visualization---visualize) |
-| ✖️ | What is `T2g x T2g x T1u` in m-3m? | `crystod-group --product T2g T2g T1u --pg m-3m` | | [7](crystod-group.md#7-direct-products---product) |
-| 🔻 | Which space group does this distortion give? | `crystod-group --supergroup Pm-3m --irrep R4+` | | [13](crystod-group.md#13-isotropy-subgroups---supergroup) |
-| ⚛️ | What are the multi-electron terms of (t2g)³? | `crystod-group --multiplet T2g3 --pg m-3m --orbital d` | | [14](crystod-group.md#14-multi-electron-terms---multiplet) |
-| 📐 | How does the observed structure differ from its parent? | `crystod-group --supergroup-cif HIGH.cif --subgroup-cif LOW.cif` | | [16](crystod-group.md#16-symmetry-mode-analysis---supergroup-cif) |
-| 🔷 | What does this Brillouin zone look like? | `crystod-bz -c POSCAR` | `crystod-bz --example ScF3` | [18](crystod-bz.md#18-brillouin-zone-plot) |
-| 🎵 | Which irrep is each phonon mode? | `crystod-phonon --irreps --dim 4 4 4 -c POSCAR` | `crystod-phonon --example SrTiO3` | [21](crystod-phonon.md#21-phonon-irreps---irreps) |
-| 🔬 | Which phases can this unstable phonon reach? | `crystod-phonon --subgroup --dim 4 4 4 -c POSCAR` | `crystod-phonon --example SrTiO3_subgroup` | [27](crystod-phonon.md#27-subgroups-from-imaginary-modes---subgroup) |
-| 🧲 | Which magnetic orders are symmetry-allowed? | `crystod-mag -c POSCAR --element Ni` | | [28](crystod-mag.md#28-symmetry-adapted-spin-bases) |
-| 🌡️ | What are the ADPs of my MD run? | `crystod-md --adp --dim 4 4 4 --xdatcar XDATCAR` | | [30](crystod-md.md#30-adps-from-an-md-trajectory---adp) |
-| 🧪 | What is the MO diagram of this molecule? | `crystod-mol --diagram --xyz FILE.xyz` | `crystod-mol --example CH4` | [33](crystod-mol.md#33-molecular-orbital-diagrams---diagram) |
-| 🐍 | Can I call all of this from Python? | `from crystod.phonon import imaginary_mode_subgroups` | | [35](python-api.md), [API reference](api/index.md) |
-| 🤖 | Can an LLM assistant run these analyses for me? | `crystod-mcp` (Model Context Protocol server) | | [MCP server](crystod-mcp.md) |
+| Question | Command | Try it | Section |
+|---|---|---|---|
+| Which irreps does this shell span at each k point? | `crystod -c POSCAR --element Ti --orbital d` | `crystod --example SrTiO3_d` | [2](crystod.md#2-irreps-of-salc) |
+| Which orbitals are allowed to hybridize here? | `crystod -c POSCAR --atomic-orbital Sc-d F-p --kpoint R` | | [3](crystod.md#3-crystal-orbital-diagrams) |
+| What does the orbital diagram of this crystal look like? | `crystod --diagram -c POSCAR --co-left Sc --co-right F3` | `crystod --example ScF3_diagram` | [3](crystod.md#3-crystal-orbital-diagrams) |
+| ... and its band structure and DOS? | `crystod --band --pyscf -c POSCAR --chk FILE`, then the same with `--dos` | | [3](crystod.md#band-structure-fatbands-and-dos---band---dos) |
+| What do these SALCs look like in 3D? | `crystod --visualize -c POSCAR --element Sc --orbital d` | | [5](crystod.md#5-salc-basis-visualization---visualize) |
+| What is `T2g x T2g x T1u` in m-3m? | `crystod-group --product T2g T2g T1u --pg m-3m` | | [7](crystod-group.md#7-direct-products---product) |
+| Which space group does this distortion give? | `crystod-group --parent Pm-3m --irrep R4+` | | [13](crystod-group.md#13-isotropy-subgroups---parent) |
+| What are the multi-electron terms of (t2g)³? | `crystod-group --multiplet T2g3 --pg m-3m --orbital d` | | [14](crystod-group.md#14-multi-electron-terms---multiplet) |
+| How does the observed structure differ from its parent? | `crystod-group --supergroup-cif HIGH.cif --subgroup-cif LOW.cif` | | [16](crystod-group.md#16-symmetry-mode-analysis---supergroup-cif) |
+| What does this Brillouin zone look like? | `crystod-bz -c POSCAR` | `crystod-bz --example ScF3` | [18](crystod-bz.md#18-brillouin-zone-plot) |
+| Which irrep is each phonon mode? | `crystod-phonon --irreps --dim 4 4 4 -c POSCAR` | `crystod-phonon --example SrTiO3` | [21](crystod-phonon.md#21-phonon-irreps---irreps) |
+| Which phases can this unstable phonon reach? | `crystod-phonon --subgroup --dim 4 4 4 -c POSCAR` | `crystod-phonon --example SrTiO3_subgroup` | [27](crystod-phonon.md#27-subgroups-from-imaginary-modes---subgroup) |
+| Which magnetic orders are symmetry-allowed? | `crystod-mag -c POSCAR --element Ni` | | [28](crystod-mag.md#28-symmetry-adapted-spin-bases) |
+| What are the ADPs of my MD run? | `crystod-md --adp --dim 4 4 4 --xdatcar XDATCAR` | | [30](crystod-md.md#30-adps-from-an-md-trajectory---adp) |
+| What is the MO diagram of this molecule? | `crystod-mol --diagram --xyz FILE.xyz` | `crystod-mol --example CH4` | [33](crystod-mol.md#33-molecular-orbital-diagrams---diagram) |
+| What powder XRD pattern does this structure give? | `crystod-xrd -c POSCAR` | `crystod-xrd --example ScF3` | [36](crystod-xrd.md#36-powder-x-ray-diffraction-patterns) |
+| Where do I get a POSCAR of this compound? | `crystod-search SrTiO3`, then `crystod-search --get mp-5229` | `crystod-search --example SrTiO3` | [37](crystod-search.md#37-searching-the-materials-project) |
+| Can I call all of this from Python? | `from crystod.phonon import imaginary_mode_subgroups` | | [35](python-api.md), [API reference](api/index.md) |
+| Can an LLM assistant run these analyses for me? | `crystod-mcp` (Model Context Protocol server) | | [MCP server](crystod-mcp.md) |
 
 ```{toctree}
 :maxdepth: 1
@@ -144,6 +149,8 @@ crystod-phonon
 crystod-mag
 crystod-md
 crystod-mol
+crystod-xrd
+crystod-search
 ```
 
 ```{toctree}

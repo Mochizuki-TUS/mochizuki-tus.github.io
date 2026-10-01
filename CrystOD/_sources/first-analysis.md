@@ -35,8 +35,8 @@ Examples bundled with crystod (run one with --example NAME):
 directory, prints the equivalent command line after `Running:`, and runs it.
 A file that is already there and identical is kept; one that differs is never
 overwritten (the run stops with an error naming it), so run the examples in an
-empty directory. `crystod-phonon`, `crystod-mol` and `crystod-bz` have
-`--example` too.
+empty directory. `crystod-phonon`, `crystod-mol`, `crystod-bz`, `crystod-xrd`
+and `crystod-search` have `--example` too.
 
 ## 1. Which irreps does the Sc 3d shell span?
 
@@ -263,6 +263,9 @@ Documentation: [5. SALC basis visualization](crystod.md#5-salc-basis-visualizati
   your own scripts.
 - [Tutorials](tutorials.md): three Jupyter notebooks that run on the bundled
   inputs, with the API and the command line side by side.
+- [crystod-search](crystod-search.md): the POSCAR of any compound of the
+  Materials Project (`crystod-search SrTiO3`, then `crystod-search --get
+  mp-5229`), to run the same analysis on a crystal of your choice.
 - The full reference of the main command, section by section, is
   [crystod](crystod.md); the other commands are listed on the
   [front page](index.md#commands).
