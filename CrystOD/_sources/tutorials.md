@@ -21,7 +21,7 @@ with its ISO-IR irrep, the star arms are mapped onto the tabulated q point
 automatically, and the labels are drawn onto a matplotlib dispersion along the
 seekpath path. The notebook ends with the command-line form,
 `crystod-phonon --irreps`, and the `phonon_irreps.yaml` it writes.
-Documentation: [21. Phonon irreps](crystod-phonon.md#21-phonon-irreps---irreps),
+Documentation: [28. Phonon irreps](crystod-phonon.md#28-phonon-irreps---irreps),
 [Python API](python-api.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/01_phonon_irrep_labeling.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/01_phonon_irrep_labeling.ipynb)
@@ -36,8 +36,8 @@ for the imaginary R-point phonon of SrTiO3 straight from the phonopy object, and
 a short experiment shows why freezing one eigenvector at a time finds I4/mcm and
 C2/m but never R-3c or Imma. The candidate structures are then generated with
 `crystod-phonon --subgroup --modulate` and their space groups re-measured with
-spglib. Documentation: [27. Subgroups from imaginary modes](crystod-phonon.md#27-subgroups-from-imaginary-modes---subgroup),
-[13. Isotropy subgroups](crystod-group.md#13-isotropy-subgroups---parent),
+spglib. Documentation: [35. Subgroups from imaginary modes](crystod-phonon.md#35-subgroups-from-imaginary-modes---subgroup),
+[17. Isotropy subgroups](crystod-group.md#17-isotropy-subgroups---parent),
 [Isotropy subgroups (theory)](theory-isotropy-subgroups.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/02_isotropy_subgroup_search.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/02_isotropy_subgroup_search.ipynb)
@@ -50,7 +50,7 @@ ammonia), and `crystod.mol.MODiagram` turns the SALCs and the central-atom
 orbitals into a symmetry-adapted extended-Hückel MO diagram: the levels with
 their irreps and occupations as a table, a matplotlib level diagram, and the
 interactive HTML page that `crystod-mol --diagram` writes, embedded in the
-notebook. Documentation: [33. Molecular-orbital diagrams](crystod-mol.md#33-molecular-orbital-diagrams---diagram),
+notebook. Documentation: [41. Molecular-orbital diagrams](crystod-mol.md#41-molecular-orbital-diagrams---diagram),
 [How the orbital diagrams are computed](theory-orbital-diagrams.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/03_mo_diagram.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/03_mo_diagram.ipynb)

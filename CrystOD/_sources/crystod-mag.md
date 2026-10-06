@@ -12,9 +12,9 @@ ESPRESSO magnetization input, and a VESTA file with spin arrows.
 | get a Quantum ESPRESSO input instead | `... --format qe` |
 | build a magnetic supercell at q ≠ 0 | `crystod-mag -c POSCAR --element Ni --qpoint R` |
 
-## 28. Symmetry-adapted spin bases
+## 36. Symmetry-adapted spin bases
 
-*Example directory: `example/28_spin_basis` (testsuite section 28)*
+*Example directory: `example/36_spin_basis` (testsuite section 36)*
 
 Treat the spins on the sites of a magnetic element as axial-vector degrees of
 freedom and decompose them into space-group irreps at a q point by projection —
@@ -36,18 +36,22 @@ for the Ni 3c cluster of AlNi3 (the Mn3Ir geometry), 9 spin degrees of freedom
 decompose into exactly three symmetry-adapted families:
 
 ```
-Space group: Pm-3m (#221)
-Magnetic sites: Ni x 3
-  Ni1: [0.5, 0.5, 0.0]
-  Ni2: [0.5, 0.0, 0.5]
-  Ni3: [0.0, 0.5, 0.5]
 
-Selected q-point: GAMMA = [0.0, 0.0, 0.0]
+* Structure *
+  Space group: Pm-3m (#221)
+  Magnetic sites: Ni x 3
+    Ni1: [0.5, 0.5, 0.0]
+    Ni2: [0.5, 0.0, 0.5]
+    Ni3: [0.0, 0.5, 0.5]
 
-Spin (axial-vector) representation on Ni sites: 9 dimensions
-Decomposition: 2 x GM4+(3) + GM5+(3)
+* Selected Q point *
+  Selected q-point: GAMMA = [0.0, 0.0, 0.0]
 
-Symmetry-adapted spin bases:
+* Spin (axial-vector) representation *
+  Spin (axial-vector) representation on Ni sites: 9 dimensions
+  Decomposition: 2 x GM4+(3) + GM5+(3)
+
+* Symmetry-adapted spin bases *
   GM4+(3): dim 3 [FM, dipole]
   GM4+(3): dim 3 [AFM, octupole]
   GM5+(3): dim 3 [AFM, octupole]
@@ -59,7 +63,8 @@ octupole is the experimentally realized 120-degree structure of Mn3Ir — note
 the exactly vanishing net moment:
 
 ```
-=== GM4+(3) [AFM, octupole] ===
+* GM4+(3) [AFM, octupole] *
+  ...
   component 111:
     Ni1: S = [ 0.4082,  0.4082,  0.8165]
     Ni2: S = [ 0.4082, -0.8165, -0.4082]
@@ -71,7 +76,12 @@ the exactly vanishing net moment:
       Ni3: [0.4082, -0.8165, -0.4082]
       Ni4: [-0.8165, 0.4082, -0.4082]
     MAGMOM = 0 0 0   0.4082 0.4082 0.8165   0.4082 -0.8165 -0.4082   -0.8165 0.4082 -0.4082
-    written to: POSCAR_AlNi3_spin_GM4+_octupole_111.vesta
+...
+
+* Output files *
+  ...
+  Spin basis written to: POSCAR_AlNi3_spin_GM4+_octupole_111.vesta
+  ...
 ```
 
 Per-atom spin directions and a ready-to-paste noncollinear magnetization input

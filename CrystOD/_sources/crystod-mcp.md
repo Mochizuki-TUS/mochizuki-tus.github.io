@@ -15,8 +15,14 @@ workflow) and answers with the table.
 | reduce a representation from its characters | `crystod_decompose_representation` |
 | see how an orbital shell splits in a ligand field | `crystod_ligand_field` |
 | read a character table (point group, or little group of k) | `crystod_character_table` |
+| list the Landau invariants, coupling terms and secondary order parameters | `crystod_invariants` |
+| find which irreps (or coupled pairs) give a subgroup type | `crystod_find_isotropy_irreps` |
+| see the group-subgroup graph of the isotropy subgroups | `crystod_subgroup_graph` |
+| correlate irreps to a subgroup (correlation table, compatibility relations, subduction) | `crystod_correlate` |
+| get the allowed form of a property tensor (dielectric, piezoelectric, elastic, Raman, ...) | `crystod_tensor_form` |
 | label the phonon modes with irreps | `crystod_phonon_irreps` |
 | find the subgroups the imaginary modes lead to | `crystod_imaginary_mode_subgroups` |
+| see which Gamma phonons are IR or Raman active (structure only) | `crystod_phonon_activity` |
 | get the irreps of the crystal orbitals of an element | `crystod_crystal_orbital_irreps` |
 | list the special k points of a space group | `crystod_special_kpoints` |
 | get the point group and SALCs of a molecule | `crystod_molecular_symmetry` |
@@ -26,7 +32,9 @@ assistant's disk: space groups as symbols or numbers, irreps in ISO-IR
 notation (`R4+`, `GM5-`), crystal structures as the full text of a POSCAR,
 molecules as the full text of an XYZ file, phonon forces as the full text of
 a phonopy `FORCE_SETS`. The text of a structure is written to a temporary
-directory for the duration of one call and removed afterwards.
+directory for the duration of one call and removed afterwards; the only file
+the server keeps is the isotropy-table cache of `crystod_find_isotropy_irreps`
+(see [Time limits and resources](#time-limits-and-resources)).
 
 ## Installation
 
@@ -92,24 +100,40 @@ name the interpreter). With `uv` installed, once the package is on PyPI:
 
 | Tool | Command it wraps | Inputs |
 |---|---|---|
-| `crystod_isotropy_subgroups` | [`crystod-group --parent`](crystod-group.md) | `parent` (`Pm-3m` or `221`), `irrep` (`R4+`; two labels for a coupled order parameter), `order_parameter` (optional, `"0 0 a"`) |
+| `crystod_isotropy_subgroups` | [`crystod-group --parent`](crystod-group.md) | `parent` (`Pm-3m` or `221`), `irrep` (`R4+`; two labels for a coupled order parameter; a bare k-point name such as `GM` lists every irrep of that k point, as `--parent SG --kpoint GM` does), `order_parameter` (optional, `"0 0 a"`) |
 | `crystod_irrep_product` | [`crystod-group --product`](crystod-group.md) | `space_group` (a point-group symbol such as `m-3m` selects the point-group product), `irreps` (list) |
 | `crystod_decompose_representation` | [`crystod-group --decompose`](crystod-group.md) | `point_group`, `characters` (one per class, E first) |
 | `crystod_ligand_field` | [`crystod-group --ligand-field`](crystod-group.md) | `point_group`, `orbital` (`s`/`p`/`d`/`f`) |
 | `crystod_character_table` | [`crystod-group --table`](crystod-group.md) | `group` (point group, or space group), `kpoint` (optional label or coordinates; Gamma by default for a space group) |
+| `crystod_invariants` | [`crystod-group --invariants`](crystod-group.md) | `space_group`, `irreps` (`R4+`, or several labels for a direct sum such as `["X2+", "X3-", "GM5-"]`), `degree` (default 4), `direction` (optional, `"a 0 0"`; adds the restricted free energy and the `--secondary` table) |
+| `crystod_find_isotropy_irreps` | [`crystod-group --parent G --child H`](crystod-group.md) | `parent`, `child` (`I4/mcm` or `140`), `size`, `index`, `kpoints` (optional filters, `"R M"`), `coupled` (default false; adds the coupled pairs of `--coupled`) |
+| `crystod_subgroup_graph` | [`crystod-group --graph`](crystod-group.md) | `parent`, `irreps` (`R4+`, or several labels for a direct sum such as `["R4+", "M3+"]`); the nodes by index layer and the edge list, as text |
+| `crystod_correlate` | [`crystod-group --correlate`](crystod-group.md) | exactly one form: `point_group` and `subgroup` (`m-3m`, `4/mmm`); `space_group` and `kpoints` (`"GM X"`), `line` (optional); `parent`, `irreps` and `direction` (`"a 0 0"`), `irrep_list` (optional) |
+| `crystod_tensor_form` | [`crystod-group --tensor`](crystod-group.md) | `kind` (`dielectric`, `pyroelectric`, `piezoelectric`, `elastic`, `compliance`, `gyration`, `raman`, or a Jahn symbol such as `V[V2]`), and one of `point_group`, `space_group`, `poscar` |
 | `crystod_phonon_irreps` | [`crystod-phonon --irreps`](crystod-phonon.md) | `poscar`, `dim` (`[4, 4, 4]`), `force_sets`, `qpoint` (optional; every special point otherwise) |
 | `crystod_imaginary_mode_subgroups` | [`crystod-phonon --subgroup`](crystod-phonon.md) | `poscar`, `dim`, `force_sets`, `threshold` (THz, default -0.1) |
+| `crystod_phonon_activity` | [`crystod-phonon --vibration --qpoint GM`](crystod-phonon.md) | `poscar`, `raman_tensors` (default true; `--raman-tensor`), `symprec` (default 1e-5) |
 | `crystod_crystal_orbital_irreps` | [`crystod`](crystod.md) | `poscar`, `element`, `orbital`, `kpoint` (optional) |
 | `crystod_special_kpoints` | [`crystod-bz --show-kpoint`](crystod-bz.md) | `space_group` or `poscar` |
 | `crystod_molecular_symmetry` | [`crystod-mol`](crystod-mol.md) | `xyz`, `element` and `orbital` (optional, together) |
 
 The tools are built on the [Python API](python-api.md)
 (`crystod.group.isotropy_subgroups`, `crystod.phonon.label_phonon_modes`,
-`crystod.phonon.scan_imaginary_modes`, `crystod.bz.get_special_kpoints`, ...);
+`crystod.phonon.scan_imaginary_modes`, `crystod.group.invariant_polynomials`,
+`crystod.group.isotropy_table`, `crystod.group.subgroup_graph`,
+`crystod.group.correlation_table`, `crystod.group.tensor_form`,
+`crystod.phonon.gamma_mode_activities`, `crystod.bz.get_special_kpoints`, ...);
 the three whose printed report is the natural answer (`crystod`, the
 little-group character table and `crystod-mol`) return the report of the
 command itself. `crystod_isotropy_subgroups` always returns the whole table:
 the API has no maximum-index cut-off (there is no `max_index` argument).
+The two tools that take a structure name their k points as the commands do,
+in the frame of the labels of that structure (see
+[Irrep labels and the frame of a structure](theory-representations.md#irrep-labels-and-the-frame-of-a-structure)):
+for a POSCAR outside the ISO-IR setting, `qpoint="P"` and `kpoint="P"` can
+be another arm than the coordinates `crystod_special_kpoints` lists (P of a
+shifted I-4 cell is (-1/4, -1/4, -1/4), with `P1`, `P2`, ... labels; the
+table's (1/4, 1/4, 1/4) carries `PA` labels there).
 
 A tool call with a bad input returns one sentence naming the problem and the
 remedy -- the tabulated irreps of the space group, the class order of the
@@ -170,12 +194,19 @@ Every call runs under a time limit of 60 s by default; the
 set in the client configuration as above) raises or lowers it, and a call
 that exceeds it returns an error naming the limit and the variable instead of
 hanging the client. The limit bounds the wait, not the computation: the tools that return a CrystOD report run it in a subprocess that is killed at the limit, while the group-theory, k-point, molecular and phonon tools run in a worker thread that finishes in the background after the error has been returned (retrying a long scan with a larger limit while the first one is still running costs a second scan). The group-theory, k-point and molecular tools answer in
-well under a second. The phonon tools rebuild the force constants from
+well under a second, except the reverse lookup: the first
+`crystod_find_isotropy_irreps` call on a parent builds the isotropy table of
+that parent (a few seconds; about a minute for the face-centred cubic groups
+with their large W stars) and caches it under `$CRYSTOD_CACHE_DIR/isotropy`
+(default `~/.cache/crystod`) of the server process, as
+[`crystod-group --child`](crystod-group.md) does; later calls read it, and
+`coupled=true` searches every irrep pair (about 10 s for Pm-3m). The phonon tools rebuild the force constants from
 `FORCE_SETS` with phonopy -- a few seconds for the 4x4x4 SrTiO3 example, more
 for large supercells -- and `crystod_imaginary_mode_subgroups` scans every q
 point the supercell resolves. The server runs one calculation per call in a
 worker thread (a subprocess for the tools that return a CrystOD report),
-needs no network access and keeps no state between calls.
+needs no network access and keeps no state between calls apart from that
+cache.
 
 ## Tests
 
@@ -188,9 +219,14 @@ The tests call every tool on the inputs bundled with CrystOD
 (`crystod.examples`: ScF3, SrTiO3 with its 4x4x4 `FORCE_SETS`, CH4, NH3),
 check the results the CrystOD testsuite expects (Pm-3m R4+ -> I4/mcm, R-3c,
 Imma, C2/m, C2/c, P-1; the imaginary R5- mode of SrTiO3 at -1.09 THz; Sc 3d
-of ScF3 -> GM3+ + GM5+ at Gamma; CH4 -> Td with A1 + T2 for the H 1s SALCs),
+of ScF3 -> GM3+ + GM5+ at Gamma; CH4 -> Td with A1 + T2 for the H 1s SALCs;
+the trilinear X2+ X3- GM5- coupling term of I4/mmm; 3 IR-active GM4- sets
+and a silent GM5- set for SrTiO3; R4+ among the Pm-3m irreps giving I4/mcm
+and the coupled R4+ + M3+ pair giving Pnma; the m-3m -> 4/mmm correlation
+T2g -> B2g + Eg, GM4- -> DT1 + DT5 along Pm-3m GM-X and R4+ -> A1g + Eg of
+I4/mcm; the three piezoelectric components d15, d31, d33 of 4mm),
 confirm the citation footer on every result and the one-sentence errors, and
-connect to the server in-process and over stdio to list the ten tools and
+connect to the server in-process and over stdio to list the sixteen tools and
 make a call.
 
 ## License

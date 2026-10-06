@@ -113,8 +113,11 @@ reduction formula
 n_Gamma = (1/|G|) * sum_g  chi_Gamma(g)* chi(g),
 ```
 
-an average over all `|G|` operations of the group. This is exactly how the
-ligand-field splitting of `crystod-group --ligand-field` (section 9) works:
+an average over all `|G|` operations of the group. A complex-conjugate pair
+stored as one real irrep in the point-group tables (such as `Eg` of `-3` or
+`m-3`) has norm `sum_g |chi_Gamma(g)|^2 = 2|G|`, so the reduction divides by
+the norm of each irrep rather than by `|G|`. This is exactly how the
+ligand-field splitting of `crystod-group --ligand-field` (section 11) works:
 the characters of the d shell in the
 m-3m field, `chi(g) = tr D^(2)(g)`, reduce to `Eg + T2g` — the familiar
 two-below-three splitting of d orbitals in an octahedral crystal field.
@@ -145,7 +148,7 @@ kills every component except the part transforming as Gamma.
 
 The workflow — prototyped in `matsym/get_basis_functions.ipynb` by Hiroki
 Koiso — is the engine of `crystod-group --basis` / `--generate-basis`
-(sections 10-11 of `crystod-group`):
+(sections 12 and 14 of `crystod-group`):
 
 1. get the symmetry operations from **spglib** and the irreps from **spgrep**;
 2. build the representation matrices `O(g)` of the trial basis — for the linear
@@ -198,17 +201,17 @@ nothing but a weighted average of these 48 panels — multiply each panel by the
 irrep character `chi_Gamma(g)*` and sum — and the block structure you see here
 is exactly what reappears in the result: the squares block yields
 `A1g + Eg`, the products block yields `T2g`, reproducing step 3 above (and the
-`crystod-group --generate-basis --order 2` output of section 11 of
+`crystod-group --generate-basis --order 2` output of section 14 of
 `crystod-group`).
 
-The SALCs of the main `crystod` command and of its SALC viewer (section 5 of
+The SALCs of the main `crystod` command and of its SALC viewer (section 6 of
 `crystod`) come from the *same* projection with
 the trial basis replaced by the atomic orbitals on all symmetry-equivalent
 sites — `O(g)` then combines the site permutation, the Bloch phases, and
 `D^(l)(R)` from section 1.2 above. And replacing `D^(1)(R) = R` by the
 axial-vector
 representation `det(R) R` (magnetic moments do not flip under inversion) turns
-the same machinery into the spin-multipole bases of `crystod-mag` (section 28).
+the same machinery into the spin-multipole bases of `crystod-mag` (section 36).
 
 *Further reading:* B. Souvignier, "Representations of crystallographic groups"
 ([MaThCryst summer school notes, Nancy 2010](https://www.crystallography.fr/mathcryst/pdf/nancy2010/Souvignier_irrep_slides.pdf));
@@ -216,12 +219,188 @@ the spgrep documentation, e.g. the
 [symmetry-adapted tensor example](https://spglib.github.io/spgrep/examples/symmetry_adapted_tensor.html).
 Run `python demo_wigner_d.py` in `example/01_wigner_d` for a printed walk-through.
 
+## Irrep labels and the frame of a structure
+
+Every space-group irrep label that CrystOD prints — the SALC analysis,
+`--atomic-orbital` and `--diagram` of `crystod`, `crystod-phonon --irreps`,
+`--vibration`, `--vector` and `--modulation`, `crystod-mag` and the
+space-group modes of `crystod-group` — comes from the bundled ISO-IR tables of
+the ISOTROPY Software Suite (Miller-Love convention: `GM4-`, `R5-`, `DT5`,
+`LD3`). The small irreps themselves are computed by spgrep, and each one is
+named by comparing its characters with the tabulated characters at its k
+point.
+
+A label is defined only relative to a description of the crystal in the
+ISO-IR standard setting, and the setting leaves a choice. Moving the origin to
+another point of the same site symmetry (Sr or Ti at the origin of Pm-3m, Si
+on Wyckoff 8a or 8b of Fd-3m) or turning the axes by a lattice rotation that
+maps the space group onto itself (the sixfold axis of P-6m2, the twofold axis
+that reverses the polar axis of P4) gives another standard description — an
+element of the Euclidean normalizer of the group — and it permutes labels at
+zone-boundary points: the octahedral tilt of SrTiO3 is `R5-` with Sr at the
+origin and `R4+` with Ti at the origin. CrystOD fixes the frame by three
+rules, so that one structure gets one set of names in every command:
+
+1. **A cell that is already in the ISO-IR setting keeps its own axes and
+   origin**: the conventional cell, its primitive cell in the standard
+   centring, and a diagonal supercell of either (n1 x n2 x n3 multiples of its
+   axes with the same origin, of any size). The setting chosen in the input
+   file is respected.
+2. **Any other cell gets a canonical frame of the crystal** (a shifted origin,
+   rotated or re-based axes, a non-diagonal supercell such as sqrt2 x sqrt2 x
+   1, a supercell of such a cell). The candidates are spglib's standard frame
+   composed with the proper lattice rotations that map the group onto itself
+   and with the origin shifts of the normalizer; frames that keep the cell's
+   own origin are preferred when there are any (when that origin is the
+   origin of a standard description, such as Sr or Ti in SrTiO3); among the
+   candidates the one with the smallest sorted list of atomic positions is
+   taken, coordinates being compared, and reduced into the unit cell, at
+   0.71, 0.071 and 0.0071 times the symmetry tolerance (not round multiples
+   of it, so that coordinates given to a few decimals cannot fall exactly on
+   a level). Along a polar axis, where the origin is free, it is put on an
+   atom of the species with the smallest atomic number (centring copies
+   included).
+3. **A working cell derived from the input cell** (phonopy's primitive cell,
+   the spglib standardization) **inherits the frame of the input cell**.
+
+| input | rule | labels |
+|---|---|---|
+| `221_PPOSCAR_SrTiO3` (Sr at the origin) | 1 | R tilt `R5-` |
+| the same with Ti at the origin | 1 | R tilt `R4+` |
+| the same shifted by (0.1234, 0.2345, 0.3456) | 2 | R tilt `R4+` (Ti at the origin) |
+| `221_PPOSCAR_ScF3` with the empty cube centre at the origin | 1 | R spaces `R2-`, `R3-`, `R4-`, `R5+`, `R5-` (Sc at the origin: `R1+`, `R3+`, `R4+`, `R4-`, `R5+`) |
+| 2x2x2 and 2x1x1 supercells of `221_PPOSCAR_SrTiO3` | 1 | Ti d at R `R3- + R4-`, as the cell |
+| 2x2x1 supercell of MoS2 (P-6m2) | 1 | Mo d at M `M1..M4` and at L `L1..L4`, as the cell |
+| sqrt2 x sqrt2 x 1 supercell of `221_PPOSCAR_SrTiO3` (rows (1,1,0), (-1,1,0), (0,0,1)), Sr at the origin | 2, own origin kept | R tilt `R5-` |
+| the same supercell shifted by (0.1234, 0.2345, 0.3456) | 2 | R tilt `R4+` |
+| `131_PPOSCAR_CuO` (P4_2/mmc) and its 1x1x2 supercell | 1 | Cu p at A `A1 + A2 + A4`, at R `R1- + 2 R2- + R3- + 2 R4-` |
+| sqrt2 x sqrt2 x 1 supercell of `131_PPOSCAR_CuO`, shifted or not; the shifted cell | 2 | Cu p at A `A1 + A2 + A3`, at R `2 R1+ + R2+ + 2 R3+ + R4+` |
+
+Inputs whose origin is a general point (shifted copies of the crystal) are
+therefore labelled in one frame, whatever their shift, orientation, basis or
+cell size. An input that is not in the ISO-IR setting but has its origin at
+the origin of a standard description keeps that origin under rule 2 and is
+named accordingly, so it and a shifted copy of it can name a mode
+differently: the unshifted sqrt2 x sqrt2 x 1 supercell of SrTiO3 has the
+Sr-origin tilt `R5-`, its shifted copy `R4+`. A diagonal supercell of a cell
+in the ISO-IR setting keeps that cell's axes and origin and is labelled like
+the cell; a non-diagonal supercell is labelled by rule 2 and can get names
+that differ from the cell's by a normalizer element (`A3` for `A4` and `R+`
+for `R-` in CuO). Two inputs that are both in the ISO-IR setting but differ by
+a normalizer element (Sr or Ti at the origin) name the same mode differently,
+so compare labels between inputs given in the same setting.
+
+### k points: star arms, k + G, lines and -k
+
+Any arm of a star and any copy k + G of a k point carry the same name and
+labels. On a symmetry line or plane the ISO-IR label depends on the value of
+the line parameter, and one k point has one value per arm and per copy k + G.
+The label is evaluated at the canonical value, the smallest parameter (the
+positive one when the two signs are equally small), so a k point gets the
+same label however it is written: `crystod-group --table --sg 216 --kpoint
+-1/4 -1/4 0` and `--kpoint 3/4 3/4 0` print the same rows (`DT4` with the
+characters 1, -1, -1, 1), because DT of F-43m at the conventional (0,0,-1/2)
+is evaluated on the arm (0,0,-a) at a = 1/2. On a line that no symmetry
+element reverses (LD of P2_1, DT of P6_3) the two signs belong to different
+stars, k and its -k partner (next paragraph).
+
+In a group without inversion the star of -k can differ from the star of k.
+At a special point ISO-IR tabulates one of the two (P of I-4, not PA). On a
+line, a plane or the general point the ISO-IR entry covers both signs of the
+parameter when -k lies on the same line or plane at the opposite parameter
+(LD of P2_1 and P4, DT of P6_3, GP), and CrystOD gives the ISO-IR name to the
+star at the canonical parameter (the smallest, the positive one first): that
+is the name ISOTROPY gives when that parameter value is entered, its
+parametrization of every line and plane being the same as that of ISO-IR.
+Where -k lies on another line (the line P of P3 through K and H, whose -k
+partner runs through K' and H'), both signs of the parameter of P keep the
+name P. The other star, the -k partner, is named as the ISOTROPY software
+names it in its physically irreducible labels (`P1PA1`, `LD1LE1`, `DT6DU6`,
+`GP1GQ1`): LE for LD, DU for DT, SN for SM, GQ for GP, the suffix A for the
+other letters (PA, KA, HA, WA, BA, ...), and the suffix C, as ISOTROPY uses
+it, for P, B, C, D and E in P3, P3_1 and P3_2, for P and C in P31m and P31c,
+for D in P3m1 and P3c1 and for B and E in P-6. The partner irreps carry the
+numbers of the tabulated ones and are their complex conjugates: `PA1` is the
+complex conjugate of `P1`, `LE1` that of `LD1`. Over all 230 groups these
+partners are exactly the k types whose -k lies outside the star.
+`crystod -c 82_PPOSCAR_AlPO4 --element Al --orbital p --kpoint -0.25 -0.25
+-0.25` prints the k point `PA` and `1.0 [PA2(1)] + 1.0 [PA3(1)] + 1.0
+[PA4(1)]`; `crystod-group --table --sg 173 --kpoint 0 0 7/12` prints the k
+point `DU` of P6_3 with the rows `DU2`, `DU1`, `DU6`, ..., the conjugates of
+`DT2`, `DT1`, `DT6`, ... at (0,0,5/12). `crystod-group --product`, `--parent`
+and `--supergroup-cif` use the same names (`M1 x P1 = PA1` in I-42d,
+`P1 x X1 = LD1 + LD2 + LE1 + LE2` in I4, the pairs `P1PA1`, `LD1LE1`,
+`GP1GQ1`).
+
+Names and labels refer to one frame. The special points of the ISO-IR
+tables that a command lists or surveys (`crystod` and `--atomic-orbital`,
+`--diagram`, `--visualize` without `--kpoint`, `crystod-phonon --irreps`,
+`--vector` and `--subgroup`, the `crystod-mag` survey, and the MCP tools
+`crystod_phonon_irreps` and `crystod_crystal_orbital_irreps`) are named in
+the frame of the labels, a point that is there the -k partner of a
+tabulated one being replaced by its -k; a name given to them (`--kpoint P`,
+`--qpoint P`) is resolved in that frame; and coordinates given on the
+command line are named by the same labeller. An input outside the ISO-IR
+setting can differ from spglib's basis by a normalizer element that turns P
+into PA: `82_PPOSCAR_AlPO4` shifted by (0.0731, 0.1593, 0.2417) lists
+`P [-0.25, -0.25, -0.25]` above `1.0 [P1(1)] + 1.0 [P2(1)] + 1.0 [P3(1)]`
+(Al p), analyzes that point for `--kpoint P`, and names (1/4, 1/4, 1/4)
+`PA`, with the labels `PA1`, `PA2`, `PA3`; a species-sorted 2x2x2 supercell
+of `143_PPOSCAR_HgBr`, which spglib re-bases to (-b, -a, -c), lists `H` with
+`H1 + H2 + H3` as the cell does. Negative coordinates can be given back as
+printed, as decimals or as fractions (`--kpoint -1/4 -1/4 -1/4`).
+
+The seekpath lists (`crystod-phonon --vibration`, `crystod-mag --qpoint`,
+`crystod --star-of-k` and `--visualize --kpoint`) keep seekpath's names
+(`GAMMA`, `H_2`, ...). A seekpath point to which the frame of the labels
+gives another ISO-IR type than spglib's frame, in which seekpath names it,
+is moved to the point that has that type (the seekpath `P` of the shifted
+AlPO4 above is listed at (-1/4, -1/4, -1/4), with P labels), and the
+coordinates of a listed point are named as the list names them. The k-path
+of `crystod-phonon --irreps --all-irreps` cannot move its endpoints; an
+endpoint of that kind is printed with its ISO-IR name (`GM-X-PA-N-...` for
+the shifted AlPO4). seekpath's letters are not the ISO-IR names in every
+lattice: for a triclinic cell its X, Y, Z, R, T, U and V denote other points
+than the ISO-IR letters do. The seekpath `Z` of `1_PPOSCAR_RbBe2F5` is
+(-1/2, 0, 0), whose vibrations carry the label `X1`, while `crystod --kpoint
+Z` analyzes the ISO-IR Z, (0, 0, 1/2), with `Z1`; give such a point by its
+coordinates when the two commands are compared.
+
+### Limits of the frame rules
+
+- Rule 2 keeps the cell's own origin when that origin is the origin of a
+  standard description. An unshifted description with rotated or re-based
+  axes, or a non-diagonal supercell, can therefore name a mode differently
+  from a shifted copy of itself: the sqrt2 x sqrt2 x 1 supercell of SrTiO3
+  has the tilt `R5-` with Sr at the origin and `R4+` when shifted. The labels
+  agree among descriptions whose origin is a general point.
+- Rule 1 follows the axes of the input, including the sense of a polar axis:
+  a P4 cell and the same cell with the polar axis reversed, both in the ISO-IR
+  setting, exchange the complex pair `GM3`/`GM4`. It also accepts the
+  (b, -a, c) setting of the C-centred orthorhombic groups whose symbol that
+  exchange leaves unchanged (C222_1, Cmm2, Ccc2, Cmmm and Cccm, SG 21, 35,
+  37, 65 and 66): the supercell (a+b, -a+b, c) of the conventional cell is a
+  2x2x1 supercell of the primitive cell of that setting, and its names follow
+  those axes (`GM3` and `GM4`, for example, exchanged against the standard
+  setting).
+- A P1 cell is in the ISO-IR setting whatever its axes and origin, and a P-1
+  cell whatever its axes when its origin is an inversion centre (rule 1), so
+  their k-point names follow the axes of the input. A non-diagonal supercell
+  of a P1 cell and a P-1 cell whose origin is a general point take rule 2.
+- Near the symmetry tolerance an accidental lattice symmetry (a metric within
+  the tolerance of a higher one) can enter or leave the candidates of rule 2
+  and switch the canonical frame.
+- An orthorhombic group whose symbol is invariant under a cyclic permutation
+  of the axes (Pbca) with a = b exactly can still be labelled differently for
+  different descriptions: that permutation is not a rotation of the lattice
+  and is not among the candidates.
+
 ## Multi-electron terms: symmetrized products and the Pauli principle
 
 ### Coulomb multiplet energies: Gaunt coefficients, Racah parameters and configuration interaction
 
 The two-electron integrals behind the multiplet energies of
-`crystod-group --multiplet --orbital` (section 14 of the `crystod-group`
+`crystod-group --multiplet --orbital` (section 21 of the `crystod-group`
 page) are built from exact Gaunt coefficients (F^0 = A + 7C/5,
 F^2 = 49B + 7C, F^4 = 63C/5), the Coulomb Hamiltonian over the Slater
 determinants of the configuration, and each term is isolated by S^2 and
@@ -235,7 +414,7 @@ reproduced exactly ((T1u)^2 with --orbital p gives ^3P = F0 - 5F2,
 ### The Pauli principle in multi-electron terms: antisymmetrized squares and CI matrices
 
 Of the plain direct product T2g x T2g = A1g + Eg + T1g + T2g (as printed by
-`crystod-group --product`, section 7 of the `crystod-group` page), the Pauli
+`crystod-group --product`, section 8 of the `crystod-group` page), the Pauli
 principle pairs only the antisymmetric square (T1g) with the spin
 triplet — `crystod-group --multiplet` performs this antisymmetrization
 exactly, for any filling of any shell (hole equivalence and closed shells come out

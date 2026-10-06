@@ -14,9 +14,9 @@ pattern.
 | restrict the angular window | `... --two-theta 5 60` |
 | try it without a structure file | `crystod-xrd --example ScF3` |
 
-## 36. Powder X-ray diffraction patterns
+## 44. Powder X-ray diffraction patterns
 
-*Example directory: `example/36_xrd_pattern` (testsuite section 36)*
+*Example directory: `example/44_xrd_pattern` (testsuite section 44)*
 
 The intensities are computed with the
 [`XRDCalculator`](https://pymatgen.org/pymatgen.analysis.diffraction.html) of
@@ -46,8 +46,9 @@ crystod-xrd -c example/test_POSCARs/221_PPOSCAR_ScF3
     3   0   0     6    1.356530       69.3968      6.964  CuKa2   + (2 2 1) x24
     ...
 
-Peak table written to: XRD_221_PPOSCAR_ScF3_CuKa.txt
-Pattern (lorentzian profile, width 0.1 deg) written to: XRD_221_PPOSCAR_ScF3_CuKa.pdf
+ * Output files *
+ Peak table written to: XRD_221_PPOSCAR_ScF3_CuKa.txt
+ Pattern (lorentzian profile, width 0.1 deg) written to: XRD_221_PPOSCAR_ScF3_CuKa.pdf
 ```
 
 Families of planes with the same `d` spacing, such as the cubic `(3 0 0)` and
@@ -108,6 +109,11 @@ figure; the peak table is the same for both.
 The text table is comma-separated, one reflection per line:
 `h, k, l, multiplicity, d, two_theta, intensity, line, families`, with the
 structure, the radiation and the wavelengths in the header.
+
+The Miller indices always refer to the cell of the POSCAR and are always
+three. On a hexagonal cell (hexagonal and trigonal crystals, rhombohedral ones
+in the hexagonal setting) the redundant Miller-Bravais index `i = -(h + k)` is
+left out: the `(1 0 -1 1)` reflection of wurtzite ZnO is listed as `(1 0 1)`.
 
 ### From Python
 

@@ -10,7 +10,9 @@ downloaded.
 Every command below is shown twice: once through `--example`, which copies the
 bundled input into the current directory and runs the ordinary command line,
 and once as that ordinary command line, which is what you type for a structure
-of your own (`-c POSCAR`; the file is read in VASP POSCAR format).
+of your own (`-c POSCAR`; the file is read in VASP POSCAR format, as VASP
+itself reads it: direct or Cartesian coordinates, and a scale factor or a
+negative cell volume on line 2).
 
 ## 0. The bundled inputs
 
@@ -48,6 +50,8 @@ crystod --example ScF3_d
 ```
 Wrote 221_PPOSCAR_ScF3 (bundled example input)
 Running: crystod -c 221_PPOSCAR_ScF3 --element Sc --orbital d
+
+ ### Inputed cell was converted into primitive cell. ###
 
  * Space group *
  Pm-3m (221)
@@ -147,6 +151,8 @@ crystod --example ScF3_diagram
 Kept 221_PPOSCAR_ScF3 (identical to the bundled example input)
 Running: crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
 
+ ### Inputed cell was converted into primitive cell. ###
+
  * Space group *
  Pm-3m (221)
 
@@ -160,6 +166,7 @@ Running: crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
  ...
 
  * k point R (1/2,1/2,1/2) *
+   (1 near-dependent diffuse Bloch combination(s) below overlap floor 0.2: energies marked ~ are first-order Loewdin estimates; the variational extended-Hueckel values diverge)
    Sc        : ... Sc 3d R5+ (-9.08), Sc 3d R3+ (-7.62), Sc 4p R4- (-5.76), Sc 4s R1+ (12.73)
    F3        : F 1s R4- (-717.49), F 2s R4- (-40.00), F 2p R1+ (-19.67), F 2p R3+ (-19.33), F 2p R5+ (-17.56), F 2p R4+ (-17.30)
    crystal   :
@@ -173,6 +180,12 @@ Running: crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
      R3+ #2         -5.21 eV  x2       Sc 3d R3+ 93.5%  F 2p R3+ 6.5%
      ...
 
+ * Dipole selection rules at R (1/2,1/2,1/2) *
+   VBM R4+ #1 (-17.30 eV) -> CBM R5+ #2 (-8.18 eV): forbidden
+   first allowed: R4- #4 (-38.94 eV) -> R5+ #2 (-8.18 eV), dE = 30.76 eV: allowed (x, y, z)
+   (vertical transitions in the little group of k; polarizations in the Cartesian axes x, y, z of the input cell)
+ ...
+
 Crystal-orbital diagram written to CrystOD_221_PPOSCAR_ScF3.html
 ```
 
@@ -185,6 +198,14 @@ empty conduction states of the d<sup>0</sup> compound. Each fragment here
 feels the other sublattice as a lattice of point charges (F<sup>-1</sup>,
 Sc<sup>+3</sup>), which is what splits the Sc 3d shell into `R5+` below `R3+`
 already on the fragment side.
+
+Each k point ends with the dipole selection rule of its band edge. At R the
+top of the F 2p band (`R4+ #1`) and the bottom of the Sc 3d band (`R5+ #2`)
+are both even under inversion, so light cannot drive the transition between
+them (`forbidden`); the `first allowed:` line names the allowed occupied ->
+empty pair of smallest energy difference, with its polarizations. On the
+page, clicking two levels one after the other shows the same verdict
+([4. Dipole selection rules](crystod.md#4-dipole-selection-rules---diagram)).
 
 Open `CrystOD_221_PPOSCAR_ScF3.html` in a browser: the Sc fragment levels
 stand on the left, the F3 fragment levels on the right, the crystal orbitals
@@ -238,7 +259,8 @@ crystod -c 221_PPOSCAR_ScF3 --element Sc --orbital d --kpoint R --visualize
    component 3:
      Sc1 (atom 0): d_xz: +1.0000
 
-Saved 3D visualization to: SALC_Sc_d_R.html
+ * Output files *
+ Saved 3D visualization to: SALC_Sc_d_R.html
 ```
 
 The decomposition is the one of step 1, now with the coefficients: the
@@ -251,7 +273,7 @@ cell to the next; click a row of the SALC table to switch the displayed basis
 vector and drag to rotate. `--bond Sc F 2.5` adds the ScF6 octahedra, and
 without `--kpoint` one page per special k point is written. In `--visualize`
 mode `--kpoint` accepts a label (`GM`, `X`, `M`, `R`) as well as coordinates.
-Documentation: [5. SALC basis visualization](crystod.md#5-salc-basis-visualization---visualize).
+Documentation: [6. SALC basis visualization](crystod.md#6-salc-basis-visualization---visualize).
 
 ## Where next
 

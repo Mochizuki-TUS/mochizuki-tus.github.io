@@ -11,7 +11,9 @@ star-of-k display (`--star-of-k`).
 | know which irreps an orbital spans at every k point | `crystod -c POSCAR --element Ti --orbital d` |
 | know which orbitals may hybridize at one k point | `crystod -c POSCAR --atomic-orbital Sc-d F-p --kpoint R` |
 | draw the crystal-orbital diagram | `crystod --diagram -c POSCAR --co-left Sc --co-right F3` |
+| know whether the band-edge optical transition is dipole-allowed | `crystod --diagram -c POSCAR --co-left SrTi --co-right O3` (see section 4) |
 | see the SALCs in 3D | `crystod --visualize -c POSCAR --element Sc --orbital d` |
+| see the crystal eigen-levels and their wave functions in 3D | `crystod --visualize -c POSCAR` (`--pyscf` for PySCF levels) |
 | list the arms of a star of k | `crystod --star-of-k -c POSCAR --kpoint M` |
 
 ## 1. Theoretical background
@@ -54,7 +56,30 @@ crystod -c example/test_POSCARs/221_PPOSCAR_SrTiO3 --element Ti --orbital d
 ```
 
 When `--kpoint` is omitted, all special k points of the space group are analyzed.
-Any arm of a special-point star is labeled correctly.
+Any arm of a star and any copy k + G of a k point get the same labels; on a
+symmetry line the label is evaluated at the canonical value of the line
+parameter, and a k point whose star ISO-IR tabulates only through -k is
+labelled with the complex conjugates of the tabulated irreps under the `A`
+suffix (`PA` of I-4, labelled `PA1`, ..., the conjugates of `P1`, ...); on a
+line that no symmetry element reverses, the star at the negative parameter is
+named in the same way after ISOTROPY (`LE` for `LD`, `DU` for `DT`).
+Names and labels refer to one frame: the special points are listed, and a
+name given to `--kpoint` is resolved, in the frame of the labels, and given
+coordinates are named by the same labeller, so a printed name has the
+letters of the labels below it, also for an input outside the ISO-IR
+setting (`--visualize --kpoint` and `--star-of-k` take seekpath names,
+whose triclinic letters are not the ISO-IR ones; see
+[Irrep labels and the frame of a structure](theory-representations.md)). The labels refer to one frame per structure: an input in the ISO-IR
+setting keeps its own axes and origin (with Sr or Ti at the origin of SrTiO3
+the octahedral tilt is `R5-` or `R4+`), and so does a diagonal
+n1 x n2 x n3 supercell of it of any size, which is labelled like the
+cell; any other input gets a canonical frame of the crystal, which keeps the
+input's own origin when that is the origin of a standard description. Shifted
+copies of a crystal are therefore labelled alike whatever their orientation,
+basis or cell size, but a non-diagonal supercell (sqrt2 x sqrt2 x 1) can get
+other names than the cell, and an unshifted re-based cell other names than a
+shifted copy of it — see
+[Irrep labels and the frame of a structure](theory-representations.md#irrep-labels-and-the-frame-of-a-structure).
 `--show-irrep-table` additionally prints the little-group character table at the
 selected k point.
 
@@ -281,7 +306,10 @@ from an internal SCF: the crystal run supplies the middle column, and two
 sublattice runs — each keeping one sublattice and replacing the other by
 classical point charges — supply the two fragment columns. Nothing is
 computed here; CrystOD reads `POSCAR`, `PROCAR` (`LORBIT = 12`) and a handful
-of `OUTCAR` facts from each directory (gzipped files are accepted).
+of `OUTCAR` facts from each directory (gzipped files are accepted). This is
+the default engine (`--vasp-engine anchor`); the
+[WAVECAR-overlap engine](#wavecar-overlap-engine---diagram---vasp---vasp-engine-overlap)
+reads the same runs without any energy alignment.
 
 ```bash
 crystod --diagram [-c POSCAR] --co-left SrTi --co-right O3 --vasp-setup [ROOT]
@@ -509,14 +537,21 @@ Main options: `--vasp-align site|rigid`, `--vasp-zero vbm|efermi|raw`,
 default up to +10 eV), `--vasp-projection-floor W`, `--vasp-anchor EL nl`,
 `--vasp-mesh N N N` and `--potcar-dir` / `--potcar-map EL=NAME` / `--vasp-bin`
 / `--vasp-rwall` / `--vasp-sigma` / `--vasp-wall-factor` for `--vasp-setup`. Limitations: **non-spin-polarized runs
-only** (a spin-polarized run is refused with one `ERROR:` line), the three
+only** (a spin-polarized run is refused with one `ERROR:` line, and so is a
+spin-orbit run, which the overlap engine below reads), the three
 runs must share one **primitive cell** with the same atom order, and every
 share and connector weight is a **PAW-sphere projection**, which is blind to
 the radial channel — a semicore and a valence shell of the same (atom, l) are
 not orthogonal in it, so the shares and the connectors are resolved by the
 PAW valence *n* of each channel (a `Sr 5s` share can never be handed to the
 `Sr 4s` semicore level) and a channel with no fragment level on the page is
-dropped rather than re-routed.
+dropped rather than re-routed. The same blindness lets a semicore fragment
+level overlap an empty crystal level of its own (atom, l) exactly as much as
+its own band — the Sr 4s R2- level of SrTiO₃ overlaps the empty Sr 5s-like
+R2- #2, more than 40 eV above that band, at 1.000 as well — so the crystal
+counterparts of the alignment anchors are paired one-to-one in energy order:
+the n-th fragment level of such a ladder with the n-th crystal level, never
+whichever overlap happens to be larger in the last digit.
 
 ```{seealso}
 `example/03_hybridization/vasp_SrTiO3/` holds a trimmed copy of the three
@@ -526,6 +561,163 @@ fluorite. CaF₂ is there for a reason: its F sites sit on quarter coordinates
 of the primitive basis, where the PROCAR's Bloch gauge can be tested, and it
 is the ionic control of the site-resolved alignment — Ca +4.54 and F +4.42 eV
 move together to 0.1 eV, against 11.7 eV between Ti and Sr in SrTiO₃.
+`example/03_hybridization/vasp_SrTiO3_LAK/` is SrTiO₃ again with
+`METAGGA = LAK` and 64 bands: a run whose two Sr s-like anchor candidates tie
+to the last digit (they are paired one-to-one in energy order), and whose
+functional the report and the page name as LAK.
+```
+
+### WAVECAR-overlap engine (`--diagram --vasp --vasp-engine overlap`)
+
+The anchor engine above puts the three columns on one scale with one shift
+per site, fitted to the levels that symmetry forbids to mix. Where a site has
+no such level — the B-site s and p shells of SrGeO₃ (Ge 4s/4p) and CsPbI₃
+(Pb 6s/6p) at Γ, X, M and R — the fit absorbs the very bonding shift the
+diagram is meant to show. `--vasp-engine overlap` needs **no energy alignment
+at all**: it uses only the *wavefunctions* of the two sublattice runs and the
+*eigenvalues* of the crystal, and writes the crystal Kohn–Sham Hamiltonian in
+the basis of the sublattice orbitals, so every column is on the crystal's own
+scale (E − E_VBM).
+
+```bash
+crystod --diagram --co-left SrTi --co-right O3 --vasp-setup ROOT --vasp-engine overlap
+#   the inputs of --vasp-setup, with LWAVE = .TRUE.; checks the crystal run's NBANDS
+crystod --diagram --co-left SrTi --co-right O3 --vasp ROOT --vasp-engine overlap \
+        --vasp-cache sto_overlaps.npz
+#   -> CrystOD_SrTiO3_Pm-3m_vasp_overlap.html + .json + .txt, and the overlap cache
+crystod --diagram --co-left SrTi --co-right O3 --vasp --vasp-engine overlap \
+        --vasp-cache sto_overlaps.npz
+#   the same analysis from the cache alone (no run directory: no WAVECAR is read)
+```
+
+**What it computes.** Stage 1 reads the three WAVECARs at the special k points
+and computes the all-electron PAW overlaps A_fn = ⟨φ_f|ψ_n⟩ between the Bloch
+states of the sublattice runs and those of the crystal (the plane-wave basis is
+the same in the three runs; the one-centre corrections come from the crystal
+POTCAR, including the term at the sites where a sublattice run has a point
+charge). That takes seconds, and `--vasp-cache FILE` keeps the result (a few MB
+of derived numbers, no PAW data). Stage 2 builds the model space: the crystal
+levels up to VBM + 14 eV (the **frozen window**) are kept exactly, and the empty
+active sublattice orbitals that lie higher are drawn from the bands above by a
+projection-only disentanglement — the **effective outer levels**, drawn dotted.
+Three pictures of that one model space differ only in how the sublattice
+orbitals are orthonormalized:
+
+| picture            | orthonormalization                                   | on the page                       |
+|--------------------|------------------------------------------------------|-----------------------------------|
+| frozen-ion         | occupied orbitals of both sublattices among themselves, the empty ones projected off them | the **parent levels** of the fragment columns, the **ledger** |
+| symmetric Löwdin   | all at once (LOBSTER's convention)                   | the **colours**, populations and **connectors** |
+| bare (Ritz)        | none (projected, non-orthogonal)                     | report and JSON only              |
+
+A crystal level is bonding, nonbonding or antibonding by the sign of its
+**inter-sublattice COHP** in the Löwdin picture, COHP_n(f,g) = 2 Re[c*_nf H_fg
+c_ng] summed over the pairs of sublattice orbitals on different sublattices
+(negative = bonding; below 0.05 eV in magnitude nonbonding), split by shell
+pair in the tooltip. The connectors are the Löwdin populations distributed
+over the frozen-ion parents of the same sublattice and irrep. Every parent
+carries its **ledger**: bare d_f = ⟨φ|H|φ⟩ → Pauli shift (orthogonalization to
+the occupied orbitals of the other sublattice) → closed-shell (filled–filled)
+or empty–empty mixing → covalent shift (occupied–empty mixing) → crystal
+level. The **covalency count** — electrons in formally empty shells per cell —
+is a chip and a note per k point. The irrep labels are computed from the plane
+waves of each run (`crystod.wavecar_irreps`): CrystOD's ISO-IR labels, the two
+sublattice runs taken in the crystal's frame. The page has no hover sketch:
+the overlaps carry no atomic-orbital coefficients.
+
+**What the runs need.** The layout of `--vasp-setup` (the crystal and the two
+`Va` point-charge sublattice runs, `--vasp` resolving them exactly as for the
+anchor engine), with
+- the same primitive cell, site order, `ENCUT`, `PREC` and k list in the three
+  runs, the special points in that list (the `--vasp-setup` KPOINTS carries
+  them; on a full mesh any arm of the star is used);
+- `LWAVE = .TRUE.` in all three runs — `--vasp-setup --vasp-engine overlap`
+  writes it, and the engine stops in one line when a WAVECAR is missing;
+- enough bands: the crystal bands must reach VBM + 14 eV plus a few eV of outer
+  bands at every k point (`--vasp-setup --vasp-engine overlap` checks a
+  finished crystal run and suggests an NBANDS; the runs behind the example
+  caches used 64 for SrTiO₃ and SrGeO₃, 96 for CsPbI₃ and 128 with spin-orbit
+  coupling);
+- the crystal POTCAR, whose PAW data serve every site (the sublattice POTCARs,
+  when present, are checked against it), with semicore datasets as for the
+  anchor engine;
+- `ISPIN = 1`; spin-orbit (`vasp_ncl`) runs are read as well.
+
+**Options.** `--vasp-shells` sets the active sublattice shells (`Sr-4s Sr-4p
+Sr-5s Sr-4d Ti-3d Ti-4s Ti-4p O-2s O-2p`; default `auto` = the POTCAR valence
+shells plus one standard empty shell per element — (n−1)d for groups 1–2, np
+for groups 3–12 — and `auto-full` = the occupied levels plus the lowest empty
+manifold of every cation shell); the chosen shells are printed.
+`--vasp-frozen-window EV` (default 14) and `--vasp-frozen-qmin Q` (default
+0.5: window levels with less projection on the active orbitals are left to the
+disentanglement) set the model space. `--vasp-cache FILE` is written after
+stage 1 and reused when it covers the same runs (a cache of more k points
+serves a subset; one of other runs is never overwritten). `--kpoint`, `-c`
+(it names the outputs and must be the runs' crystal; the analysis is done in
+the crystal run's own cell, the frame of the WAVECAR and of the labels),
+`--output`, `--vasp-crystal/--vasp-left/--vasp-right` and `--tolerance` mean
+what they mean for the anchor engine, and `--vasp-window EMIN EMAX` (relative
+to the VBM) leaves the levels outside off all three columns of the page —
+by default every level of the model space is drawn, and the view opens on the
+frontier states. The alignment options of the anchor engine are refused.
+
+**Outputs.** `CrystOD_<cell>_vasp_overlap.html` (the page), `.json` (every
+number: crystal and sublattice levels, the three pictures with populations,
+COHPs and verdicts, the ledger, the checks — the layout of the published
+`spectral_onsite` analysis plus a `crystod` block with the options) and `.txt`
+(the report: settings, **Key results**, checks, the sensitivity of the parents
+to the frozen window and to the cross-sphere term, and per k point the ledger
+and the levels of the three pictures). The names follow the anchor engine's
+(`_soc` is appended for spin-orbit runs), and the terminal prints the Key
+results.
+
+**SrTiO₃ (METAGGA = LAK).** The cache of
+`example/03_hybridization/vasp_overlap/SrTiO3` gives, at Γ and R:
+
+```
+ | k  | edge   | level    | E      | populations (A)        | COHP (A)  | verdict (A) | parent (B): E (share); ledger
+ | GM | VBM(k) | GM4- #3  | -0.357 | O 2p 0.99              | +0.10 ... | antibonding | O 2p GM4-#2 -0.38 (0.98); d_f -0.56, Pauli +0.18; filled-filled +0.10; covalent -0.08
+ | GM | CBM(k) | GM5+ #1  | +2.249 | Ti 3d 0.96, Sr 4d 0.04 | +0.00     | nonbonding  | Ti 3d GM5+ +2.25 (1.00); d_f +2.57, Pauli -0.33; empty-empty +0.00; covalent +0.00
+ | R  | VBM(k) | R4+ #1   | -0.000 | O 2p 1.00              | +0.00     | nonbonding  | O 2p R4+ -0.00 (1.00); d_f -0.00, Pauli +0.00; filled-filled +0.00; covalent -0.00
+ Covalency count (B; electrons in formally empty shells per cell): GM 0.103 e ...; R 1.339 e (Ti 3d 1.34).
+```
+
+The conduction-band minimum Γ5+ (Ti 3d t₂g) and the valence-band maximum R4+
+(O 2p) are exactly nonbonding — COHP 0, and the parent *is* the crystal level.
+The e_g–t₂g splitting at Γ, 2.22 eV, reads off the two ledgers: Pauli 1.91
+(the e_g orbitals, pointing at the oxygens, are pushed up by +1.58 eV on
+orthogonalization to the O 2s/2p orbitals; t₂g by −0.33) plus covalent 0.28
+(the e_g σ* mixing; none for t₂g), with 0.04 from the bare d_f. Of the
+splitting, then, only an eighth is covalent bonding.
+
+**Spin-orbit coupling.** For `vasp_ncl` runs one band holds one electron, a
+Kramers pair is one level (drawn with one bar per pair), and the levels carry
+double-valued irreps: `-K<n><p>` in CrystOD's Koster-style numbering, drawn with
+an overbar (the CsPbI₃ VBM is R̄6+, the CBM R̄6−). `--vasp-irrep-json PATTERN`
+puts IrRep's Bilbao names (`-R6`, `-R8`) on the levels instead, by band index
+— a path with `{run}` for the run directory's name, or a directory holding
+`<run>/irrep-output.json`; IrRep is run separately (`irrep -code=vasp -spinor
+-fWAV=RUN/WAVECAR -fPOS=RUN/POSCAR -kpoints=… -kpnames=GM,X,M,R
+-refUC=1,0,0,0,1,0,0,0,1 -shiftUC=0,0,0 -json_file=irrep-output`, without
+`-Ecut`, whose truncated basis mislabels high bands). `--vasp-scalar-reference
+JSON` names the results of the scalar runs of the same crystal: every
+spin-orbit level and parent then lists the compatible scalar levels (Γ × D(1/2))
+— the CsPbI₃ CBM R̄6− at +0.61 eV comes from the scalar R4− at +1.77 eV.
+
+**Caveats.** The active space is a **minimal valence set**, as a COHP code
+uses a minimal basis: diffuse higher shells (Pb 6d and 7s, Cs 6p, Ge 4d, Sr
+5p) in a symmetric Löwdin basis produce spurious populations and COHPs, so the
+default rule leaves them out — change it with `--vasp-shells`, and test the
+sensitivity with `auto-full`. The PAW data of every site come from the crystal
+POTCAR. The effective outer levels depend on the bands above the frozen
+window, i.e. on NBANDS. A multiplet cut by the top of the band list stays
+unlabelled.
+
+```{seealso}
+`example/03_hybridization/vasp_overlap/` holds the overlap caches of four
+runs — SrTiO₃, SrGeO₃, CsPbI₃ and CsPbI₃ with spin-orbit coupling, trimmed to
+the active sublattice states — with the key numbers they reproduce
+(`expected.json`); `crystod --diagram --vasp --vasp-engine overlap
+--vasp-cache …/overlap_cache.npz` draws each of them without any VASP file.
 ```
 
 ### Band structure, fatbands and DOS (`--band`, `--dos`)
@@ -605,17 +797,162 @@ crystod --chk-info ScF3.chk
  * ScF3.chk -- CrystOD SCF checkpoint (WAVECAR-style restart, 0.8 MB) *
    structure : Sc + F3, 4 atoms/cell, a = 4.0696 / 4.0696 / 4.0696 A
    method    : PBE / gth-dzvp-molopt-sr / gth-pbe, ke_cutoff 80 Ha, k-mesh 2x2x2, max_l 2
-   electrons : 32 per cell (oxidation F=-1 Sc=+3)
+   oxidation : F=-1 Sc=+3
+   SCF       : conv_tol 1e-08, max_cycle 100
    fragments : left Sc | right F3, counterpoise ghosts
    contents  : full three-SCF run; densities on 8 k points x 58 AOs
-   energies  : mo -119.66022723 Ha  |  left -46.60996096 Ha  |  right -72.41588868 Ha
-   smearing  : right carried Fermi smearing when written
+   energies  : mo -119.66022723 Ha  |  left -46.68631173 Ha  |  right -72.80913510 Ha
    reuse with: --co-left Sc --co-right F3 --xc pbe --basis gth-dzvp-molopt-sr --pseudo gth-pbe --kmesh 2 2 2 --ke-cutoff 80 --max-l 2 --oxidation F=-1 Sc=+3 --chk ScF3.chk
 ```
 
-## 4. Star of k
+## 4. Dipole selection rules (`--diagram`)
 
-*Example directory: `example/04_star_of_k` (testsuite section 4)*
+*Example directory: `example/04_selection_rules` (testsuite section 4)*
+
+Every `--diagram` run (extended Hückel, `--pyscf` and `--vasp`, both VASP
+engines) ends each k point with the electric-dipole selection rule of its
+band edge: whether light can drive the transition from the valence-band
+maximum to the conduction-band minimum at that k point, and for which
+polarizations. It is meant for reading an absorption edge or a
+photoluminescence spectrum against the diagram (a dipole-forbidden direct gap
+absorbs weakly). The group theory: a vertical transition i -> f is allowed
+for light polarized along a only if Γ<sub>f</sub>* ⊗ Γ<sub>V</sub> ⊗
+Γ<sub>i</sub> contains the identity of the little group of k with an
+invariant that has a nonzero a-component (Γ<sub>V</sub>: the polar vector).
+No flag is needed:
+
+```bash
+crystod --diagram -c 221_PPOSCAR_SrTiO3 --co-left SrTi --co-right O3
+```
+
+```
+...
+ * Dipole selection rules at GM (0,0,0) *
+   VBM GM5- #1 (-13.80 eV) -> CBM GM5+ #1 (-12.38 eV): allowed (x, y, z)
+   (vertical transitions in the little group of k; polarizations in the Cartesian axes x, y, z of the input cell)
+...
+ * Dipole selection rules at X (0,1/2,0) *
+   VBM X2+ #1 (-13.81 eV) -> CBM X2- #1 (-12.30 eV): forbidden
+   first allowed: X5+ #4 (-13.83 eV) -> X2- #1 (-12.30 eV), dE = 1.53 eV: allowed (x, z)
+   (vertical transitions in the little group of k; polarizations in the Cartesian axes x, y, z of the input cell)
+...
+```
+
+How to read it:
+
+- The block is part of the report of its k point (indented like the
+  ` * k point <k> *` block above it); the k coordinates of its title are
+  those of the `* k point *` blocks (the primitive reciprocal basis of the
+  standardized cell).
+- `VBM` is the highest crystal level holding electrons and `CBM` the lowest
+  empty one (the HOMO/LUMO markers of the page; levels within 1 meV count as
+  one edge), named as in the diagram (`GM5- #1`: irrep and running number),
+  with their energies.
+- `allowed (x, y, z)` lists the polarizations that can drive the transition;
+  the answer is resolved per component with the representation matrices of
+  the two small irreps (at X of SrTiO3 the pair X1+ / X3- is allowed only
+  for the polarization along k, y here, the pair X1+ / X5- only
+  perpendicular to it, x and z). `forbidden` means that no polarization can.
+- When the band edge is forbidden, `first allowed:` gives the allowed
+  occupied -> empty pair of smallest energy difference, with `dE`.
+- x, y, z are the Cartesian axes of the input POSCAR, the frame of the Raman
+  tensors of `crystod-phonon --raman-tensor` (the operations of the
+  standardized cell are rotated back into the input axes with spglib's
+  `std_rotation_matrix`). An allowed polarization subspace that is not
+  spanned by coordinate axes is printed as vectors in the input frame.
+
+Such vectors appear along a k arm that is not an axis even in the standard
+setting, as at L and M of wurtzite ZnO (P6<sub>3</sub>mc):
+
+```bash
+crystod --diagram -c 186_PPOSCAR_ZnO --co-left Zn --co-right O
+```
+
+```
+...
+ * Dipole selection rules at L (1/2,0,1/2) *
+   VBM L1 #14 + L4 #14 (-14.70 eV) -> CBM L1 #15 + L4 #15 (-6.49 eV): allowed (sqrt(3) 1 0), (0 0 1)
+   (vertical transitions in the little group of k; polarizations in the Cartesian axes x, y, z of the input cell)
+...
+ * Dipole selection rules at M (1/2,0,0) *
+   VBM M2 #5 (-14.51 eV) -> CBM M1 #15 (-6.88 eV): forbidden
+   first allowed: M4 #14 (-14.61 eV) -> M1 #15 (-6.88 eV), dE = 7.73 eV: allowed (sqrt(3) 1 0)
+   (vertical transitions in the little group of k; polarizations in the Cartesian axes x, y, z of the input cell)
+...
+```
+
+and in an input cell rotated against the standard setting. Rutile (P4<sub>2</sub>/mnm)
+with the whole cell rotated by 45° about x (c along (0 -1 1)), at M:
+
+```
+   VBM M2- #3 + M3- #3 (-14.68 eV) -> CBM M1+ #7 + M4+ #7 (-11.60 eV): allowed (0 1 -1)
+```
+
+The same cell in the standard setting prints `allowed (z)`: polarization
+along c in both cases. At Γ the in-plane edge GM5- -> GM2+ reads
+`allowed (x, y)` in the standard setting and `allowed (1 0 0), (0 1 1)`
+(the plane spanned by the two vectors) in the rotated one.
+
+In the HTML page, **click one crystal orbital and then another**: the
+second level is marked `allowed (x,y,z)` (green) or `forbidden` (grey), the
+first `from`, and the level panel repeats the verdict with the same text as
+the terminal block. A click on empty space clears the pair, and switching
+the k point starts afresh. The page carries each crystal level's `irrep` and,
+per k point, the allowed irrep pairs among the levels drawn.
+
+**Limits.** The rules are for vertical (direct) one-photon electric-dipole
+transitions between the levels of the diagram: "allowed" means that symmetry
+does not forbid the transition, and its strength needs the matrix elements.
+Which levels form the band edges is the engine's answer (extended Hückel can
+get the level order wrong; cross-check with `--pyscf` or `--vasp`).
+Spin-orbit (double-group) levels of `--vasp --vasp-engine overlap` are not
+evaluated (the block says so).
+
+**Python API.** `dipole_selection_rules` returns a list of
+`DipoleSelectionRules` records (one per special k point), and
+`little_group_dipole_table` a `LittleGroupDipoleTable`; there is no MCP tool
+for this section:
+
+```python
+from crystod import salc
+from crystod.vasp_io import read_poscar_cell
+
+cell = read_poscar_cell("221_PPOSCAR_SrTiO3")
+diagram = salc.CrystalOrbitalDiagram(cell, ["SrTi"], ["O3"])   # or any engine's diagram
+rules = salc.dipole_selection_rules(diagram)       # one record per special k point
+[(r.name, r.band_edge.verdict) for r in rules]     # [('GM', 'allowed (x, y, z)'), ...]
+salc.dipole_selection_rules(diagram, "X")[0].first_allowed.verdict   # 'allowed (x, z)'
+print("\n".join(salc.format_dipole_selection_rules(rules[0], "(0,0,0)")))
+
+levels, _ = diagram.solve_at([0, 0, 0])            # from levels solved elsewhere
+edge = salc.band_edge_selection_rules(diagram.builder, "GM", [0, 0, 0], levels["mo"])
+table = salc.little_group_dipole_table(diagram.builder, [0, 0, 0])
+table.components("GM5+", "GM1+")                   # () = forbidden
+table.subspace("GM5+", "GM4-")                     # orthonormal rows of the allowed polarizations
+```
+
+`dipole_selection_rules(diagram, kpoint=None)` solves each k point with
+`diagram.solve_at` unless the engine report has already done so (the rules
+are cached on the diagram); `kpoint` takes a special-point name or three
+primitive reciprocal coordinates. It takes the diagram objects of the
+EHT, PySCF and VASP PROCAR engines; for the page object of the VASP overlap
+engine it returns the rules that engine's report cached. `little_group_dipole_table(...,
+axes="standardized")` gives the rules in the axes of the standardized
+primitive cell instead of the input cell.
+
+Two textbook checks (testsuite section 4): in cuprite Cu<sub>2</sub>O
+(Pn-3m, the Ag<sub>2</sub>O structure type) the Cu 3d GM5+ -> Cu 4s GM1+
+transition at Γ is even-to-even and dipole-forbidden, the origin of the
+weak yellow exciton series; in Si (Fd-3m) GM5+ (Γ<sub>25'</sub>) -> GM4-
+(Γ<sub>15</sub>), the E<sub>0</sub>' critical point, is allowed. The
+extended-Hückel engine places the Cu 4p band of Cu<sub>2</sub>O below Cu 4s,
+so its band-edge line there names a d -> p transition; the d -> s pair can
+be checked on the page by pressing "Show all energy levels" (GM1+ #7 lies
+outside the opening energy window) and clicking the two levels.
+
+## 5. Star of k
+
+*Example directory: `example/05_star_of_k` (testsuite section 5)*
 
 Display the star of k: the set of inequivalent k points generated from a given
 k point by the space-group rotations (`k' = k R`, modulo reciprocal lattice):
@@ -646,9 +983,9 @@ The star of q is also displayed automatically in `crystod-phonon --modulation`
 for each selected q point, which is useful when combining arms of the same star
 in multi-q modulations.
 
-## 5. SALC basis visualization (`--visualize`)
+## 6. SALC basis visualization (`--visualize`)
 
-*Example directory: `example/05_visualized_basis` (testsuite section 5)*
+*Example directory: `example/06_visualized_basis` (testsuite section 6)*
 
 Build the SALCs of a selected element/orbital at a k point, print the
 irreducible decomposition and per-atom SALC coefficients, and export an
@@ -662,6 +999,7 @@ crystod --visualize -c 221_PPOSCAR_ScF3 --element Sc --orbital d --bond Sc F 2.5
 ```
 
 ```
+...
  * k point (primitive) * 
  R [0.5, 0.5, 0.5]
 
@@ -682,7 +1020,18 @@ crystod --visualize -c 221_PPOSCAR_ScF3 --element Sc --orbital d --bond Sc F 2.5
      Sc1 (atom 0): d_yz: +1.0000
    component 3:
      Sc1 (atom 0): d_xz: +1.0000
+...
+ * Output files *
+ Saved 3D visualization to: SALC_221_PPOSCAR_ScF3_Sc_d_GM.html
+ Saved 3D visualization to: SALC_221_PPOSCAR_ScF3_Sc_d_R.html
+ Saved 3D visualization to: SALC_221_PPOSCAR_ScF3_Sc_d_X.html
+ Saved 3D visualization to: SALC_221_PPOSCAR_ScF3_Sc_d_M.html
 ```
+
+The terminal report has one set of blocks per k point (`* Space group *`,
+`* Orbital (number of atoms) *`, `* Position *`, `* k point (primitive) *`,
+`* Irreducible Decomposition *`, `* SALC basis functions (irrep-grouped) *`),
+and the written pages are listed once in the final `* Output files *` block.
 
 ```{raw} html
 <iframe src="_static/embed/SALC_Sc_d_R.html" width="100%" height="660" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
@@ -765,6 +1114,25 @@ crystod --visualize -c 221_PPOSCAR_ScF3
 crystod --visualize -c 221_PPOSCAR_ScF3 --sublattice Sc --kpoint R --diagonalize
 # -> SALC_eht_<structure>_<crystal|fragment>_<k>.html
 ```
+
+```
+...
+* Extended-Hueckel levels *
+  SALC viewer levels: crystal (fragments Sc | F)
+  full-electron STO basis, point charges Sc+3 F-1, 48 electrons per cell
+  one shared extended-Hueckel Hamiltonian: fragment and crystal columns on one energy reference
+...
+* Output files *
+  GM: 5 levels (14 partners) -> SALC_eht_221_PPOSCAR_ScF3_crystal_GM.html
+  R: 7 levels (15 partners) -> SALC_eht_221_PPOSCAR_ScF3_crystal_R.html
+  X: 10 levels (14 partners) -> SALC_eht_221_PPOSCAR_ScF3_crystal_X.html
+  M: 11 levels (14 partners) -> SALC_eht_221_PPOSCAR_ScF3_crystal_M.html
+```
+
+Each `* Output files *` line names a page with its number of levels and of
+degenerate partners (the rows of the viewer). With `--pyscf` the report has
+a `* PySCF levels *` and an `* Energy reference *` block instead, and the
+`SCF saved to FILE.chk` notice is listed under `* Output files *`.
 
 No SCF and no basis options — the full-electron STO basis, the archived
 atomic levels and the point-charge ligand field are all tabulated, so the

@@ -20,7 +20,7 @@ crystod.xrd       # powder XRD patterns             (crystod-xrd)
 crystod.search    # Materials Project search        (crystod-search)
 ```
 
-*Testsuite section 35 checks everything documented on this page.*
+*Testsuite section 43 checks everything documented on this page.*
 
 ```{note}
 Importing CrystOD is cheap: `import crystod` and the nine domain modules pull
@@ -55,6 +55,40 @@ R4+(a,b,c) -> 2 P-1 size 2 index 48
 The space group is given as a symbol or a number (`221` works as well), and a
 list of labels enumerates the subgroups of coupled order parameters, exactly as
 `--irrep X3- X2+` does on the command line.
+
+`crystod.group.isotropy_subgroups_at_kpoint` does the same for **every irrep of
+one special k point** — the API form of `crystod-group --parent SG --kpoint K`.
+It returns a `dict` from irrep label to the list `isotropy_subgroups` gives for
+that irrep, in the order of the ISO-IR tables:
+
+```python
+from crystod.group import isotropy_subgroups_at_kpoint
+
+table = isotropy_subgroups_at_kpoint("Pm-3m", "GM")
+list(table)       # ['GM1+', 'GM2+', 'GM3+', 'GM4+', 'GM5+', 'GM1-', 'GM2-', 'GM3-', 'GM4-', 'GM5-']
+for sub in table["GM3+"]:
+    print(sub.label, "->", sub.number, sub.symbol, "size", sub.size, "index", sub.index)
+```
+
+```
+GM3+(a,0) -> 123 P4/mmm size 1 index 3
+GM3+(a,b) -> 47 Pmmm size 1 index 6
+```
+
+The k point is its ISO-IR name or three coordinates in the primitive reciprocal
+basis; any arm of the star and any equivalent `q + G` are recognized
+(`isotropy_subgroups_at_kpoint(221, [0, 0.5, 0.5]).kpoint` is `'M'`). The
+returned `KpointIsotropySubgroups` is a plain `dict` with a few attributes:
+`kpoint`, `coordinates` (the tabulated arm), `n_arms`, `space_group`,
+`space_group_number`, and `errors`. An irrep whose enumeration fails does not
+stop the others: it is left out of the mapping and named in `errors`
+(`{label: reason}`, empty on success). The two members of a complex-conjugate
+pair share one physically irreducible order parameter and appear once, under
+their pair label (`GM2+GM3+` of Pm-3); the records are those of the first
+member (`isotropy_subgroups("Pm-3", "GM2+")`), and their `direction`
+components refer to the basis built from it. An unknown k-point name, or coordinates
+that are not a tabulated special point, raise `ValueError` with the k points
+of the space group in the message.
 
 Bad input raises `ValueError` — an unknown space group, an invalid order
 parameter, or an irrep that is not tabulated for that space group. The last
@@ -202,6 +236,32 @@ The same analysis is available from the command line as
 enumeration is described in
 [Isotropy subgroups](theory-isotropy-subgroups.md).
 ```
+
+## Group theory and spectroscopy entry points
+
+The functions behind the `crystod-group` and `crystod-phonon` modes added in
+v0.4.3 return dataclasses and are documented with their commands:
+
+```python
+from crystod import group, phonon, salc
+
+group.invariant_polynomials("Pm-3m", ["R4+"], degree=4)      # InvariantBasis, section 18
+group.landau_lifshitz("Pm-3m", "R4+")                         # LandauLifshitz, section 18
+group.secondary_order_parameters("Pm-3m", ["R4+"], "a 0 0")   # list[SecondaryOrderParameter], section 18
+group.find_isotropy_irreps("Pm-3m", "I4/mcm")                 # list[IsotropyMatch], section 19
+group.subgroup_graph("Pm-3m", ["R4+", "M3+"])                 # SubgroupGraph, section 20
+group.correlation_table("m-3m", "4/mmm")                      # CorrelationTable, section 16
+group.compatibility_relations("Pm-3m", "GM", "X")             # list[Compatibility], section 16
+group.subduce_to_child("Pm-3m", ["R4+"], "a 0 0")             # list[Subduction], section 16
+group.tensor_form("4mm", "piezoelectric")                     # TensorForm, section 13
+group.symmetric_square, group.jahn_teller_modes               # section 9
+phonon.gamma_mode_activities, phonon.gamma_raman_tensors      # section 29
+salc.dipole_selection_rules                                   # section 4
+```
+
+See [crystod-group](crystod-group.md) sections 9, 13, 16, 18, 19 and 20,
+[crystod-phonon](crystod-phonon.md) section 29 and [crystod](crystod.md)
+section 4 for the arguments, the printed forms and the MCP tools.
 
 ## The other domains
 

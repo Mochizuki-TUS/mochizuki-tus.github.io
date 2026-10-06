@@ -18,9 +18,9 @@ network connection and a free Materials Project API key (see
 [The API key](#the-api-key)).
 ```
 
-## 37. Searching the Materials Project
+## 45. Searching the Materials Project
 
-*Example directory: `example/37_mp_search` (testsuite section 37)*
+*Example directory: `example/45_mp_search` (testsuite section 45)*
 
 ### Searching
 
@@ -32,6 +32,7 @@ crystod-search SrTiO3
  * Materials Project: formula SrTiO3 *
  5 materials, sorted by energy above hull
 
+ * Materials *
  Formula  Space group  Material ID  Band Gap (eV)  Energy Above Hull (eV/atom)  Sites
  SrTiO3   I4/mcm       mp-4651              1.856                        0.000     10
  SrTiO3   I4/mcm       mp-551830            1.787                        0.000     10

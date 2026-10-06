@@ -13,9 +13,9 @@ coordinate files) instead of periodic structures.
 | draw the MO diagram | `crystod-mol --diagram --xyz FILE.xyz` |
 | draw it from a real SCF | `crystod-mol --diagram --xyz FILE.xyz --pyscf` |
 
-## 32. Molecular point groups and SALCs
+## 40. Molecular point groups and SALCs
 
-*Example directory: `example/32_molecular_salc` (testsuite section 32;
+*Example directory: `example/40_molecular_salc` (testsuite section 40;
 molecule files in `example/test_XYZs`)*
 
 ### Point-group detection (`--symmetry`)
@@ -128,7 +128,7 @@ every symmetry operation; `--tolerance` as in `--symmetry`.
 
 `--visualize` additionally writes the SALCs as a standalone interactive 3D
 HTML page — the same viewer as the crystalline `crystod --visualize`
-(section 5 of {doc}`crystod`), with the orbital lobes drawn at each site
+(section 6 of {doc}`crystod`), with the orbital lobes drawn at each site
 (+ yellow / − cyan, VESTA style), a sidebar listing every SALC basis vector
 by irrep for one-click switching, and a camera-synced x/y/z compass:
 
@@ -154,9 +154,9 @@ Cartesian x/y/z axes. The SALC analysis supports the 32 crystallographic point
 groups; for linear molecules (D\*h/C\*v) analyze a finite subgroup with
 `crystod-group --decompose` instead.
 
-## 33. Molecular-orbital diagrams (`--diagram`)
+## 41. Molecular-orbital diagrams (`--diagram`)
 
-*Example directory: `example/33_molod` (testsuite section 33)*
+*Example directory: `example/41_molod` (testsuite section 41)*
 
 `crystod-mol --diagram` draws the molecular-orbital diagram of a single-center
 molecule (one central atom plus its ligands — NH3, CH4, SF6) from **symmetry
@@ -217,7 +217,7 @@ scroll zooms the energy window:
 ```
 
 Everything in the report is one small secular problem per irrep: the ligand
-orbitals are symmetry-adapted into the SALCs of section 32, every valence
+orbitals are symmetry-adapted into the SALCs of section 40, every valence
 orbital is a single-zeta Slater-type orbital with a tabulated extended-Hückel
 exponent `zeta` and diagonal energy `H_ii`, all two-center overlaps `S` are
 evaluated exactly (ligand-ligand overlap included), and orbitals of different

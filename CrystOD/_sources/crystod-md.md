@@ -3,44 +3,58 @@
 MD-trajectory analyses. Two mode flags: `--adp` (atomic displacement parameters
 as CIF) and `--summary` (time-averaged lattice statistics).
 
-## 30. ADPs from an MD trajectory (`--adp`)
+## 38. ADPs from an MD trajectory (`--adp`)
 
-*Example directory: `example/30_xdatcar2adp` (testsuite section 30)*
+*Example directory: `example/38_xdatcar2adp` (testsuite section 38)*
 
 Compute the time-averaged structure and anisotropic displacement parameters
 (ADPs, U_ij) from a molecular-dynamics `XDATCAR` trajectory and write them as a
 CIF file:
 
 ```bash
-cd example/30_xdatcar2adp/ScF3_Pm-3m_NpT_300K
+cd example/38_xdatcar2adp/ScF3_Pm-3m_NpT_300K
 crystod-md --adp --dim 4 4 4 --start-step 1000 --xdatcar XDATCAR --output ADP.cif
 ```
 
 ```
-Supercell info:
+
+* Input *
+  Supercell size : [4, 4, 4]
+  Start step     : 1000
+  Input file     : XDATCAR
+  Output file    : ADP.cif
+  Reading XDATCAR... (this may take a while)
+
+* Supercell info *
   atoms          : 256
   composition    : {'Sc': 64, 'F': 192}
   analyzed steps : 3001
+  Number of unit-cell sites (groups): 4
+  Expected replicas per group       : 64
 
-Space group: Pm-3m (No. 221)
-Atoms in unit cell   : 4
-Symmetry operations  : 48
-Asymmetric-unit sites: 2
-  Sc0: mult=1, coords=(1.00000, 0.99999, 1.00000)
-  F1: mult=3, coords=(0.00004, 0.50001, 0.00006)
+* Time-averaged unit cell *
+  Space group: Pm-3m (No. 221)
+  Atoms in unit cell   : 4
+  Symmetry operations  : 48
+  Asymmetric-unit sites: 2
+    Sc0: mult=1, coords=(1.00000, 0.99999, 1.00000)
+    F1: mult=3, coords=(0.00004, 0.50001, 0.00006)
 
-ADP constraints per Wyckoff position:
+* ADP constraints per Wyckoff position *
   Wyckoff 0 (Sc): site-symmetry order=48, U11=U22, U11=U33, U22=U33, U12=0, U13=0, U23=0
   Wyckoff 1 (F): site-symmetry order=16, U11=U33, U12=0, U13=0, U23=0
 
-Coordinate unwrapping done: 256 atoms x 3001 steps
+* Trajectory unwrapping *
+  Coordinate unwrapping done: 256 atoms x 3001 steps
 
+* Atomic displacement parameters *
 Site       Ueq (A^2)    Constraint
 ------------------------------------------------------------
 Sc0        0.005484     U11=U22, U11=U33, U22=U33, U12=0, U13=0, U23=0
 F1         0.023520     U11=U33, U12=0, U13=0, U23=0
 
-Saved: ADP.cif
+* Output files *
+  Saved: ADP.cif
 ```
 
 The written CIF ends with the symmetry-constrained `_atom_site_aniso_U_*`
@@ -85,9 +99,9 @@ repeated-header) XDATCAR files are supported.
 Based on `script/xdatcar_to_adp.py` by Ko Sato; the CrystOD port reproduces its
 output exactly while replacing the pymatgen reader with a fast built-in parser.
 
-## 30.1 Trajectory summary (`--summary`)
+## 38.1 Trajectory summary (`--summary`)
 
-*Example directory: `example/30_xdatcar2adp` (testsuite sections 30-31: `--summary` runs in the CLI-regression section)*
+*Example directory: `example/38_xdatcar2adp` (testsuite sections 38-39: `--summary` runs in the CLI-regression section)*
 
 `crystod-md --summary` reports summary statistics of the same trajectory: the
 time-averaged lattice parameters (a, b, c, alpha, beta, gamma) and cell volume
@@ -100,13 +114,18 @@ crystod-md --summary --start-step 1000 --end-step 15000   # inclusive step range
 ```
 
 ```
-Trajectory info:
+
+* Input *
+  Input file : XDATCAR
+  Reading XDATCAR... (this may take a while)
+
+* Trajectory info *
   atoms          : 256
   composition    : {'Sc': 64, 'F': 192}
   total steps    : 4001
   analyzed steps : 3001 (step 1000 .. 4000)
 
-Time-averaged cell (mean +/- std):
+* Time-averaged cell (mean +/- std) *
   a (A)       :      16.149940 +/- 0.077310
   b (A)       :      16.155625 +/- 0.067497
   c (A)       :      16.154106 +/- 0.068162

@@ -10,9 +10,9 @@ them.
 | see how a supercell folds the BZ | `crystod-bz -c POSCAR --trans-mat "0 1 2  -1 0 2  1 -1 2"` |
 | list the special k points of a space group | `crystod-bz --show-kpoint --sg Pnma` |
 
-## 18. Brillouin zone plot
+## 25. Brillouin zone plot
 
-*Example directory: `example/18_brillouin_zone` (testsuite section 18)*
+*Example directory: `example/25_brillouin_zone` (testsuite section 25)*
 
 Plot the first Brillouin zone as an interactive 3D HTML file, together with the
 recommended high-symmetry k-path:
@@ -23,17 +23,18 @@ crystod-bz -c 221_PPOSCAR_ScF3 --output BZ_ScF3_Pm-3m.html
 ```
 
 ```
+* Structure *
 Space group: Pm-3m (#221)
 
-Recommended k-path (seekpath):
+* Recommended k-path (seekpath) *
   GAMMA    ( 0.0000,  0.0000,  0.0000)
   X        ( 0.0000,  0.5000,  0.0000)
   M        ( 0.5000,  0.5000,  0.0000)
   R        ( 0.5000,  0.5000,  0.5000)
+  Path: GAMMA-X-M-GAMMA-R-X   R-M
 
-Path: GAMMA-X-M-GAMMA-R-X   R-M
-
-Wrote Brillouin-zone visualization: BZ_221_PPOSCAR_ScF3.html
+* Output files *
+  Wrote Brillouin-zone visualization: BZ_221_PPOSCAR_ScF3.html
 ```
 
 The written HTML is a live 3D plot — the one below is the actual output of the
@@ -126,9 +127,9 @@ L: (1/2, 1/2, 1/2)
 W: (1/2, 1, 0)
 ```
 
-## 19. Supercell Brillouin zone (`--trans-mat`)
+## 26. Supercell Brillouin zone (`--trans-mat`)
 
-*Example directory: `example/19_bz_supercell` (testsuite section 19)*
+*Example directory: `example/26_bz_supercell` (testsuite section 26)*
 
 Plot the first Brillouin zone of a unit cell (black, dotted) together with the
 Brillouin zone of a transformed (super)lattice (red) as an interactive 3D HTML file:
@@ -139,13 +140,18 @@ crystod-bz -c example/test_POSCARs/221_PPOSCAR_ScF3 \
 ```
 
 ```
-Transformation matrix (unit cell -> supercell):
+* Transformation matrix (unit cell -> supercell) *
   [  0.0000   1.0000   2.0000]
   [ -1.0000   0.0000   2.0000]
   [  1.0000  -1.0000   2.0000]
-Volume ratio |det T| = 6
+  Volume ratio |det T| = 6
 
-Unit-cell q-points folding onto the supercell Gamma point (6):
+* Supercell lattice (rows) *
+  [  0.000000   4.069590   8.139180]
+  [ -4.069590   0.000000   8.139180]
+  [  4.069590  -4.069590   8.139180]
+
+* Unit-cell q-points folding onto the supercell Gamma point (6) *
   (0, 0, 0)
   (1/3, -1/3, 1/6)
   (-1/3, 1/3, 1/3)
@@ -153,7 +159,8 @@ Unit-cell q-points folding onto the supercell Gamma point (6):
   (1/3, -1/3, -1/3)
   (-1/3, 1/3, -1/6)
 
-Wrote supercell Brillouin-zone visualization: BZ_supercell_221_PPOSCAR_ScF3.html
+* Output files *
+  Wrote supercell Brillouin-zone visualization: BZ_supercell.html
 ```
 
 ```{raw} html
@@ -163,7 +170,7 @@ Wrote supercell Brillouin-zone visualization: BZ_supercell_221_PPOSCAR_ScF3.html
 
 `--trans-mat` is the row-wise unit-cell-to-supercell transformation matrix
 (`L_super = T L_unit`; fractions such as `1/2` are allowed). It defaults to the
-identity matrix, which plots the unit-cell BZ only (section 18); any
+identity matrix, which plots the unit-cell BZ only (section 25); any
 non-identity matrix switches to this combined unit-cell + supercell plot.
 
 The supercell BZ is automatically tiled at every supercell reciprocal-lattice

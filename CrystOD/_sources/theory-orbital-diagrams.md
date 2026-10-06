@@ -1,7 +1,7 @@
 # How the orbital diagrams are computed
 
 The orbital diagrams of CrystOD — the molecular ones of `crystod-mol --diagram`
-(section 33) and the crystal ones of `crystod --diagram` (section 3) — are built
+(section 41) and the crystal ones of `crystod --diagram` (section 3) — are built
 by the same recipe: symmetry-adapt the fragment orbitals, evaluate every overlap
 between them, and solve the resulting eigenvalue problem. This page describes
 that engine, in its qualitative (extended-Hückel) and quantitative (PySCF) forms.
@@ -14,7 +14,7 @@ The construction follows the textbook route, made quantitative step by step:
 
 1. the molecular point group is detected and the ligand atomic orbitals are
    symmetry-adapted per irrep (the molecular SALCs of `crystod-mol --element
-   --orbital`, section 32) — for NH3,
+   --orbital`, section 40) — for NH3,
    `A1: [1s(H1) + 1s(H2) + 1s(H3)]` and
    `E: [1s(H1) - 1s(H3), 1s(H1) - 2 1s(H2) + 1s(H3)]`;
 2. every valence orbital — the outer, chemically active orbital of each atom —
@@ -70,7 +70,7 @@ approximation. That is what makes the correlation lines and the percentage
 compositions quantitative rather than merely indicative. The price is that a few
 fragment solutions end up living mostly on the ghost centres; those are
 filtered out by the real-atom Mulliken-population test described on the
-`crystod-mol --diagram --pyscf` command page (section 33).
+`crystod-mol --diagram --pyscf` command page (section 41).
 
 ## Two conventions that keep the molecular fragment columns honest
 
@@ -145,9 +145,17 @@ linearly dependent on the rest of the basis, and for those the extended-Hückel
 energies diverge — the well-known **overlap catastrophe**. Combinations with an
 overlap eigenvalue below 0.2 are therefore removed by canonical
 orthogonalization, and the terminal report counts them per k point. A second,
-purely conventional caveat: the irrep labels at zone-boundary points depend on
-the origin of the input structure, as in every SALC analysis, so compare
-against a reference in the same setting.
+purely conventional caveat: the irrep labels at zone-boundary points refer to
+the origin of the input structure when the input is already in the ISO-IR
+setting (Sr or Ti at the origin of SrTiO3), as in every SALC analysis, so
+compare against a reference in the same setting. A diagonal supercell of
+such an input (of any size) is labelled like the cell; any other
+description of the same crystal is labelled in a canonical frame, which keeps
+the input's own origin when that is the origin of a standard description, so
+shifted copies get the same labels whatever their orientation or basis, while
+an unshifted re-based cell or a non-diagonal supercell can get names that
+differ from theirs, or from the cell's, by a normalizer element (see
+[Irrep labels and the frame of a structure](theory-representations.md#irrep-labels-and-the-frame-of-a-structure)).
 
 ## Ghost atoms, cell neutrality and the deep-level alignment (crystal `--pyscf`)
 
@@ -269,8 +277,8 @@ deliberately small run, skipped when pyscf is not installed:
 wall clock. It asserts the report (one SCF and no fragment SCF, the
 `D+ S D = S` verification, the induced representations of every shell,
 the Cl-3p valence band bonding with Na 3p, the written coupling table)
-and two invariants of the embedded wave-function sketches, which manual
-inspection alone used to cover: the drawn σ lobe phases along the Na–Cl
+and two invariants of the embedded wave-function sketches, which would
+otherwise need manual inspection: the drawn σ lobe phases along the Na–Cl
 bonds must reproduce the bonding/antibonding letter that the engine
 derives independently from the COOP overlap population, and the Na/Cl
 ratio of the p-channel lobe sizes must equal the square root of the

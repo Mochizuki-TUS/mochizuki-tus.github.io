@@ -16,7 +16,7 @@ API objects can be handed to CrystOD directly from Python.
 | the supercell (`DIM`) | `--dim "4 4 4"` (or `--dim 4 4 4`; a nine-value diagonal matrix works too) |
 | `phonopy_disp.yaml` | supplies the supercell to `--modulation` when `--dim` is omitted |
 | `phonopy_params.yaml` | `--yaml phonopy_params.yaml`, in place of `-c` + `--dim` in `--modulation` and `--subgroup` |
-| `BORN` | `--nac` in `--fatband` and `--lt` |
+| `BORN` | read only with `--nac`, in every mode that reads force data (`--irreps`, `--fatband`, `--lt`, `--vector`, `--modulation`, `--subgroup`; with `--yaml` the NAC parameters stored in the yaml come first); phonopy itself reads `./BORN` by default. With `--irreps --nac` it also gives the mode effective charges and the static dielectric tensor |
 
 The unit cell is reduced to its primitive cell (`primitive_matrix="auto"`),
 so q points are given in primitive reciprocal coordinates, either as
@@ -62,7 +62,12 @@ Wrote 221_PPOSCAR_SrTiO3 (bundled example input)
 Wrote FORCE_SETS (bundled example input)
 Running: crystod-phonon --irreps --dim '4 4 4' -c 221_PPOSCAR_SrTiO3
 
-Phonon irreps written to: phonon_irreps.yaml
+* Gamma-point activity *
+GM4- [T1u] x4 (3 IR, 1 acoustic)
+GM5- [T2u] x1 (silent)
+
+* Output files *
+  Phonon irreps written to: phonon_irreps.yaml
 ```
 
 The result is the file, `phonon_irreps.yaml`: the special points of the space
@@ -149,7 +154,7 @@ This is what tells two branches of the same line apart (which `DT5` is which)
 and takes a few times longer than the special-points-only default (about 10 s
 against 2 s for this example). `--readfc` reads `FORCE_CONSTANTS` in place of
 `FORCE_SETS` in every mode.
-Documentation: [21. Phonon irreps](crystod-phonon.md#21-phonon-irreps---irreps),
+Documentation: [28. Phonon irreps](crystod-phonon.md#28-phonon-irreps---irreps),
 [Symmetry lines as well](crystod-phonon.md#symmetry-lines-as-well---all-irreps).
 
 ## Imaginary modes: which structures? (`--subgroup`)
@@ -174,6 +179,7 @@ Pm-3m (No. 221)
 * Imaginary mode at q = (0.5, 0.5, 0.5) (R) *
 mode 1, 2, 3: -1.086709 THz, irrep R5- (degeneracy 3)
 
+* Order parameter directions and isotropy subgroups *
 irrep                subgroup           size  index
 R5-(0,0,a)           140 I4/mcm         2     6
 R5-(a,a,a)           167 R-3c           2     8
@@ -231,7 +237,7 @@ Six POSCAR files, one per direction, named after the subgroup, each with the
 `--modulation` command that reproduces it; the space group of every file is
 measured with spglib, not assumed. These are the candidate structures to relax
 in a structure search. `--amplitude` scales all of them (default 0.3 A).
-Documentation: [27. Subgroups from imaginary modes](crystod-phonon.md#27-subgroups-from-imaginary-modes---subgroup),
+Documentation: [35. Subgroups from imaginary modes](crystod-phonon.md#35-subgroups-from-imaginary-modes---subgroup),
 [Generating the daughter structures](crystod-phonon.md#generating-the-daughter-structures---modulate),
 and the theory in [Isotropy subgroups](theory-isotropy-subgroups.md).
 
@@ -266,10 +272,14 @@ crystod-phonon --modulation -c 221_PPOSCAR_SrTiO3 --qpoint 0.5 0.5 0.5
 ```
 
 ```
-Supercell 4x4x4 inferred from the 320 atoms of FORCE_SETS; pass --dim if that is not the supercell of your force calculation. Primitive cell: 5 atoms of the 5-atom input cell (primitive_matrix auto).
-Loading '221_PPOSCAR_SrTiO3 + FORCE_SETS' at q = [0.5, 0.5, 0.5]...
 
-Phonon modes at q = [0.5 0.5 0.5]
+* Phonon source *
+  Supercell 4x4x4 inferred from the 320 atoms of FORCE_SETS; pass --dim if that is not the supercell of your force calculation. Primitive cell: 5 atoms of the 5-atom input cell (primitive_matrix auto).
+
+* Selected Q point *
+  Loading '221_PPOSCAR_SrTiO3 + FORCE_SETS' at q = [0.5, 0.5, 0.5]...
+
+* Phonon modes at q = [0.5 0.5 0.5] *
  Mode    Freq (THz)         Irrep   Degeneracy
 --------------------------------------------------
     1       -1.0867        R5-(3)            3
@@ -282,7 +292,7 @@ Phonon modes at q = [0.5 0.5 0.5]
     ...
    15       23.2302        R2-(1)            1
 
-Star of q (arms related by the space-group rotations):
+* Star of q (arms related by the space-group rotations) *
   |G| = 48, |G_k| = 48, |star of k| = 1
   arm 1: k = [+0.5, +0.5, +0.5]
 
@@ -297,16 +307,19 @@ crystod-phonon --modulation -c 221_PPOSCAR_SrTiO3 --qpoint 0.5 0.5 0.5 --mode 1 
 ```
 
 ```
-Generating modulated structure...
+...
+
+* Modulation *
   q-point: [0.5, 0.5, 0.5]
   Modes: [1, 2, 3]
   Amplitudes (A): [0.3, 0.3, 0.3]
 
-Symmetry of the generated structure:
-Space group: R-3c (#167)
-Hall symbol: -R 3 2"c
+* Symmetry of the generated structure *
+  Space group: R-3c (#167)
+  Hall symbol: -R 3 2"c
 
-Modulated structure written to: MPOSCAR_R_mode1+2+3_R5-_R-3c
+* Output files *
+  Modulated structure written to: MPOSCAR_R_mode1+2+3_R5-_R-3c
 ```
 
 Note that `--dim` was not given: `--modulation` takes the supercell from
@@ -318,7 +331,7 @@ through `--qpoint1/--mode1/--amplitude1`, `--qpoint2/...`, which is how the
 arms of a multi-arm star (the three M points of a perovskite) are frozen in
 together. Any arm, written as any `q + G`, is accepted: `-0.5 0.5 0` and
 `0.5 0.5 0` differ by a reciprocal lattice vector and give one structure.
-Documentation: [25. Phonon modulation](crystod-phonon.md#25-phonon-modulation---modulation),
+Documentation: [33. Phonon modulation](crystod-phonon.md#33-phonon-modulation---modulation),
 [Where the supercell comes from](crystod-phonon.md#where-the-supercell-comes-from).
 
 ## Fatbands, L/T character and eigenvectors
@@ -330,20 +343,25 @@ or `band.yaml` is needed. `--element O` restricts it to one element,
 `--band`/`--band-labels` give a manual path, and `--nac` reads `BORN` for the
 LO/TO splitting (the files are written as `fatband_nac_<El>.pdf` and
 `phonon_band_LT_nac.pdf`, so both versions coexist).
-Documentation: [22. Phonon fatbands](crystod-phonon.md#22-phonon-fatbands---fatband).
+Documentation: [30. Phonon fatbands](crystod-phonon.md#30-phonon-fatbands---fatband).
 
 ```bash
 crystod-phonon --fatband --dim 4 4 4 -c 221_PPOSCAR_SrTiO3
 ```
 
 ```
-Space group: Pm-3m (#221)
-k-path (seekpath): $\Gamma$-X-M-$\Gamma$-R-X  R-M
 
-Computing phonon band structure with eigenvectors (306 q-points)...
-Fatband for Sr written to: fatband_Sr.pdf
-Fatband for Ti written to: fatband_Ti.pdf
-Fatband for O written to: fatband_O.pdf
+* Structure *
+  Space group: Pm-3m (#221)
+
+* Band path *
+  k-path (seekpath): $\Gamma$-X-M-$\Gamma$-R-X  R-M
+  Computing phonon band structure with eigenvectors (306 q-points)...
+
+* Output files *
+  Fatband for Sr written to: fatband_Sr.pdf
+  Fatband for Ti written to: fatband_Ti.pdf
+  Fatband for O written to: fatband_O.pdf
 ```
 
 `--lt` draws the same dispersion colored by the longitudinal/transverse
@@ -351,7 +369,7 @@ character of each mode, the norm of the eigenvector projected onto the
 propagation direction (red = longitudinal, blue = transverse, white = mixed),
 valid along diagonal path segments as well; with `--nac` the split-off LO
 branches come out purely red.
-Documentation: [23. Longitudinal/transverse bands](crystod-phonon.md#23-longitudinaltransverse-bands---lt).
+Documentation: [31. Longitudinal/transverse bands](crystod-phonon.md#31-longitudinaltransverse-bands---lt).
 
 ```bash
 crystod-phonon --lt --dim 4 4 4 -c 221_PPOSCAR_SrTiO3
@@ -364,16 +382,19 @@ displacement arrows; `--mode` takes several numbers and sums them, degenerate
 levels are exported in the same symmetry-adapted form as `--modulation`, and
 `--conventional` writes the conventional cell. For a zone-boundary q point the
 commensurate supercell and the Bloch phases are applied automatically:
-Documentation: [24. Phonon eigenvectors](crystod-phonon.md#24-phonon-eigenvectors---vector).
+Documentation: [32. Phonon eigenvectors](crystod-phonon.md#32-phonon-eigenvectors---vector).
 
 ```bash
 crystod-phonon --vector --dim "4 4 4" -c 221_PPOSCAR_SrTiO3 --qpoint R --mode 1 2 3
 ```
 
 ```
-Selected q-point: R = [0.5, 0.5, 0.5]
+...
 
-Phonon modes at q = R
+* Selected Q point *
+  Selected q-point: R = [0.5, 0.5, 0.5]
+
+* Phonon modes at q = R *
  Mode    Freq (THz)  Irrep
 ----------------------------------------
     1       -1.0867  R5-(3)
@@ -382,18 +403,21 @@ Phonon modes at q = R
     4        3.9891  R4-(3)
     ...
 
-Mode table written to: phonon_modes_SrTiO3_R.txt
-
-Commensurate supercell for visualization: 2x2x2 primitive cells
+* Displacement patterns *
+  Commensurate supercell for visualization: 2x2x2 primitive cells
   + mode 1: R5-(3), -1.0867 THz
   + mode 2: R5-(3), -1.0867 THz
   + mode 3: R5-(3), -1.0867 THz
-Sum of modes 1+2+3 written to: POSCAR_SrTiO3_R_mode01+02+03_R5-.vesta
+  Arrows are scaled so the largest displacement is 1.5 A; adjust arrow size in VESTA via Edit > Vectors or Properties > Vectors if needed.
+
+* Output files *
+  Mode table written to: phonon_modes_SrTiO3_R.txt
+  Sum of modes 1+2+3 written to: POSCAR_SrTiO3_R_mode01+02+03_R5-.vesta
 ```
 
 The remaining mode, `--vibration`, needs no forces at all: it lists the
 irrep-grouped vibration spaces at a q point from the crystal symmetry alone
-([26. Vibration bases](crystod-phonon.md#26-vibration-bases---vibration)).
+([34. Vibration bases](crystod-phonon.md#34-vibration-bases---vibration)).
 
 ## The Python API on a live Phonopy object
 
@@ -477,5 +501,5 @@ Documentation: [Phonon modes and their irreps](python-api.md#phonon-modes-and-th
   subgroup search, including the experiment that shows what freezing one
   eigenvector at a time misses).
 - [crystod-phonon](crystod-phonon.md): the reference of every mode flag, and
-  [13. Isotropy subgroups](crystod-group.md#13-isotropy-subgroups---parent)
+  [17. Isotropy subgroups](crystod-group.md#17-isotropy-subgroups---parent)
   for the same tables from `crystod-group --parent Pm-3m --irrep R5-`.
