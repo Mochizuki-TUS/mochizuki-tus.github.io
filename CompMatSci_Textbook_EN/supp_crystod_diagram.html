@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<script src="assets/access-guard.js"></script>
+<title>Appendix C A Thorough Guide to CrystOD — What Does crystod --diagram Compute? — Introduction to Computational Materials Science</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      rr: "\\bm{r}",
+      RR: "\\bm{R}",
+      xx: "\\bm{x}",
+      abs: ["\\left|#1\\right|", 1],
+      braket: ["\\langle #1 \\rangle", 1],
+      ket: ["\\left| #1 \\right\\rangle", 1],
+      bra: ["\\left\\langle #1 \\right|", 1],
+      Ham: "\\hat{\\mathcal{H}}",
+      ee: "e_0",
+      eps: "\\varepsilon_0",
+      hb: "\\bar{h}",
+      kk: "\\bm{k}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">Introduction to Computational Materials Science — Contents</a>
+  <span class="series">Appendices / Appendix C</span>
+</header>
+<main>
+<h1><span class="chapter-no">Appendix C</span>A Thorough Guide to CrystOD — What Does <code>crystod --diagram</code> Compute?</h1>
+
+<div class="lead">
+  <p>In Chapter 14 of the main text, we arrived at the picture that “energy levels become bands in a solid.” There, taking NaCl as an example, we explained why Cl-3p becomes the valence band and Na-3s becomes the conduction band by adding up the ionization energy, the electron affinity, and the Madelung energy. This appendix is the sequel. The tool that answers the same question <strong>quantitatively at each k point, using symmetry (Chapter 12) and the secular equation (Chapter 11)</strong> is the central function of CrystOD, <code>crystod --diagram</code>, that is, the <em class="term">crystal-orbital diagram</em> (COD). Taking rock-salt AlN as a concrete example, we explain step by step everything that happens behind a single command, from reading the input file to the meaning of every single line in the output HTML. All the mathematics we use has been prepared in the main text: overlap integrals of STOs (Chapter 5), the variational principle and the secular equation (Chapters 3 and 11), point groups and irreducible representations (Chapter 12), and the Madelung field (Chapter 13). The only new ingredient is a single viewpoint, the “eigenvalues of the overlap matrix,” and once this is understood, everything from why the energies of some levels carry a <strong>tilde (~)</strong> (the Löwdin first-order estimate) to why the extended Hückel method suffers from a chronic ailment called the “overlap catastrophe” can be understood as one continuous story.</p>
+  <div class="goals">
+    <strong>What you will learn in this appendix</strong>
+    <ul>
+      <li>The complete sequence of processing carried out by <code>crystod --diagram -c POSCAR_AlN_Fm-3m --co-left Al --co-right N</code></li>
+      <li>The idea behind the crystal-orbital diagram (COD): split the crystal into two sublattices, and draw “before bonding” and “after bonding” side by side</li>
+      <li>The Bloch sum (the “$N$-atom version” of the $\pm$ bonding of a diatomic molecule from Chapter 11) and why the diagonal of the overlap matrix $S(\kk)$ is no longer 1</li>
+      <li>The Wolfsberg–Helmholz approximation (extended Hückel method): $H_{ij}=K\,S_{ij}(\hb_i+\hb_j)/2$, $K=1.75$</li>
+      <li>The generalized eigenvalue problem and canonical orthogonalization. The denominator $1\pm S$ in $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ for a diatomic molecule is in fact an eigenvalue of the overlap matrix</li>
+      <li><em class="term">overlap catastrophe</em>: the chronic ailment that the extended Hückel energy diverges when an eigenvalue of the overlap matrix tends to zero, $\varepsilon\to 0$. We understand it as the limit of the statement in Chapter 11 that “the antibonding orbital is raised by more than the bonding orbital is lowered”</li>
+      <li><em class="term">Löwdin first-order estimate</em>: the derivation and range of applicability of the first-order approximation $E=\hb\,(1+(K-1)\sigma)$ that avoids the divergence. The meaning of the <strong>energies with a tilde (~)</strong> in the terminal output and of the note in the tooltip</li>
+      <li>How electrons are filled in (aufbau), HOMO/LUMO, and the color coding of bonding, nonbonding, and antibonding by COOP (crystal orbital overlap population)</li>
+      <li>Reading all the levels actually obtained at the X point of AlN</li>
+    </ul>
+  </div>
+  <div class="prereq"><strong>Prerequisites:</strong> The variational principle (Chapter 3), STOs and overlap integrals (Chapter 5), the secular equation and $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ (Chapter 11), point groups, irreducible representations, and character tables (Chapter 12), the Madelung energy (Chapter 13), and the qualitative picture of band formation (Chapter 14). Matrix eigenvalue problems and Taylor expansion are summarized in <a href="appA_math.html">Appendix A</a>. The translational symmetry of crystals (Bloch's theorem) is introduced in a self-contained way, only as far as needed in the text, so no prior course in solid-state physics is assumed.</div>
+</div>
+
+<nav class="chapter-toc">
+  <strong>Contents of this appendix</strong>
+  <ol>
+    <li><a href="#secC-1">C.1 What Is a Crystal-Orbital Diagram? — The Big Picture of the Command and Its Output</a></li>
+    <li><a href="#secC-2">C.2 Step 1: Reading the Crystal Structure — The Primitive Cell and the Space Group</a></li>
+    <li><a href="#secC-3">C.3 Step 2: Splitting the Crystal into Two Sublattices — Basis Functions and VSIPs</a></li>
+    <li><a href="#secC-4">C.4 Step 3: The Removed Side Becomes Point Charges — The Ligand Field</a></li>
+    <li><a href="#secC-5">C.5 Step 4: The Bloch Sum — The “$N$-Atom Version” of a Diatomic Molecule</a></li>
+    <li><a href="#secC-6">C.6 Step 5: Symmetry Labels — What Is X1+?</a></li>
+    <li><a href="#secC-7">C.7 Step 6: Building the Hamiltonian with the Extended Hückel Method</a></li>
+    <li><a href="#secC-8">C.8 Step 7: Solving the Secular Equation — The Eigenvalues of the Overlap Matrix Take the Lead</a></li>
+    <li><a href="#secC-9">C.9 Overlap Catastrophe — Divergent Antibonding Orbitals</a></li>
+    <li><a href="#secC-10">C.10 The Löwdin First-Order Estimate — What the Tilde Levels Really Are</a></li>
+    <li><a href="#secC-11">C.11 Step 8: Filling in the Electrons — Aufbau and HOMO/LUMO</a></li>
+    <li><a href="#secC-12">C.12 Step 9: The Colors of the Crystal Orbitals — Judging Bonding with COOP</a></li>
+    <li><a href="#secC-13">C.13 Reading the Output: A Complete Wrap-Up — The X Point of AlN, Line by Line</a></li>
+    <li><a href="#secC-14">C.14 Summary and Exercises</a></li>
+  </ol>
+</nav>
+
+<h2 id="secC-1">C.1 What Is a Crystal-Orbital Diagram? — The Big Picture of the Command and Its Output</h2>
+
+<h3>C.1.1 The crystal version of the molecular orbital diagram</h3>
+
+<p>At the end of Chapter 12, we drew the molecular orbital diagram of CH$_4$. The atomic orbitals of C are placed on the left and the symmetry-adapted linear combinations (SALCs) of H$_4$ on the right; <strong>only those belonging to the same irreducible representation mix</strong>, and bonding and antibonding molecular orbitals form in the middle. That is the figure we mean. Just by looking at it, a chemist can see at a glance which orbital joins hands with which, how far the electrons fill, and where the vacancies are.</p>
+
+<p>The motivation for the crystal-orbital diagram (COD) is to draw the same kind of figure for a crystal. For rock-salt AlN, we place the electronic states of the “Al-only lattice” on the left, those of the “N-only lattice” on the right, and draw those of the “AlN crystal” in the middle. The rule connecting left and right is exactly the same as for molecules: <strong>only states of the same irreducible representation mix</strong>. There is just one difference. Because a crystal has translational symmetry, this figure exists <strong>once for each value of the wave vector $\kk$</strong>.</p>
+
+<div class="box def">
+<p class="box-title">Definition: Crystal-orbital diagram (COD)</p>
+<p>A level-correlation diagram in which a crystal is divided into two fragment sublattices and, at each $\kk$ point, (i) the electronic levels of the left sublattice alone, (ii) the electronic levels of the right sublattice alone, and (iii) the electronic levels of the whole crystal are arranged side by side with irreducible-representation labels. (i) and (ii) correspond to “before the chemical bond is formed” and (iii) to “after it is formed,” and the correlation lines connecting them show “which orbital bonded with which.”</p>
+</div>
+
+<div class="box note">
+<p class="box-title">Supplement: The “atomic-orbital” columns on both outer sides (added in v0.3.7)</p>
+<p>After this appendix was written, a column of <strong>isolated-atom shells</strong> (example: 2Al 3s, where the number is the number of equivalent atoms in the primitive cell) was added on both outer sides of the diagram. Each shell shows its on-site energy $\hb$ including the ligand field (independent of $\kk$), and the correlation lines from it to the sublattice columns show “how the Bloch bonding among equivalent atoms splits each shell.” This is the crystal version of the H$_4$ column of <code>crystod-mol</code> (the display in which the four H 1s orbitals split into a$_1$ + t$_2$). In wurtzite AlN, where the primitive cell contains two or more atoms of the same element, this splitting lets us read off directly how the bonding combination of Al-3p comes below the antibonding combination of Al-3s. In rock-salt AlN (one Al per cell), the single Bloch sum for each shell connects directly to the sublattice column. Figure C.5 in this appendix draws only the central three columns.</p>
+<p>The corresponding column in the <code>--pyscf</code> version is obtained by separately computing the <strong>isolated ions</strong> with formal charges (Al$^{3+}$, N$^{3-}$, etc.) with the same basis, pseudopotential, and functional as the crystal. If you specify <code>--oxidation Al=0 N=0</code>, the calculation can also be done with the <strong>neutral-atom sublattices</strong>, the same as in the extended Hückel version (sublattices with an odd number of electrons are solved with fractional occupation via Fermi smearing, and for isolated atoms the spin with matching parity is scanned and the ground state is chosen; neutral N is the $^4$S state with spin 3, following Hund's rule). One caution is in order here. Among the shells emptied by the formal charge, those <strong>above the lowest empty state of each $l$</strong> (the 4s/4p of Al$^{3+}$, etc.; occupied semicore shells are not counted, and for Na$^{+}$ the 3s above the 2s is the “lowest empty state,” which is reliable) are not physical Rydberg levels but <strong>virtual levels of the finite basis</strong>. Because the default <code>gth-dzvp-molopt-sr</code> basis is optimized for valence electrons in condensed phases and has no diffuse functions, these levels are “leftovers” of the contraction (compact functions with nodes), and both their energies and the s/p ordering are artifacts of the basis (indeed, for Al$^{3+}$ the 4p comes out below the 4s; this is a reversal resulting from the 4s being off by +7 eV and the 4p by +1.5 eV when compared with the NIST free-ion spectrum, and with the same pseudopotential but <code>--basis gth-qzv2p</code>, both fall within ±0.1 eV of the experimental values. However, these figures were verified for the one-electron problem of the bare ion; for the Kohn–Sham virtual levels of an ion that retains electrons, errors of the eV order due to the functional remain regardless of the basis). For anions the situation is more fundamental: a free anion with one more electron attached is unbound in vacuum, so all the empty levels are continuum states discretized by the basis and cannot become physical levels with any basis (what binds the anion in the crystal is the Madelung potential). From v0.3.7 onward, the tooltip of the relevant level, the footnote of the page, and the terminal output state this caution and the recommended basis.</p>
+</div>
+
+<h3>C.1.2 The command to run and its output</h3>
+
+<p>The concrete example we follow in this appendix is the following.</p>
+
+<pre><code><span class="prompt">$</span> conda create -n crystod python=3.11
+<span class="prompt">$</span> conda activate crystod
+<span class="prompt">$</span> pip install crystod
+<span class="prompt">$</span> crystod --diagram -c POSCAR_AlN_Fm-3m --co-left Al --co-right N
+
+<span class="prompt">#</span> NOTE : POSCAR_AlN_Fm-3m is given below:
+<span class="prompt">$</span> cat POSCAR_AlN_Fm-3m
+<span class="prompt">$</span> Al4 N4
+<span class="prompt">$</span>    1.00000000000000
+<span class="prompt">$</span>      4.0443663777730645    0.0000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.0000000000000000    4.0443663777730645    0.0000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.0000000000000000    4.0443663777730645
+<span class="prompt">$</span>    Al   N
+<span class="prompt">$</span>      4     4
+<span class="prompt">$</span> Direct
+<span class="prompt">$</span>      0.0000000000000000    0.0000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.5000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.0000000000000000    0.5000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.5000000000000000    0.5000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.0000000000000000    0.5000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.0000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.0000000000000000    0.5000000000000000    0.0000000000000000
+<span class="prompt">$</span>      0.5000000000000000    0.5000000000000000    0.5000000000000000
+</code></pre>
+
+<p>After a few tens of seconds, a level table for each $\kk$ point scrolls by in the terminal, and an interactive figure named <code>CrystOD_POSCAR_AlN_Fm-3m.html</code> is written out. Let us look right away at the X-point part of the terminal output (being able to read this table line by line is the goal of this appendix).</p>
+
+<pre><code> * k point X (1/2,0,1/2) *
+   (4 near-dependent diffuse Bloch combination(s) below overlap floor 0.2:
+    energies marked ~ are first-order Loewdin estimates; ...)
+   Al  : Al 1s X1+ (-1590.88), Al 2s X1+ (-133.04), Al 2p X5- (-87.40),
+         Al 2p X3- (-87.40), Al 3p X3- (-14.94), Al 3s X1+ (~-6.65),
+         Al 3p X5- (7.03)
+   N   : N 1s X1+ (-425.05), N 2s X1+ (-25.04), N 2p X3- (-14.29),
+         N 2p X5- (-13.23)
+   crystal :
+     X1+ #1   -1590.91 eV  x1  2e   Al 1s X1+ 100.0%
+     X1+ #2    -424.91 eV  x1  2e   N 1s X1+ 99.9%
+     X1+ #3    -133.16 eV  x1  2e   Al 2s X1+ 98.8%
+     X3- #1     -87.40 eV  x1  2e   Al 2p X3- 99.9%
+     X5- #1     -87.39 eV  x2  4e   Al 2p X5- 99.8%
+     X1+ #4     -25.77 eV  x1  2e   N 2s X1+ 92.1%  Al 3s X1+ 7.9%
+     X3- #2     -17.24 eV  x1  2e   Al 3p X3- 58.7%  N 2p X3- 41.2%
+     X5- #2     -14.11 eV  x2  4e   N 2p X5- 84.9%  Al 3p X5- 15.1%
+     X1+ #5     ~-5.92 eV  x1       Al 3s X1+ 90.9%  N 2s X1+ 7.8%
+     X5- #3     ~-4.36 eV  x2       Al 3p X5- 84.8%  N 2p X5- 15.0%
+     X3- #3      -0.36 eV  x1       N 2p X3- 58.8%  Al 3p X3- 41.2%
+</code></pre>
+<p class="codecap">Terminal output at the X point of AlN (abridged). The levels whose energies carry a <code>~</code> are the “Löwdin first-order estimate,” one of the stars of this appendix.</p>
+
+<p>The overall flow of the processing is shown in Figure C.1. The following sections follow this flowchart from top to bottom.</p>
+
+<figure>
+<svg viewBox="0 0 780 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Flowchart of the processing in crystod --diagram">
+<defs><marker id="arf" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0 0, 10 4, 0 8" fill="#566573"/></marker></defs>
+<rect x="10" y="10" width="760" height="410" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif" font-size="13.5">
+<rect x="60" y="28" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="46" text-anchor="middle" fill="#1a5276">① Read POSCAR, convert to primitive cell</text><text x="215" y="62" text-anchor="middle" fill="#566573" font-size="12">Identify space group Fm-3m (No. 225) → §C.2</text>
+<rect x="60" y="82" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="100" text-anchor="middle" fill="#1a5276">② Split via --co-left / --co-right</text><text x="215" y="116" text-anchor="middle" fill="#566573" font-size="12">Prepare all-electron STO basis, VSIPs → §C.3</text>
+<rect x="60" y="136" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="154" text-anchor="middle" fill="#1a5276">③ Removed sublattice → point-charge array</text><text x="215" y="170" text-anchor="middle" fill="#566573" font-size="12">Ligand field shifts on-site levels → §C.4</text>
+<rect x="60" y="190" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="208" text-anchor="middle" fill="#1a5276">④ Bloch sums and S(k) at each special k</text><text x="215" y="224" text-anchor="middle" fill="#566573" font-size="12">Lattice sums of STO overlap integrals → §C.5</text>
+<rect x="60" y="244" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="215" y="262" text-anchor="middle" fill="#1a5276">⑤ Classify states by little-group irreps</text><text x="215" y="278" text-anchor="middle" fill="#566573" font-size="12">Labels X1+, X3-, X5- → §C.6</text>
+<rect x="410" y="28" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="46" text-anchor="middle" fill="#1a5276">⑥ Build H(k) via Wolfsberg–Helmholz</text><text x="565" y="62" text-anchor="middle" fill="#566573" font-size="12">Extended Hückel approx., K = 1.75 → §C.7</text>
+<rect x="410" y="82" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="100" text-anchor="middle" fill="#1a5276">⑦ Solve generalized eigenvalue problem</text><text x="565" y="116" text-anchor="middle" fill="#566573" font-size="12">Eigenvalues ε of S take the lead → §C.8–C.10</text>
+<rect x="410" y="136" width="310" height="40" rx="6" fill="#fdf3e6" stroke="#b9770e"/><text x="565" y="154" text-anchor="middle" fill="#b03a2e">ε &lt; 0.2 modes: Löwdin 1st-order recovery</text><text x="565" y="170" text-anchor="middle" fill="#566573" font-size="12">Estimated levels marked ~ → §C.9, C.10</text>
+<rect x="410" y="190" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="208" text-anchor="middle" fill="#1a5276">⑧ Fill in the electrons (aufbau)</text><text x="565" y="224" text-anchor="middle" fill="#566573" font-size="12">Determine HOMO / LUMO → §C.11</text>
+<rect x="410" y="244" width="310" height="40" rx="6" fill="#ffffff" stroke="#14684a"/><text x="565" y="262" text-anchor="middle" fill="#1a5276">⑨ Judge bonding by COOP (blue/black/red)</text><text x="565" y="278" text-anchor="middle" fill="#566573" font-size="12">Sign of 2 Re c<tspan dy="3.6" font-size="8.64">L</tspan><tspan dy="-8.16" font-size="8.64">†</tspan><tspan dy="4.56">S c</tspan><tspan dy="3.6" font-size="8.64">R</tspan><tspan dy="-3.6"> → §C.12</tspan></text>
+<rect x="235" y="310" width="310" height="44" rx="6" fill="#e8f0f8" stroke="#1a5276" stroke-width="1.8"/><text x="390" y="329" text-anchor="middle" fill="#1a5276" font-weight="bold" font-size="12.5">⑩ Terminal level table + interactive HTML</text><text x="390" y="340" text-anchor="middle" fill="#566573" font-size="10">k-point buttons, correlation lines,<tspan x="390" dy="10.5">wave function sketches → §C.13</tspan></text>
+<line x1="215" y1="68" x2="215" y2="82" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="215" y1="122" x2="215" y2="136" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="215" y1="176" x2="215" y2="190" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="215" y1="230" x2="215" y2="244" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<path d="M 370 264 C 395 264 395 48 408 48" fill="none" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="68" x2="565" y2="82" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="122" x2="565" y2="136" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="176" x2="565" y2="190" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<line x1="565" y1="230" x2="565" y2="244" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+<path d="M 565 284 C 565 300 480 300 465 310" fill="none" stroke="#566573" stroke-width="1.5" marker-end="url(#arf)"/>
+</g>
+</svg>
+<figcaption>Figure C.1: The flow of processing in <code>crystod --diagram</code>. The region around the “eigenvalue $\varepsilon$ of the overlap matrix” in steps ⑦–⑧ (the orange box) is the climax of this appendix.</figcaption>
+</figure>
+
+<div class="box note">
+<p class="box-title">Supplement: This figure is not a “first-principles calculation”</p>
+<p>The COD energies do not come from a self-consistent calculation like the PySCF calculations used in Chapter 10; they are semiempirical values that come out of <strong>symmetry + exact overlap integrals + empirical parameters (the extended Hückel method)</strong>. The aim is not to produce accurate eigenvalues but to draw the <strong>skeleton of the chemical bonding</strong>—“which orbitals mix, under which symmetry, and in which direction”—in the same style as a hand-drawn diagram, yet without leaving anything out. If quantitative results are needed, CrystOD also provides a <code>--pyscf</code> mode that draws the same diagram using periodic-system DFT in PySCF, but this appendix does not cover it.</p>
+</div>
+
+<h2 id="secC-2">C.2 Step 1: Reading the Crystal Structure — The Primitive Cell and the Space Group</h2>
+
+<p>The input file <code>POSCAR_AlN_Fm-3m</code> is a structure file in VASP format; a cube (the conventional unit cell) of edge $a = 4.044$ Å contains 4 Al atoms and 4 N atoms, 8 atoms in total. When we run the program, it first prints the following.</p>
+
+<pre><code> ### Inputed cell was converted into primitive cell. ###
+
+ * Space group *
+ Fm-3m (225)
+</code></pre>
+
+<p>The rock-salt structure is a face-centered cubic (fcc) lattice, so once translational symmetry is taken into account, there is only one independent Al atom and one independent N atom. CrystOD detects the symmetry with spglib and converts the 8-atom conventional cell into a <strong>2-atom primitive cell</strong> before computing. The primitive translation vectors are</p>
+
+$$
+\bm{a}_1=\frac{a}{2}(0,1,1),\quad
+\bm{a}_2=\frac{a}{2}(1,0,1),\quad
+\bm{a}_3=\frac{a}{2}(1,1,0)
+$$
+
+<p>with Al at the origin and N at $(\bm{a}_1+\bm{a}_2+\bm{a}_3)/2$. Let us note two distances that will matter later.</p>
+
+<ul>
+  <li><strong>Al–N nearest-neighbor distance</strong>: $a/2 = 2.022$ Å (6-coordinate octahedron)</li>
+  <li><strong>Al–Al nearest-neighbor distance</strong>: $a/\sqrt{2} = 2.860$ Å, coordination number <strong>12</strong> (fcc sublattice)</li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 780 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The (001) plane of rock-salt AlN. Al and N atoms are arranged in a checkerboard pattern, and the Al-N distance of 2.022 Å and the Al-Al distance of 2.860 Å are indicated">
+<rect x="10" y="10" width="760" height="320" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif">
+<text x="390" y="38" text-anchor="middle" font-size="14" fill="#14684a">(001) plane of rock-salt AlN (conventional-cell edge a = 4.044 Å)</text>
+<!-- 5x5 checkerboard, spacing 55 px = a/2 -->
+<g>
+<!-- Al: filled steel blue, N: filled orange-red -->
+<!-- row y=90..310 x=170..390 -->
+<circle cx="170" cy="90" r="13" fill="#1a5276"/><circle cx="280" cy="90" r="13" fill="#1a5276"/><circle cx="390" cy="90" r="13" fill="#1a5276"/>
+<circle cx="225" cy="90" r="10" fill="#b03a2e"/><circle cx="335" cy="90" r="10" fill="#b03a2e"/>
+<circle cx="225" cy="145" r="13" fill="#1a5276"/><circle cx="335" cy="145" r="13" fill="#1a5276"/>
+<circle cx="170" cy="145" r="10" fill="#b03a2e"/><circle cx="280" cy="145" r="10" fill="#b03a2e"/><circle cx="390" cy="145" r="10" fill="#b03a2e"/>
+<circle cx="170" cy="200" r="13" fill="#1a5276"/><circle cx="280" cy="200" r="13" fill="#1a5276"/><circle cx="390" cy="200" r="13" fill="#1a5276"/>
+<circle cx="225" cy="200" r="10" fill="#b03a2e"/><circle cx="335" cy="200" r="10" fill="#b03a2e"/>
+<circle cx="225" cy="255" r="13" fill="#1a5276"/><circle cx="335" cy="255" r="13" fill="#1a5276"/>
+<circle cx="170" cy="255" r="10" fill="#b03a2e"/><circle cx="280" cy="255" r="10" fill="#b03a2e"/><circle cx="390" cy="255" r="10" fill="#b03a2e"/>
+<circle cx="170" cy="310" r="13" fill="#1a5276"/><circle cx="280" cy="310" r="13" fill="#1a5276"/><circle cx="390" cy="310" r="13" fill="#1a5276"/>
+<circle cx="225" cy="310" r="10" fill="#b03a2e"/><circle cx="335" cy="310" r="10" fill="#b03a2e"/>
+</g>
+<!-- distance annotations -->
+<line x1="280" y1="200" x2="335" y2="200" stroke="#14684a" stroke-width="2"/>
+<text x="307" y="233" text-anchor="middle" font-size="12.5" fill="#14684a">a/2 = 2.022 Å</text>
+<line x1="280" y1="200" x2="335" y2="145" stroke="#b9770e" stroke-width="2" stroke-dasharray="5 3"/>
+<text x="331" y="177" font-size="12.5" fill="#b9770e">2.860 Å</text>
+<text x="150" y="90" text-anchor="end" font-size="13" fill="#1a5276">Al</text>
+<text x="150" y="149" text-anchor="end" font-size="13" fill="#b03a2e">N</text>
+<!-- legend right -->
+<g font-size="13.5">
+<text x="460" y="100" fill="#1a5276">● Al sublattice: itself an fcc lattice.</text>
+<text x="475" y="122" fill="#566573" font-size="12.5">12 Al–Al nearest neighbors at 2.860 Å.</text>
+<text x="475" y="142" fill="#566573" font-size="12.5">This “density” foreshadows §C.9.</text>
+<text x="460" y="180" fill="#b03a2e">● N sublattice: also an fcc lattice.</text>
+<text x="475" y="202" fill="#566573" font-size="12.5">Overlaps the Al sublattice, offset by a/2.</text>
+<text x="460" y="240" fill="#14684a" font-size="11">Solid: Al–N nearest neighbor (6-coord. octahedron)</text>
+<text x="460" y="262" fill="#b9770e" font-size="11">Dashed: Al–Al nearest neighbor (face diagonal)</text>
+</g>
+</g>
+</svg>
+<figcaption>Figure C.2: The (001) cross section of rock-salt AlN. The rock-salt structure can be regarded as an “fcc Al sublattice” and an “fcc N sublattice” stacked with a relative shift of half a lattice constant. COD views the crystal precisely along this decomposition into two sublattices.</figcaption>
+</figure>
+
+<div class="box phys">
+<p class="box-title">Physical Insight: Why reduce to the primitive cell?</p>
+<p>Bloch's theorem (§C.5) is a theorem about the “primitive translations,” so if the calculation is done in the conventional cell, the same bands appear folded and duplicated four times. In the primitive cell there is just one independent Al atom and one independent N atom, the number of basis functions is minimal, and the diagram is easiest to read. The first line of the output, “converted into primitive cell,” announces this conversion.</p>
+</div>
+
+<h2 id="secC-3">C.3 Step 2: Splitting the Crystal into Two Sublattices — Basis Functions and VSIPs</h2>
+
+<h3>C.3.1 --co-left and --co-right</h3>
+
+<p>The option <code>--co-left Al --co-right N</code> specifies that “the left column of the diagram is the Al sublattice and the right column is the N sublattice.” The rule is that every atom in the chemical formula is assigned to either the left or the right; for SrTiO$_3$, several elements can also be grouped together, as in <code>--co-left SrTi --co-right O3</code>.</p>
+
+<p>The terminal prints the following.</p>
+
+<pre><code> * Fragments (full-electron basis: core + valence shells; ...) *
+ left  Al : Al 1s 2s 2p 3s 3p x1 site(s), 13 electrons
+ right N  : N 1s 2s 2p x1 site(s), 7 electrons
+ electrons per cell in the diagram: 20
+</code></pre>
+
+<p>Please note the term <strong>full-electron basis</strong>. Not only the valence 3s and 3p shells but all shells, including core shells such as 1s and 2p, are included in the basis. Core shells hardly hybridize, but by appearing in the level diagram as “flat lines that stay fixed at deep energies,” they serve as markers of the absolute energy scale (corresponding to the core levels of XPS). The number of electrons is the sum over the neutral atoms, $13+7=20$ per primitive cell.</p>
+
+<h3>C.3.2 Basis functions: Slater-type orbitals and VSIPs</h3>
+
+<p>For the radial function of each shell we use the <em class="term">Slater-type orbital</em> (STO) $R(r)\propto r^{n-1}e^{-\zeta r}$ introduced in Chapter 5. We then assign to each shell an “energy within the atom,” the <em class="term">VSIP</em> (valence state ionization potential) $h$. These are empirical values determined from spectroscopic data and the like, taken as they are from the traditional parameter table of the extended Hückel method (the table of YAeHMOP). The values used for AlN are listed in Table C.1.</p>
+
+<div class="tablewrap">
+<table>
+<caption>Table C.1: Basis functions for AlN. $h$ is the VSIP (on-site energy) and $\zeta$ is the orbital exponent of the STO. The core $h$ values are archived values from atomic Hartree–Fock calculations for each element (in the same style as PySCF in Chapter 10), and $\zeta$ follows Slater's rules.</caption>
+<thead><tr><th>Shell</th><th>$h$ (eV)</th><th>$\zeta$ (bohr$^{-1}$)</th><th>Number of electrons</th><th>Role</th></tr></thead>
+<tbody>
+<tr><td>Al 1s</td><td>$-1590.98$</td><td>12.70</td><td>2</td><td>Core (fixed marker)</td></tr>
+<tr><td>Al 2s</td><td>$-133.35$</td><td>4.43</td><td>2</td><td>Core</td></tr>
+<tr><td>Al 2p</td><td>$-87.38$</td><td>4.43</td><td>6</td><td>Core</td></tr>
+<tr><td><strong>Al 3s</strong></td><td>$-12.30$</td><td><strong>1.167</strong></td><td>2</td><td>Valence. Small $\zeta$ = spread out</td></tr>
+<tr><td><strong>Al 3p</strong></td><td>$-6.50$</td><td><strong>1.167</strong></td><td>1</td><td>Valence</td></tr>
+<tr><td>N 1s</td><td>$-425.05$</td><td>6.70</td><td>2</td><td>Core</td></tr>
+<tr><td>N 2s</td><td>$-26.00$</td><td>1.95</td><td>2</td><td>Valence</td></tr>
+<tr><td>N 2p</td><td>$-13.40$</td><td>1.95</td><td>3</td><td>Valence</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Note the relative sizes of $\zeta$</p>
+<p>The Al valence shell ($\zeta = 1.167$) is much more spread out than the N valence shell ($\zeta = 1.95$). As we saw in Chapter 2, the valence orbitals of an electropositive metal atom are greatly expanded. Meanwhile, the Al sublattice has as many as 12 neighbors at the short distance of 2.860 Å (Figure C.2). “Spread-out orbitals × a dense lattice”—this combination is the main cause of the overlap catastrophe discussed in §C.9, so please keep it in the back of your mind here.</p>
+</div>
+
+<h2 id="secC-4">C.4 Step 3: The Removed Side Becomes Point Charges — The Ligand Field</h2>
+
+<p>When we compute “the electronic states of the Al sublattice alone,” may we simply erase the N atoms? No. As we learned in Chapters 13 and 14, in an ionic crystal the electrostatic field produced by the surrounding ions (the Madelung field) pushes the levels at each site strongly up or down. This is the same effect by which, in NaCl, the Cl$^-$-3p level is raised and the Na$^+$-3s level is lowered.</p>
+
+<p>CrystOD therefore replaces the removed sublattice with a <strong>lattice of point charges carrying the formal oxidation states</strong>.</p>
+
+<pre><code> * Ligand-field point charges (removed sublattice) *
+ left  Al feels the N^-3 lattice (multipole ligand field + penetration; ...)
+ right N  feels the Al^+3 lattice (...)
+</code></pre>
+
+<p>The oxidation states (Al$^{+3}$ and N$^{-3}$ for AlN) are left to the estimate made by pymatgen, and can also be overridden with <code>--oxidation Al=+3 N=-3</code>. The field of the point charges is incorporated as exact matrix elements with the STOs, so that for s orbitals it gives a uniform shift of the level, and for d orbitals it correctly reproduces even the crystal-field splitting ($t_{2g}$–$e_g$ splitting) that we learned about in Chapter 12. In AlN, the valence shell of the Al site is pushed down by about $-4.6$ eV by this field, and, for example, the on-site energy of Al 3s becomes</p>
+
+$$
+\hb_{3s} = \underbrace{-12.30}_{\text{VSIP}} \underbrace{-4.58}_{\text{ligand field}} = -16.88\ \text{eV}
+$$
+
+<p>From here on, we write this “on-site energy including the ligand field” as $\hb$ (read “h-bar”).</p>
+
+<div class="box note">
+<p class="box-title">Supplement: The Madelung monopole term is deliberately omitted</p>
+<p>Of the electrostatic potential of the point-charge lattice, the spherically symmetric monopole (Madelung) component amounts to as much as $\mp 11.64$ eV in AlN, but CrystOD <strong>omits</strong> it from the display (this is explicitly stated on the terminal as “jellium-referenced monopole ... omitted”). This term largely cancels against the energy of the hypothetical process of charging the ions to $\pm 3$; since the empirical parameter VSIP does not include the latter, the judgment is that omitting both makes for a well-balanced design. If you are interested, compare this with the discussion of the Madelung energy in Chapter 13.</p>
+</div>
+
+<h2 id="secC-5">C.5 Step 4: The Bloch Sum — The “$N$-Atom Version” of a Diatomic Molecule</h2>
+
+<h3>C.5.1 Starting with a review of the diatomic molecule</h3>
+
+<p>In Chapter 11, from two 1s orbitals $\phi_A,\phi_B$ we derived the bonding and antibonding orbitals</p>
+
+$$
+\psi_\pm=\frac{\phi_A\pm\phi_B}{\sqrt{2(1\pm S)}},\qquad
+\varepsilon_\pm=\frac{\alpha\pm\beta}{1\pm S}
+$$
+
+<p>There were two coefficient patterns, $(+,+)$ and $(+,-)$. As the number of atoms increases to three, four, and so on, the number of independent sign patterns also increases to three, four, and so on. What happens, then, in a crystal in which $N\to\infty$ atoms are arranged at equal spacings? The answer is the <em class="term">Bloch sum</em>.</p>
+
+<div class="box def">
+<p class="box-title">Definition: Bloch sum (symmetrized orbitals of a crystal)</p>
+<p>Let $\phi(\rr-\RR)$ be the atomic orbital located at the lattice vector $\RR$. The Bloch sum of wavenumber $\kk$ is defined by</p>
+$$
+\chi_{\kk}(\rr)=\frac{1}{\sqrt{N}}\sum_{\RR} e^{i\kk\cdot\RR}\,\phi(\rr-\RR)
+$$
+<p>The coefficient $e^{i\kk\cdot\RR}$ is a phase factor of absolute value 1, and $\kk$ serves as a continuous label specifying the “sign pattern between neighbors.” The case $\kk=0$ (the $\Gamma$ point) corresponds to all atoms having the same sign, $(+,+,+,\dots)$, and the Brillouin zone boundary corresponds to the alternating pattern in which neighbors have opposite signs, $(+,-,+,-,\dots)$. Thanks to translational symmetry, <strong>Bloch sums with different $\kk$ never mix with one another</strong>. For this reason, a level diagram can be drawn independently for each $\kk$.</p>
+</div>
+
+<p>In other words, the Bloch sum is nothing other than a generalization of the $\pm$ combinations of a diatomic molecule. $\psi_+$ is the prototype of the $\Gamma$ point, and $\psi_-$ is the prototype of the zone boundary. The $\kk$ points for which CrystOD draws diagrams are the following four <strong>special $\kk$ points</strong> of the space group Fm-3m: $\Gamma\,(0,0,0)$, $L\,(\tfrac12,\tfrac12,\tfrac12)$, $X\,(\tfrac12,0,\tfrac12)$, and $W\,(\tfrac12,\tfrac14,\tfrac34)$ (the coordinates are in the basis of the primitive reciprocal lattice).</p>
+
+<h3>C.5.2 The overlap matrix $S(\kk)$ — the diagonal is no longer 1!</h3>
+
+<p>The overlap matrix $S(\kk)$ is the array of overlap integrals between Bloch sums. For basis functions $i,j$ (for example, $i=$ Al 3s and $j=$ N 2p$_z$),</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+S_{ij}(\kk)=\sum_{\RR} e^{i\kk\cdot(\RR+\bm{\tau}_j-\bm{\tau}_i)}\,
+s_{ij}(\RR)
+\label{eq:S-bloch}
+\end{equation}
+$$
+</div>
+
+<p>Here $s_{ij}(\RR)$ is the ordinary two-center overlap integral between “orbital $i$ in the origin cell and orbital $j$ in the cell displaced by $\RR$,” the s/p version of what we calculated by hand in Chapter 5 (CrystOD sums this exactly for STOs, out to distant cells until convergence).</p>
+
+<p>Here we state a fact that every undergraduate is surprised by at least once. <strong>The diagonal element $S_{ii}(\kk)$ for the same orbital does not equal 1.</strong> The reason is that the overlaps with the “same Al 3s” in the neighboring cells are added in with phases:</p>
+
+$$
+S_{ii}(\kk)=1+\underbrace{\sum_{\RR\neq 0}e^{i\kk\cdot\RR}\,s_{ii}(\RR)}_{\displaystyle \equiv\ \sigma(\kk)}
+$$
+
+<p>This $\sigma(\kk)$ (the phased sum of the overlaps of the same orbital in neighboring cells) is the most important quantity in this appendix. Let us measure it for the Al 3s of AlN. The contribution of each shell is shown in Table C.2.</p>
+
+<div class="tablewrap">
+<table>
+<caption>Table C.2: Shell decomposition of the diagonal overlap $S_{ii}(\kk)=1+\sigma(\kk)$ of the Al 3s Bloch sum (internal CrystOD quantities, measured). $s$ is the Al 3s–3s overlap integral for one pair, and the “phase sum” is the value of $\sum e^{i\kk\cdot\RR}$ summed within that shell.</caption>
+<thead><tr><th>Neighbor shell</th><th>Distance (Å)</th><th>Count</th><th>$s_{3s,3s}$</th><th colspan="2">$\Gamma$ point</th><th colspan="2">X point</th></tr></thead>
+<tbody>
+<tr><td></td><td></td><td></td><td></td><td>Phase sum</td><td>Contribution</td><td>Phase sum</td><td>Contribution</td></tr>
+<tr><td>1st (face diagonal)</td><td>2.860</td><td>12</td><td>0.339</td><td>$+12$</td><td>$+4.07$</td><td>$-4$</td><td>$-1.36$</td></tr>
+<tr><td>2nd (edge direction)</td><td>4.044</td><td>6</td><td>0.118</td><td>$+6$</td><td>$+0.71$</td><td>$+6$</td><td>$+0.71$</td></tr>
+<tr><td>3rd</td><td>4.953</td><td>24</td><td>0.043</td><td>$+24$</td><td>$+1.03$</td><td>$-8$</td><td>$-0.34$</td></tr>
+<tr><td>4th</td><td>5.720</td><td>12</td><td>0.017</td><td>$+12$</td><td>$+0.20$</td><td>$+12$</td><td>$+0.20$</td></tr>
+<tr><td colspan="4"><strong>Total (including distant shells)</strong></td><td></td><td>$S_{ii}=7.27$</td><td></td><td>$S_{ii}=0.158$</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>These numbers are astonishing. At the $\Gamma$ point, the 12 neighbors all add up in phase, and the “norm” of a single Al 3s swells to $7.27$ times its original value. At the X point, by contrast, of the 12 nearest neighbors <strong>4 are in phase ($+1$) and 8 are out of phase ($-1$)</strong>, so they cancel violently and the diagonal element shrinks to $S_{ii}=0.158$, that is, $\sigma=-0.84$ (Figure C.3).</p>
+
+<figure>
+<svg viewBox="0 0 780 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Phase patterns of the Al 3s Bloch sum at the Γ point and the X point. At Γ all 12 neighbors are in phase; at X, 4 are in phase and 8 are out of phase">
+<rect x="10" y="10" width="760" height="310" rx="10" fill="#eaf5f0" stroke="#14684a" stroke-width="1.5"/>
+<g font-family="sans-serif" font-size="13">
+<text x="200" y="40" text-anchor="middle" font-size="14" fill="#14684a">Γ point: all 12 neighbors in phase</text>
+<text x="580" y="40" text-anchor="middle" font-size="14" fill="#14684a">X point: 4 in phase, 8 out of phase</text>
+<!-- Gamma panel: central atom + ring of 12 (schematic, drawn as 12 around) -->
+<g>
+<circle cx="200" cy="170" r="16" fill="#1a5276"/><text x="200" y="175" text-anchor="middle" fill="#ffffff" font-size="12">+</text>
+<!-- 12 neighbours -->
+<g fill="#5b8db8">
+<circle cx="200" cy="90" r="12"/><circle cx="240" cy="101" r="12"/><circle cx="269" cy="130" r="12"/><circle cx="280" cy="170" r="12"/><circle cx="269" cy="210" r="12"/><circle cx="240" cy="239" r="12"/><circle cx="200" cy="250" r="12"/><circle cx="160" cy="239" r="12"/><circle cx="131" cy="210" r="12"/><circle cx="120" cy="170" r="12"/><circle cx="131" cy="130" r="12"/><circle cx="160" cy="101" r="12"/>
+</g>
+<g fill="#ffffff" font-size="11" text-anchor="middle">
+<text x="200" y="94">+</text><text x="240" y="105">+</text><text x="269" y="134">+</text><text x="280" y="174">+</text><text x="269" y="214">+</text><text x="240" y="243">+</text><text x="200" y="254">+</text><text x="160" y="243">+</text><text x="131" y="214">+</text><text x="120" y="174">+</text><text x="131" y="134">+</text><text x="160" y="105">+</text>
+</g>
+<text x="200" y="290" text-anchor="middle" fill="#566573" font-size="11.5">phase sum +12 → S<tspan font-size="10" dy="3">ii</tspan><tspan dy="-3"> = 1 + σ = 7.27 (expanded)</tspan></text>
+</g>
+<!-- X panel -->
+<g>
+<circle cx="580" cy="170" r="16" fill="#1a5276"/><text x="580" y="175" text-anchor="middle" fill="#ffffff" font-size="12">+</text>
+<!-- 4 in-phase: the four neighbours perpendicular to the X direction -->
+<g fill="#5b8db8">
+<circle cx="580" cy="90" r="12"/><circle cx="660" cy="170" r="12"/><circle cx="580" cy="250" r="12"/><circle cx="500" cy="170" r="12"/>
+</g>
+<g fill="#ffffff" font-size="11" text-anchor="middle">
+<text x="580" y="94">+</text><text x="660" y="174">+</text><text x="580" y="254">+</text><text x="500" y="174">+</text>
+</g>
+<!-- 8 out-of-phase -->
+<g fill="#c0604d">
+<circle cx="637" cy="113" r="12"/><circle cx="637" cy="227" r="12"/><circle cx="523" cy="227" r="12"/><circle cx="523" cy="113" r="12"/>
+<circle cx="617" cy="76" r="12"/><circle cx="680" cy="230" r="12"/><circle cx="543" cy="264" r="12"/><circle cx="480" cy="110" r="12"/>
+</g>
+<g fill="#ffffff" font-size="11" text-anchor="middle">
+<text x="637" y="117">−</text><text x="637" y="231">−</text><text x="523" y="231">−</text><text x="523" y="117">−</text>
+<text x="617" y="80">−</text><text x="680" y="234">−</text><text x="543" y="268">−</text><text x="480" y="114">−</text>
+</g>
+<text x="580" y="290" text-anchor="middle" fill="#566573" font-size="11.5">phase sum 4 − 8 = −4 → S<tspan font-size="10" dy="3">ii</tspan><tspan dy="-3"> = 1 + σ = 0.158 (contracted!)</tspan></text>
+</g>
+<text x="390" y="315" text-anchor="middle" fill="#14684a" font-size="12.5">Only the 4 neighbors in the plane perpendicular to the X-point wave vector survive in phase</text>
+</g>
+</svg>
+<figcaption>Figure C.3: Phase pattern of the 3s Bloch sum on the Al (fcc) sublattice (schematic diagram). At the X point, the 8 neighbors with a component along the wave-vector direction are out of phase, so the lattice sum of the overlaps is nearly canceled.</figcaption>
+</figure>
+
+<div class="box why">
+<p class="box-title">Why? What does it mean for $S_{ii}$ to be small?</p>
+<p>It is easy to understand by considering a diatomic molecule. The norm of the antibonding combination $\phi_A-\phi_B$ is $2(1-S)$, which approaches zero in the limit $S\to 1$ (the two orbitals have almost the same shape). A norm close to zero means that <strong>for that sign pattern, the summed orbitals almost cancel one another and no “substance” remains</strong>. The Al 3s at the X point is in exactly this situation, and the number $S_{ii}=0.158$ means that “when the spread-out 3s orbitals are superposed with alternating $+,-$ signs, 84% of the wave function vanishes.” The small remaining component is amplified by a factor of $1/\sqrt{0.158}$ in the normalization—and therein lies the seed of the trouble in §C.9.</p>
+</div>
+
+<h2 id="secC-6">C.6 Step 5: Symmetry Labels — What Is X1+?</h2>
+
+<p>In Chapter 12 we classified molecular orbitals by the irreducible representations of the point group ($A_1$, $T_2$, and so on). In a crystal, at each $\kk$ point we take the set of symmetry operations that leave that $\kk$ invariant, the <em class="term">little group</em>, and classify the Bloch sums by its irreducible representations. A label is written as the name of the $\kk$ point, a serial number, and a parity; at the X point the labels look like X1+, X3-, and X5- (CrystOD uses the ISOTROPY (Miller–Love) notation; +/− denotes even/odd parity under inversion symmetry).</p>
+
+<p>The role is exactly the same as for molecules: the labels give the <strong>selection rule for hybridization</strong>:</p>
+
+<div class="box thm">
+<p class="box-title">Basic Rule of COD (A Consequence of the Great Orthogonality Theorem of Chapter 12)</p>
+<p>Only Bloch sums that belong to the <strong>same irreducible representation</strong> at the same $\kk$ point mix, and they form bonding and antibonding crystal orbitals. If the irreducible representations differ, both the overlap integral and the Hamiltonian matrix element are exactly zero, and a state with no partner remains <strong>exactly nonbonding</strong>.</p>
+</div>
+
+<p>Sorting out which irreducible representation each shell falls into at the X point of AlN gives Table C.3. This is a “seating chart” determined by group theory alone, and it is fixed before any energy is computed.</p>
+
+<div class="tablewrap">
+<table>
+<caption>Table C.3: Decomposition of the AlN basis into irreducible representations at the X point $(\tfrac12,0,\tfrac12)$ (the little group is equivalent to $D_{4h}$). Only states listed in the same row can hybridize with one another.</caption>
+<thead><tr><th>Irreducible representation</th><th>Dimension</th><th>Al-side basis</th><th>N-side basis</th><th>Number of crystal orbitals formed</th></tr></thead>
+<tbody>
+<tr><td><strong>X1+</strong></td><td>1</td><td>Al 1s, Al 2s, <strong>Al 3s</strong></td><td>N 1s, N 2s</td><td>5 (#1–#5)</td></tr>
+<tr><td><strong>X3-</strong></td><td>1</td><td>Al 2p$_\parallel$, Al 3p$_\parallel$</td><td>N 2p$_\parallel$</td><td>3 (#1–#3)</td></tr>
+<tr><td><strong>X5-</strong></td><td>2</td><td>Al 2p$_\perp$, Al 3p$_\perp$</td><td>N 2p$_\perp$</td><td>3 sets (each twofold degenerate)</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Now look back at the terminal output in §C.1. In the crystal column there are indeed five X1+ levels, from #1 to #5. Since <strong>an s orbital always falls into X1+</strong>, group theory alone predicts that “an X1+ level derived from Al 3s must exist at the X point”—and this is also the detection principle for the actual bug (now fixed) that motivated the writing of this appendix (see the sidebar at the end of §C.10).</p>
+
+<h2 id="secC-7">C.7 Step 6: Building the Hamiltonian with the Extended Hückel Method</h2>
+
+<p>Next comes the Hamiltonian matrix $H(\kk)$. In the notation of Chapter 11, the diagonal elements correspond to the Coulomb integral $\alpha$ and the off-diagonal elements to the resonance integral $\beta$. The EHT engine of CrystOD follows the prescription of the <em class="term">extended Hückel method</em> (EHT; Hoffmann, 1963):</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+H_{ij}(\kk)=K\,S_{ij}(\kk)\,\frac{\hb_i+\hb_j}{2},
+\qquad K=1.75
+\label{eq:WH}
+\end{equation}
+$$
+</div>
+
+<p>This is the <em class="term">Wolfsberg–Helmholz approximation</em>. In words:</p>
+
+<ul>
+<li><strong>The resonance integral is proportional to the overlap integral.</strong> The more strongly a pair of orbitals overlaps, the more strongly they interact—this is the formalization of the fact, seen in Chapter 11, that $\beta$ and $S$ have the same sign and move together.</li>
+<li>The proportionality coefficient is the average of the on-site energies of the two orbitals, $(\hb_i+\hb_j)/2$, multiplied by the constant $K=1.75$. $K$ is an empirical constant chosen to reproduce measurements on molecules, and it has been in use for 60 years.</li>
+<li>The diagonal elements are basically $\hb_i$, but as we saw in Eq. \eqref{eq:S-bloch}, $S_{ii}(\kk)$ itself contains the contribution $\sigma$ from neighboring cells, so a term of the form $K\hb_i\sigma$ is also added on the diagonal. That is, $H_{ii}=\hb_i\,(1+K\sigma_i(\kk))$.</li>
+</ul>
+
+<p>To summarize, in an idealized model with only one kind of orbital, one per cell (an fcc lattice of Al 3s alone), the expectation values at the $\kk$ point are</p>
+
+$$
+\braket{\chi_\kk|\hat H|\chi_\kk} = \hb\,(1+K\sigma(\kk)),\qquad
+\braket{\chi_\kk|\chi_\kk} = 1+\sigma(\kk)
+$$
+
+<p>Normalizing and dividing gives the expression for the band energy:</p>
+
+<div class="keyeq">
+$$
+\begin{equation}
+E(\kk)=\frac{\hb\,(1+K\sigma)}{1+\sigma}
+=\hb\left(K+\frac{1-K}{\varepsilon}\right),
+\qquad \varepsilon\equiv 1+\sigma
+\label{eq:band}
+\end{equation}
+$$
+</div>
+
+<p>The right-hand side is rearranged into a function of $\varepsilon=1+\sigma$ alone (= the eigenvalue of the overlap matrix for that sign pattern). This single equation governs everything from §C.8 onward.</p>
+
+<div class="box phys">
+<p class="box-title">Physical Insight: Eq. \eqref{eq:band} is $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ itself</p>
+<p>For a diatomic molecule, setting $\beta=K S\alpha$ (Wolfsberg–Helmholz) gives $\varepsilon_\pm=\alpha(1\pm KS)/(1\pm S)$. Writing $\varepsilon=1\pm S$ here, this agrees exactly with Eq. \eqref{eq:band}. In other words, Eq. \eqref{eq:band} carries the two-level result of Chapter 11 over to the crystal, the only difference being that the sign pattern is now specified continuously by $\kk$. If $\sigma&gt;0$ (an in-phase pattern like that at the $\Gamma$ point), the state is bonding and $E$ falls below $\hb$; if $\sigma&lt;0$ (an alternating pattern like that at the zone boundary), the state is antibonding and the energy rises.</p>
+</div>
+
+<h2 id="secC-8">C.8 Step 7: Solving the Secular Equation — The Eigenvalues of the Overlap Matrix Take the Lead</h2>
+
+<h3>C.8.1 The generalized eigenvalue problem</h3>
+
+<p>In practice, several shells coexist in each irreducible-representation sector (X1+ contains five: Al 1s, 2s, 3s and N 1s, 2s), so what we must solve is a system of simultaneous equations of the same form as in Chapter 11, namely the <em class="term">generalized eigenvalue problem</em></p>
+
+$$
+H(\kk)\,\bm{c} = E\, S(\kk)\,\bm{c}
+$$
+
+<p>In Chapter 11 we expanded the $2\times2$ determinant (the secular determinant) and solved it, but when the matrix is large the standard approach is <em class="term">canonical orthogonalization</em>:</p>
+
+<div class="box derive">
+<p class="box-title">Derivation: Canonical orthogonalization</p>
+<p>First solve the eigenvalue problem for the overlap matrix alone, $S\bm{v}_m=\varepsilon_m\bm{v}_m$. Since $S$ is Hermitian, the eigenvalues $\varepsilon_m$ are real and the eigenvectors $\bm{v}_m$ are orthogonal. Next, divide each eigenvector by $\sqrt{\varepsilon_m}$ to form a new basis $\bm{x}_m=\bm{v}_m/\sqrt{\varepsilon_m}$; in this basis the overlap matrix becomes the identity matrix ($\bm{x}_m^\dagger S \bm{x}_n=\delta_{mn}$). All that remains is to re-express the Hamiltonian in this orthogonal basis ($\tilde H_{mn}=\bm{x}_m^\dagger H\bm{x}_n$) and solve it as an ordinary eigenvalue problem.</p>
+<p>Let us verify this for a diatomic molecule. The eigenvectors of $S=\begin{pmatrix}1&amp;S\\ S&amp;1\end{pmatrix}$ are $(1,1)/\sqrt2$ and $(1,-1)/\sqrt2$, and the eigenvalues are $\varepsilon_\pm=1\pm S$. That is, <strong>the sign patterns of bonding and antibonding are the eigenvectors of $S$, and the denominator $1\pm S$ of $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ was the eigenvalue of $S$</strong>. This viewpoint, which we did not state explicitly in Chapter 11, takes the leading role as it stands in the crystal.</p>
+</div>
+
+<p>At the X point of AlN, the measured eigenvalues of the overlap matrix of the Al sublattice (left column) are as follows:</p>
+
+$$
+\{\varepsilon_m\} = \{\,\underbrace{0.147}_{\text{mainly Al 3s}},\ \underbrace{0.316,\ 0.316}_{\text{Al 3p}_\perp},\ 0.994,\ 1.000,\ \dots,\ 1.949\,\}
+$$
+
+<p>The values close to 1 belong to the core shells (they do not overlap with their neighbors, so $\sigma\approx0$), and the values far from 1 are the Bloch sums of the valence shells. The smallest one, $\varepsilon=0.147$—the alternating pattern of Al 3s for which “84% was wiped out” in §C.5—is the troublemaker.</p>
+<h2 id="secC-9">C.9 Overlap Catastrophe — Divergent Antibonding Orbitals</h2>
+
+<h3>C.9.1 Paying off the foreshadowing from Chapter 11</h3>
+
+<p>In Chapter 11, §11.7, we learned that the amount by which the antibonding orbital rises is larger than the amount by which the bonding orbital falls (the ratio is $(1+S)/(1-S)$). For $S=0.5$ this is a factor of 3, and for $S=0.8$ a factor of 9. What happens, then, as $S\to 1$? The amount of the rise <strong>diverges to infinity</strong>. This is because the denominator $1-S$, that is, the eigenvalue $\varepsilon$ of the overlap matrix, collapses to zero.</p>
+
+<p>Let us see this quantitatively using Eq. \eqref{eq:band}. In the limit $\varepsilon\to 0^+$,</p>
+
+$$
+E=\hb\left(K+\frac{1-K}{\varepsilon}\right)
+\ \xrightarrow{\ \varepsilon\to 0^+\ }\
+\frac{(1-K)\,\hb}{\varepsilon}\to +\infty
+$$
+
+<p>(since $\hb&lt;0$ and $K=1.75&gt;1$, we have $(1-K)\hb&gt;0$). This is the notorious chronic ailment of the extended Hückel method, the <em class="term">overlap catastrophe</em>. For a sign pattern that has almost entirely lost its physical substance, the design of the Wolfsberg–Helmholz approximation, “$\beta\propto S$,” and the normalization factor $1/\varepsilon$ compound each other and assign it a meaninglessly huge energy.</p>
+
+<p>Let us check this against the measured values for AlN. Take Al 3s ($\hb=-16.88$ eV):</p>
+
+<div class="tablewrap">
+<table>
+<caption>Table C.4: Evaluation of the Al 3s band by Eq. \eqref{eq:band} (one-orbital model) compared with the values displayed by CrystOD.</caption>
+<thead><tr><th>$\kk$ point</th><th>$\varepsilon=1+\sigma$</th><th>Value from Eq. \eqref{eq:band}</th><th>Value displayed by CrystOD</th><th>Assessment</th></tr></thead>
+<tbody>
+<tr><td>$\Gamma$</td><td>7.27</td><td>$-27.8$ eV</td><td>$-25.0$ eV</td><td>Deepens as a bonding state. Sound</td></tr>
+<tr><td>X</td><td>0.158</td><td>$+50.3$ eV</td><td>(variational value $+62.8$ eV)</td><td><strong>Catastrophe</strong>. The 3s level is thrown tens of eV into the sky</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The $\Gamma$ point poses no problem. At the X point, however, $+50\sim+63$ eV lies far above the vacuum level and is a physically nonsensical value (the displayed value of $+62.8$ eV is the value from the actual matrix, including the mixing with 1s and 2s). Even a DFT calculation never raises the Al 3s-derived band this high at the X point. <strong>The model has stepped beyond its own limit of applicability.</strong></p>
+
+<h3>C.9.2 The conventional remedy: cutting off at a floor</h3>
+
+<p>As a safety device against this catastrophe, CrystOD excludes from the variational calculation any sign pattern whose $\varepsilon$ falls below a threshold of <code>0.2</code> (the overlap floor). In lattices such as ScF$_3$ and SrTiO$_3$, the only patterns that fall below the floor are “redundant patterns that can almost be represented by a combination of several extended shells,” and discarding them loses no physical level—the threshold was calibrated in that way.</p>
+
+<p>For AlN, however, the situation was different. The mode with $\varepsilon=0.147$ that fell below the floor at the X point is not redundant at all; it is <strong>the Al 3s Bloch sum itself, the only one in the X1+ sector</strong> (Table C.3). If we discard it:</p>
+
+<ul>
+<li>The 3s level at the X point disappears from the left column (the Al sublattice).</li>
+<li>When the 13 electrons on the Al side are filled into the remaining levels, the configuration that should be 3s$^2$3p$^1$ becomes the absurd one of “three electrons in 3p.”</li>
+<li>In the crystal column as well, only four X1+ levels appear where there should be five.</li>
+</ul>
+
+<p>This is the actual bug that prompted this appendix (fixed in August 2026). For a “dense sublattice × extended valence orbitals,” <strong>a physically essential state itself enters the catastrophe region</strong>. We cannot discard it. Yet we cannot simply draw the variational value $+63$ eV either. What should we do? Here the Löwdin first-order estimate makes its entrance.</p>
+
+<h2 id="secC-10">C.10 The Löwdin First-Order Estimate — What the Tilde Levels Really Are</h2>
+
+<h3>C.10.1 The idea: orthogonalize first, then remeasure the hopping integral</h3>
+
+<p>The culprit behind the catastrophe was the normalization factor $1/\varepsilon$ of the nonorthogonal basis. Then <strong>if we rebuild the model from the outset in terms of orthogonalized orbitals</strong>, the divergence should not occur. Carrying out Löwdin’s symmetric orthogonalization (the $S^{-1/2}$ transformation) exactly is a major undertaking, but its <strong>first-order approximation</strong> has a surprisingly simple form:</p>
+
+<div class="box derive">
+<p class="box-title">Derivation: The Löwdin first-order effective Hamiltonian</p>
+<p>To first order, the effective hopping integral between orthogonalized orbitals is</p>
+$$
+\tilde t(\RR) = t(\RR) - s(\RR)\,\hb
+$$
+<p>This means that “from the strength $t$ of hopping to the neighboring orbital, we simply subtract the part $s\hb$ that is due merely to overlap, and what remains is the true hopping (between orthogonal orbitals).” Written in matrix form, this is</p>
+$$
+\tilde H_{ij} = H_{ij} - \left(S_{ij}-\delta_{ij}\right)\frac{\hb_i+\hb_j}{2}
+$$
+<p>Substituting the Wolfsberg–Helmholz approximation $t=K s\hb$ gives $\tilde t = (K-1)\,s\,\hb$, and the energy of the Bloch sum is obtained <strong>without</strong> the normalizing division, as</p>
+<div class="keyeq">
+$$
+\begin{equation}
+E^{(1)}(\kk) = \hb + \sum_{\RR\neq0}e^{i\kk\cdot\RR}\,\tilde t(\RR)
+= \hb\,\bigl(1+(K-1)\,\sigma(\kk)\bigr)
+\label{eq:loewdin1}
+\end{equation}
+$$
+</div>
+<p>This is the <em class="term">Löwdin first-order estimate</em>. The same expression is also obtained by Taylor-expanding (Appendix A) the variational expression \eqref{eq:band} to first order in $\sigma$:</p>
+$$
+\hb\,\frac{1+K\sigma}{1+\sigma}
+=\hb\,(1+K\sigma)(1-\sigma+\sigma^2-\cdots)
+=\hb\,\bigl(1+(K-1)\sigma\bigr)+\mathcal{O}(\sigma^2)
+$$
+<p>That is, the two agree in both value and slope at $\sigma=0$ ($\varepsilon=1$) and deviate from each other as $\sigma$ grows. The decisive difference is that Eq. \eqref{eq:loewdin1} is a <strong>first-degree expression in $\sigma$ and therefore never diverges</strong>. Even as $\varepsilon\to0$ ($\sigma\to-1$), $E^{(1)}\to\hb(2-K)=0.25\,\hb$ stays at a finite value.</p>
+</div>
+
+<p>Let us apply this to Al 3s at the X point of AlN. With $\sigma=-0.8415$ and $\hb=-16.88$ eV,</p>
+
+$$
+E^{(1)} = -16.88\times\bigl(1+0.75\times(-0.8415)\bigr) = -6.2\ \text{eV}
+$$
+
+<p>Against the variational value of $+50\sim+63$ eV, this is $-6.2$ eV. It is a sound answer: the level is lifted antibondingly by about 10 eV from the on-site value of $-16.9$ eV (the actual displayed value of $\sim-6.65$ eV includes the mixing with 1s and 2s). Figure C.4 summarizes the behavior of the two expressions. It is the most important figure in this appendix.</p>
+
+<figure>
+<img src="figs/supp_figC-4.svg" alt="Energy (vertical axis, eV) of the one-orbital model of Al 3s versus the overlap eigenvalue ε (horizontal axis, 0–1.6). The red variational expression diverges as ε→0, while the blue Löwdin first-order estimate is a first-degree expression and bounded. At ε=1 the two agree in both value and slope, and the orange dashed line at ε=0.2 is the floor. The 3s level at the X point is +50 eV variationally and −6.2 eV by the first-order estimate." style="max-width:760px;width:100%;height:auto">
+<figcaption>Figure C.4: The relation between the overlap eigenvalue $\varepsilon$ and the energy in the one-orbital model of Al 3s ($\hb=-16.88$ eV, $K=1.75$). Red: the variational expression \eqref{eq:band}, which diverges to $+\infty$ as $\varepsilon\to0$. Blue: the Löwdin first-order estimate \eqref{eq:loewdin1}, which is a first-degree expression in $\varepsilon$ and hence always bounded, and is tangent to the variational expression at $\varepsilon=1$. CrystOD switches between the two at the floor ($\varepsilon=0.2$, orange dashed line).</figcaption>
+</figure>
+
+<h3>C.10.2 The rule for choosing between them, and the ~ marker</h3>
+
+<p>Here we must note that <strong>the first-order estimate is not a panacea</strong>. For example, if we apply Eq. \eqref{eq:loewdin1} to the 3s level at the $\Gamma$ point ($\sigma=+6.27$), we get $-16.88\times(1+0.75\times6.27)=-96$ eV, a terrible value in the opposite direction this time. Since it is a first-order approximation, it is only natural that it breaks down when $|\sigma|$ is large, and <strong>each expression has its own domain of applicability</strong>:</p>
+
+<div class="tablewrap">
+<table>
+<caption>Table C.5: Choosing between the two energy expressions (CrystOD implementation).</caption>
+<thead><tr><th>Overlap eigenvalue</th><th>Expression used</th><th>Reason</th><th>Display</th></tr></thead>
+<tbody>
+<tr><td>$\varepsilon &gt; 0.2$</td><td>Variational expression \eqref{eq:band} (exact generalized eigenvalue problem)</td><td>The region where the normalization is stable. On the bonding side ($\varepsilon&gt;1$), a larger $\varepsilon$ is, if anything, more stable</td><td>Normal display (no marker)</td></tr>
+<tr><td>$10^{-6}&lt;\varepsilon\le 0.2$</td><td>Löwdin first-order estimate \eqref{eq:loewdin1}</td><td>The variational value is meaningless because of the catastrophe. The first-degree expression is bounded and correctly gives a guide to the direction and size of the antibonding rise</td><td><strong>~ on the energy (terminal) + a tooltip note</strong></td></tr>
+<tr><td>$\varepsilon\le10^{-6}$</td><td>(the state itself is deleted)</td><td>Numerically perfect linear dependence. No physical substance</td><td>Not displayed (reported in the terminal)</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="box note">
+<p class="box-title">Supplement: The ~ marker indicates a “grade of accuracy”</p>
+<p>The tilde does <strong>not</strong> mean “unoccupied.” Because two kinds of energies with different accuracy now coexist in the same diagram, the mark was introduced so that one can tell which levels are estimates. In fact, at the X point of AlN, one electron occupies the tilde-marked Al 3s X1+ (an occupied estimated level). Conversely, there are plenty of unmarked unoccupied levels. In the HTML, all level lines are drawn as ordinary solid lines, and when the mouse pointer is placed over an estimated level, an explanation of its origin such as “overlap eigenvalue 0.15 &lt; floor 0.2 …” is shown in a tooltip (this is also stated explicitly in the page footnote).</p>
+</div>
+
+<div class="box why">
+<p class="box-title">Why? Is it worth drawing even an estimated value?</p>
+<p>There are three reasons. The first is <strong>group-theoretical completeness</strong>: if the number of levels does not match the “seating chart” of Table C.3, the diagram is wrong (a figure with only four X1+ levels is immediately seen to be contradictory by a reader who knows group theory). The second is <strong>the counting of electrons</strong>: the 13 electrons on the Al side cannot be filled in correctly without a seat for 3s. The third is <strong>qualitative correctness</strong>: the first-order estimate correctly gives the direction and magnitude of the statement that “the 3s level rises antibondingly by about 10 eV at the X point,” and in fact, in DFT band calculations as well, the conduction band minimum of AlN at the X point is X1+ (s-like). More than the numerical value of the energy itself, this qualitative structure is what the COD is meant to depict.</p>
+</div>
+
+<div class="box phys">
+<p class="box-title">Sidebar: How was this bug found?</p>
+<p>It began with noticing an absurdity in the occupation numbers: “three electrons are in 3p at the X point of AlN.” From the group-theoretical necessity that an s orbital must exist and should become X1+ at the X point (Table C.3), it was determined that “one X1+ is missing,” and a diagnostic that sorts out the eigenvalues of the overlap matrix (listing the principal component of each eigenvector and $\bm v^\dagger H\bm v/\varepsilon$) established that the culprit was the Al 3s mode with $\varepsilon=0.147$ that had been cut off at the floor. “A diagram whose symmetry bookkeeping does not balance must be wrong somewhere”—the group theory of Chapter 12 can thus be used even for debugging computer programs.</p>
+</div>
+
+<h2 id="secC-11">C.11 Step 8: Filling in the Electrons — Aufbau and HOMO/LUMO</h2>
+
+<p>Once the levels are all in place, what remains is the familiar aufbau principle from Chapter 7 onward. At each $\kk$ point, starting from the lowest-energy level, we put in two electrons per orbital ($2d$ electrons for a $d$-fold degenerate level).</p>
+
+<ul>
+<li><strong>Crystal column</strong>: 20 electrons per cell. At the X point, X1+ #1–#4, X3- #1, #2, and X5- #1, #2 hold 20 electrons in total. The highest occupied level (HOMO) is X5- #2 ($-14.11$ eV), and the lowest unoccupied level (LUMO) is X1+ #5 ($\sim-5.92$ eV).</li>
+<li><strong>Left and right columns</strong>: 13 electrons on the Al side and 7 electrons on the N side are filled in the same way. This is a display convention that represents “the electron configuration of each sublattice before bonding.”</li>
+</ul>
+
+<p>What is interesting here is that the electron configuration of a sublattice changes from one $\kk$ point to another. At the $\Gamma$ point the Al column has the textbook configuration 1s$^2$2s$^2$2p$^6$3s$^2$3p$^1$, but at the X point the 3p level (X3-, $-14.94$ eV) lies <strong>below</strong> the 3s level ($\sim-6.65$ eV), so filling in the electrons gives 3p$^2$3s$^1$. This is not a bug but the physics of the sublattice band dispersion itself: with the sign pattern at the X point, the 3s Bloch sum is raised strongly in an antibonding manner (§C.9), whereas the 3p$_\parallel$ Bloch sum is lowered in a bonding manner.</p>
+
+<h2 id="secC-12">C.12 Step 9: The Colors of the Crystal Orbitals — Judging Bonding with COOP</h2>
+
+<p>As the final touch, we judge whether each level in the crystal column is bonding or antibonding between Al and N, and change the color of its line accordingly. The quantity used is the <em class="term">COOP</em> (Hughbanks–Hoffmann):</p>
+
+$$
+P = 2\,\mathrm{Re}\,\bigl[\bm{c}_{\text{Al}}^\dagger\, S_{\text{Al,N}}\,\bm{c}_{\text{N}}\bigr]
+$$
+
+<p>This is a generalization of the overlap electron density that we learned about in Chapter 11. We color a level <strong>bonding (blue)</strong> if the Al and N components of the coefficient vector $\bm c$ are in phase in the overlap region ($P&gt;0$), <strong>antibonding (red)</strong> if they are out of phase ($P&lt;0$), and <strong>nonbonding (black)</strong> if the value is zero (for example, when symmetry leaves no partner). The actual judgments at the X point are reflected in Figure C.5 in the next section. For example, X3- #2 (the in-phase combination of Al 3p and N 2p) is blue, its out-of-phase partner X3- #3 is red, and X1+ #5, which is almost purely Al 3s, is black.</p>
+
+<h2 id="secC-13">C.13 Reading the Output: A Complete Wrap-Up — The X Point of AlN, Line by Line</h2>
+
+<p>Assembling all of the components above, the diagram at the X point looks like Figure C.5 (valence region only; the actual HTML output lets you see down to the core levels).</p>
+
+<figure>
+<img src="figs/supp_figC-5.svg" alt="Crystal-orbital diagram of AlN at the X point. The levels of the Al sublattice (left), the AlN crystal (center), and the N sublattice (right) are arranged side by side (vertical axis E, in eV), and levels of the same irreducible representation (X1+, X3−, X5−) are connected by thin dotted correlation lines." style="max-width:760px;width:100%;height:auto">
+<figcaption>Figure C.5: Crystal-orbital diagram of AlN at the X point (valence region). It is a direct diagrammatic rendering of the terminal output of §C.1 and the HTML output of CrystOD. Check that correlation lines connect only X1+ with X1+ (Al 3s ↔ N 2s), X3- with X3-, and X5- with X5-.</figcaption>
+</figure>
+
+<p>Let us reread the terminal output (§C.1) line by line in the terms we have learned.</p>
+
+<ol>
+<li><strong>X1+ #1–#3, X3- #1, X5- #1</strong> ($-1591\sim-87$ eV): the core levels of Al and N. They are nonbonding levels (black) of nearly 100% single-component character, and they stay at their on-site values.</li>
+<li><strong>X1+ #4 ($-25.77$ eV, blue)</strong>: the in-phase combination of N 2s (92%) and Al 3s (8%) = σ bonding. Its antibonding partner is X1+ #5.</li>
+<li><strong>X3- #2 ($-17.24$ eV, blue) / X5- #2 ($-14.11$ eV, blue, HOMO)</strong>: bonding pairs of Al 3p and N 2p. N 2p is the main component, and this corresponds to the valence band maximum of AlN.</li>
+<li><strong>X1+ #5 ($\sim-5.92$ eV, LUMO)</strong>: the antibonding side, mainly Al 3s (91%). It is the protagonist of §C.9–C.10; because the variational expression diverges to $+63$ eV, it is drawn with the Löwdin first-order estimate. This agrees qualitatively with the fact that the conduction band minimum at the X point in the DFT bands has s character (X1+).</li>
+<li><strong>X5- #3 ($\sim-4.36$ eV, red) / X3- #3 ($-0.36$ eV, red)</strong>: the Al 3p–N 2p antibonding side. X3- #3 lies above the floor ($\varepsilon=0.44$), so it carries no tilde and is the variational value.</li>
+</ol>
+
+<div class="box note">
+<p class="box-title">Supplement: What can be seen only in the HTML, and what may not be visible</p>
+<p>In the output HTML, clicking a level displays the breakdown of its components and a sketch of the real-space wave function Re$[\psi]$ (rotatable by dragging). The energy window initially opens at $\pm8$ eV centered on the HOMO/LUMO, so to see deep core levels or high unoccupied levels you need to widen the displayed range with the “Show all energy levels” button. For example, the La 6s X1+ level ($+8.85$ eV) at the X point of LaN lies outside the default window, and the level can “appear not to exist”—if a level seems to be missing, suspect the window first.</p>
+</div>
+
+<h2 id="secC-14">C.14 Summary and Exercises</h2>
+
+<div class="box thm">
+<p class="box-title">Key Points of This Appendix</p>
+<ul>
+<li><code>crystod --diagram</code> divides the crystal into two sublattices and, at each special $\kk$ point, lays out the levels “before bonding (left and right)” and “after bonding (center)” with irreducible-representation labels. The rule for hybridization is that <strong>only levels with the same $\kk$ and the same irreducible representation mix</strong>.</li>
+<li>The energies come from the extended Hückel method: the Bloch lattice sum $S(\kk)$ of exact STO overlap integrals, together with the Wolfsberg–Helmholz approximation $H=KS(\hb_i+\hb_j)/2$ ($K=1.75$), including a point-charge ligand field.</li>
+<li>The one-orbital band formula $E=\hb(K+(1-K)/\varepsilon)$ is a direct descendant of $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ for a diatomic molecule, and it diverges as the overlap-matrix eigenvalue $\varepsilon\to0$ (overlap catastrophe). Diffuse orbitals on a dense sublattice can enter this regime at the zone boundary (Al 3s at the X point of AlN: $\varepsilon=0.147$).</li>
+<li>Such states are drawn with the Löwdin first-order estimate $E=\hb(1+(K-1)\sigma)$—which is itself the first-order Taylor expansion of the variational expression in $\sigma$, and is always bounded—and are distinguished by a <strong>tilde (~) and a tooltip note</strong>. The ~ is a mark not of “unoccupied” but of the “accuracy grade of the energy.”</li>
+<li>Counting the number of levels by group theory (the seating chart) is the most powerful tool, usable both for checking calculation results and for debugging the program.</li>
+</ul>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise</p>
+<ol>
+<li>Verify that the $2\times2$ overlap matrix $S=\begin{pmatrix}1&amp;S\\S&amp;1\end{pmatrix}$ has eigenvalues $1\pm S$ and eigenvectors $(1,\pm1)/\sqrt2$. Furthermore, carry out the canonical orthogonalization procedure (§C.8) for this $2\times2$ case and show that $\varepsilon_\pm=(\alpha\pm\beta)/(1\pm S)$ is reproduced.</li>
+<li>Show that Eq. \eqref{eq:band} and Eq. \eqref{eq:loewdin1} agree in both value and first derivative at $\sigma=0$. Also find the limiting values of both as $\varepsilon\to0^+$ (give numerical values as well, for $K=1.75$ and $\hb=-16.88$ eV).</li>
+<li>Using the values in Table C.2, reproduce with a calculator the band energies (variational expression) at the $\Gamma$ point and the X point for the one-orbital model of Al 3s. Then apply the first-order estimate at the X point and verify $-6.2$ eV.</li>
+<li>At the L point $(\tfrac12,\tfrac12,\tfrac12)$, show that of the 12 nearest neighbors in the fcc lattice, 6 are in phase and 6 are out of phase, so that the phase sum over the nearest neighbors is zero (Hint: write out $e^{i\kk\cdot\RR}$ for the 12 vectors $\RR$). From this, predict that the band energy of Al 3s at the L point is close to the on-site value $\hb$, and discuss it by comparing with the actual output (Al 3s L1+ $=-2.43$ eV… the deviation from the on-site value including the ligand field).</li>
+<li>(Discussion) The LUMO at the X point is X1+ #5 ($\sim-5.92$ eV), which carries a ~. Can this value be trusted to the same accuracy as the unmarked levels in the same figure? State in an organized way what can be trusted (the symmetry labels, the existence of the levels, the direction of the upward shift) and what should not be over-trusted (the numerical values in eV).</li>
+</ol>
+</div>
+
+<div class="refs">
+<strong>References</strong>
+<ol>
+<li>M. Wolfsberg and L. Helmholz, <i>J. Chem. Phys.</i> <b>20</b>, 837 (1952). The original paper on $H_{ij}=KS_{ij}(H_{ii}+H_{jj})/2$.</li>
+<li>R. Hoffmann, <i>J. Chem. Phys.</i> <b>39</b>, 1397 (1963). The extended Hückel method.</li>
+<li>R. Hoffmann, <i>Solids and Surfaces: A Chemist's View of Bonding in Extended Structures</i> (VCH, 1988). The classic on crystal orbitals and the idea of COOP; it is the intellectual parent of this appendix.</li>
+<li>T. Hughbanks and R. Hoffmann, <i>J. Am. Chem. Soc.</i> <b>105</b>, 3528 (1983). COOP.</li>
+<li>P.-O. Löwdin, <i>J. Chem. Phys.</i> <b>18</b>, 365 (1950). Symmetric orthogonalization.</li>
+<li>J. H. Ammeter, H.-B. Bürgi, J. C. Thibeault, and R. Hoffmann, <i>J. Am. Chem. Soc.</i> <b>100</b>, 3686 (1978). The weighted Wolfsberg–Helmholz formula and counterintuitive orbital mixing (the molecular version of the overlap pathology).</li>
+<li>H. T. Stokes, B. J. Campbell, and R. Cordes, <i>Acta Cryst.</i> <b>A69</b>, 388 (2013). ISO-IR (the source of the irreducible-representation labels).</li>
+<li>H. Koiso and Y. Mochizuki <i>et al.</i>, <i>Phys. Rev. B</i> <b>110</b>, 064104 (2024). The reference to cite when using CrystOD in research.</li>
+</ol>
+</div>
+
+</main>
+</body>
+</html>
