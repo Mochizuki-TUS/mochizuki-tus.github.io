@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>付録D シミュレーターの計算仕様と確認の記録 — 機械学習</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => 'D.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">機械学習 — 目次</a>
+  <span class="series">付録D</span>
+</header>
+<main>
+<h1><span class="chapter-no">付録D</span>シミュレーターの計算仕様と確認の記録</h1>
+
+<div class="lead">
+<p>本書の各章には，パラメーターを動かして結果を見るシミュレーター（以下，装置）が 10 本埋め込まれている．この付録は，それぞれの装置が<strong>何を計算しているのか</strong>（式と算法），<strong>どこまで確かめてあるのか</strong>（何と比べ，何件を，どの許容差で）を，読者が自分で判断できるように記録したものである．装置の画面に出る数値をレポートや研究に引用する前に，該当する節を読んでほしい．</p>
+<p>D.1 節で全装置に共通の作り（動作環境，乱数，数式の表示，埋め込み，計算の上限）を述べ，D.2〜D.11 節で装置ごとに同じ項目を並べる．D.12 節に，確かめていないことと既知の限界をまとめる．ここに書いた「確かめた」は，2026 年 11 月 12〜13 日に実際に実行した試験の範囲だけを指す．書いていない条件（別のブラウザー，別の端末，試験に含めなかったパラメーターの組）で正しく動くことを保証するものではない．</p>
+<p>確認の方法は次の 4 種類に分けて書く．<strong>解析解</strong>：閉じた式や手計算で値が決まるものとの比較．<strong>全列挙</strong>：取りうる場合をすべて数え上げた値との比較．<strong>別実装</strong>：同じ量を，装置とは独立に書いた Python（NumPy・SciPy・PyTorch など）のプログラムで計算した値との比較．<strong>統計的な確認</strong>：乱数を使う量が理論の分布に従うかを，許容幅つきの検定で見たもの．許容差は，比べる値を $a$（装置），$b$（参照）として $\abs{a-b}\le \mathrm{atol}+\mathrm{rtol}\,\abs{b}$ の形（絶対許容差 atol，相対許容差 rtol）で書く．</p>
+</div>
+
+<nav class="chapter-toc">
+<strong>付録Dの目次</strong>
+<ol>
+  <li><a href="#secD-1">D.1 共通の作り</a></li>
+  <li><a href="#secD-2">D.2 S01 確率分布</a></li>
+  <li><a href="#secD-3">D.3 S02 ベイズ更新</a></li>
+  <li><a href="#secD-4">D.4 S03 回帰と過学習</a></li>
+  <li><a href="#secD-5">D.5 S04 分類とカーネル</a></li>
+  <li><a href="#secD-6">D.6 S05 ニューラルネットワーク</a></li>
+  <li><a href="#secD-7">D.7 S06 ガウス過程とベイズ最適化</a></li>
+  <li><a href="#secD-8">D.8 S07 潜在変数</a></li>
+  <li><a href="#secD-9">D.9 S08 近似推論と MCMC</a></li>
+  <li><a href="#secD-10">D.10 S09 系列モデル</a></li>
+  <li><a href="#secD-11">D.11 S10 Attention と次トークン生成</a></li>
+  <li><a href="#secD-12">D.12 確かめていないこと・限界のまとめ</a></li>
+</ol>
+</nav>
+
+<!-- ============================================================ D.1 -->
+<h2 id="secD-1">D.1 共通の作り</h2>
+
+<h3>D.1.1 装置の一覧</h3>
+<div class="tablewrap"><table id="tabD-1" style="min-width:600px">
+<caption>表D.1　装置の一覧（タブの key は URL の <code>?only=</code> と <code>#</code> に使う名前）</caption>
+<thead><tr><th>装置</th><th>ファイル</th><th>タブ（key）</th><th>対応する章</th><th>既定の seed</th></tr></thead>
+<tbody>
+<tr><td>S01 確率分布</td><td><a href="sim/distributions.html">sim/distributions.html</a></td><td>shape，mean</td><td>第3章</td><td>20261112</td></tr>
+<tr><td>S02 ベイズ更新</td><td><a href="sim/bayes-update.html">sim/bayes-update.html</a></td><td>beta，gauss</td><td>第4章</td><td>20261112</td></tr>
+<tr><td>S03 回帰と過学習</td><td><a href="sim/regression.html">sim/regression.html</a></td><td>fit，biasvar，bayes</td><td>第6章，第8章</td><td>20261112</td></tr>
+<tr><td>S04 分類とカーネル</td><td><a href="sim/classifier.html">sim/classifier.html</a></td><td>logistic，svm</td><td>第9〜11章</td><td>20261112</td></tr>
+<tr><td>S05 ニューラルネットワーク</td><td><a href="sim/neural-net.html">sim/neural-net.html</a></td><td>trace，train，gradcheck</td><td>第14章，第15章</td><td>20261112（初期値とデータの 2 つ）</td></tr>
+<tr><td>S06 ガウス過程とベイズ最適化</td><td><a href="sim/gp-bo.html">sim/gp-bo.html</a></td><td>gp，bo，compare</td><td>第12章，第13章</td><td>20261112</td></tr>
+<tr><td>S07 潜在変数</td><td><a href="sim/latent.html">sim/latent.html</a></td><td>em，pca</td><td>第17章，第18章</td><td>データ 20261113，初期値 1</td></tr>
+<tr><td>S08 近似推論と MCMC</td><td><a href="sim/inference-mcmc.html">sim/inference-mcmc.html</a></td><td>approx，mh</td><td>第20章，第21章</td><td>20261112</td></tr>
+<tr><td>S09 系列モデル</td><td><a href="sim/hmm.html">sim/hmm.html</a></td><td>hmm，kalman</td><td>第22章</td><td>20261112</td></tr>
+<tr><td>S10 Attention と次トークン生成</td><td><a href="sim/attention.html">sim/attention.html</a></td><td>attn，model</td><td>第24〜26章</td><td>20261112</td></tr>
+</tbody>
+</table></div>
+
+<h3>D.1.2 動作環境と，外部とのやりとり</h3>
+<ul>
+<li>装置は<strong>静的な HTML・CSS・JavaScript だけ</strong>で動く．各装置は，画面のファイル（<code>sim/NAME.html</code>），計算だけを書いたファイル（<code>sim/NAME.model.js</code>．画面の要素に触れない純粋な関数），共有の数値計算ライブラリ（<code>sim/lib/mlcore.js</code>），共有の画面部品（<code>sim/lib/mlui.js</code>，<code>sim/lib/mlsim.css</code>）からなる．S10 だけは学習済みの重み（<code>sim/data/tinygpt.js</code>）と bigram モデルの表（<code>sim/data/tinygpt_bigram.js</code>）も読む．</li>
+<li>計算を画面から切り離したのは，同じ計算のファイルをそのまま Node.js で実行し，Python の参照計算と数値で突き合わせる試験（D.1.7）を行うためである．スクリプトは <code>&lt;script src&gt;</code> の古典的な読み込みだけを使うので，サーバーを立てずにファイルを直接開いても（<code>file://</code>）動く作りにしてある．<code>file://</code> で開いてコンソールのエラーが無いことは 10 本すべてで確かめたが，台本の操作まで <code>file://</code> で行ったのは S09 と S10 だけで，ほかの 8 本は開いた直後の表示だけを確かめた（表D.3，D.12）．</li>
+<li><strong>外部の推論 API，API キー，外部のフォントや CDN は使わない．</strong>S10 の小規模なモデルも，ブラウザーの中で順伝播を計算している（サーバーに問い合わせていない）．装置のスクリプトには通信を行う命令（<code>fetch</code>，<code>XMLHttpRequest</code> など）も，ブラウザーへの保存（<code>localStorage</code> など）も含まれていない．<strong>入力した値は外へ送られず，ページを閉じると残らない．</strong>埋め込みの際に親のページへ送るのは，表示の高さ（ピクセル数）だけである．</li>
+<li>章のページ（本文）は数式の表示に MathJax を CDN から読み込むが，装置のページは読み込まない．</li>
+</ul>
+
+<h3>D.1.3 乱数</h3>
+<ul>
+<li>乱数の生成器は全装置で <strong>mulberry32</strong>（32 bit の状態を持つ小さな擬似乱数生成器）だけを使う．seed は 32 bit の符号なし整数に丸める．Gauss 乱数は Box–Muller 法，Gamma 乱数は Marsaglia–Tsang 法，Poisson 乱数は平均が 30 未満で積の方法，30 以上で PTRS 法で作る．ブラウザー組み込みの <code>Math.random</code> は使わない．</li>
+<li>乱数を使う装置には「乱数の seed」の欄があり，整数を入力できるほか，「同じ seed でやり直す」「seed を変える」（1 を足す）「既定に戻す」のボタンがある．<strong>同じブラウザーでは，同じ seed と同じ操作の順序から同じ結果が得られる</strong>（試験では各装置で固定 seed の再現性を確かめた）．乱数の列を最初から使い直したいときは「同じ seed でやり直す」を押す．</li>
+<li>例外：Gauss 乱数は <code>Math.log</code>・<code>Math.cos</code>・<code>Math.sin</code> を通るので，<strong>Node.js と Chrome で値が最後の 1 ulp（倍精度の最下位の 1 桁）だけ違うことがある</strong>．表示の桁ではふつう差は見えないが，条件の悪い反復計算では結果が少し変わる．作成時に記録された例：S04 の SVM（線形カーネル，重なりのあるデータ，$C=1000$）で収束までの SMO の反復回数が Chrome で 7,614 回，Node.js で 7,583 回（この差は改めて確かめてはいない）．S07 では画面と Node.js の値を 5 桁目までの一致として扱った．</li>
+</ul>
+
+<h3>D.1.4 数式の表示</h3>
+<p>装置の画面の数式は，ブラウザー標準の <strong>MathML</strong> で書いてある（MathJax は使わない）．そのため本文の数式と見た目は少し違う（例：転置は本文の $\tp$ に対して画面では T）が，文字の選び方は本文に合わせてある．多くの装置には「いまの数値を式に入れると」という欄があり，現在の設定の数値を代入した式を表示する．数式の中の太字は本文の $\bm{x}$ に合わせて MathML の <code>mathvariant="bold-italic"</code>（大文字のギリシャ文字と数字は <code>"bold"</code>）で指定し，この指定を反映しない Chrome でも太字に見えるよう，装置に共通のスタイルシートで太字の書体を指定している．筆記体と黒板太字は <code>mathvariant</code> を使わず，数学用の文字（𝒩，𝒟，ℬ，𝔼）で書いてある．数式の外の説明文の太字（<code>&lt;b&gt;</code>）は立体の太字で，本文の太字斜体とは形が少し違う．Chrome 以外のブラウザーでの MathML の見え方は確かめていない．</p>
+
+<h3>D.1.5 埋め込みの引数</h3>
+<div class="tablewrap"><table id="tabD-2">
+<caption>表D.2　装置の URL に付けられる引数</caption>
+<thead><tr><th>引数</th><th>働き</th></tr></thead>
+<tbody>
+<tr><td style="white-space:nowrap"><code>?embed=1</code></td><td>題（h1）と導入文を隠し，下の説明（操作手順・式・条件・問い）を折りたたむ（消さない）．章に埋め込むときの形．</td></tr>
+<tr><td style="white-space:nowrap"><code>?only=&lt;key&gt;</code></td><td>そのタブだけを表示し，ほかのタブを外す．<code>embed=1</code> と同じ扱いも兼ねる．本文の囲み（シミュレーターN.k）はこの形で 1 つのタブを埋め込む．</td></tr>
+<tr><td style="white-space:nowrap"><code>#&lt;key&gt;</code></td><td>開いたときに選ぶタブ（例 <code>sim/gp-bo.html#compare</code>）．</td></tr>
+<tr><td style="white-space:nowrap"><code>?mode=hand</code></td><td>S09 だけ．隠れ Markov モデルのタブを手計算モード（$T=3$）で開く．</td></tr>
+</tbody>
+</table></div>
+<p>埋め込まれた装置は，読み込み時・画面の幅が変わったとき・タブの切替・説明の開閉のたびに，自分の高さを親のページへ知らせ，本文側の枠の高さがそれに合わせて変わる．</p>
+
+<h3>D.1.6 計算の上限，異常時のふるまい，JavaScript が無効のとき</h3>
+<ul>
+<li>入力はすべて範囲を制限してある（スライダーの最小・最大，数値欄は範囲に丸める）．各装置の範囲と上限は D.2〜D.11 に書く．</li>
+<li>時間のかかる計算（S01 の標本平均の推移，S03 のバイアスと分散，S06 の比較など）は，1 コマ 12 ms 以内に区切って少しずつ進め，「停止」を押せるようにしてある．どの装置も，開いただけで自動的に計算を走らせ続けることはしない．</li>
+<li>計算の途中で NaN（数でない値）や ∞ が出たときは，計算を止め，何が起きたかを画面に文で表示する．学習が発散したとき（S04，S05）も同じ．</li>
+<li>操作はすべてボタン・スライダー・選択欄・数値欄で行い，キーボードでも操作できる（タブは ←→・Home・End で移動）．図（canvas）には，その時点の状態を文で述べる説明（aria-label）を付け，描くたびに更新する．色だけに頼らず，線種・マーカーの形・曲線の脇の文字でも区別する．</li>
+<li><strong>JavaScript が無効のとき</strong>は，操作部分と図は表示されない．その場合は「操作部分は動きません」という注意と本文の節へのリンクを表示し，下の説明（操作手順・計算している式・データと乱数の条件・簡略化・不安定になる条件・問い）は静的な HTML なのでそのまま読める．本文に埋め込んだ囲みにも同じ趣旨の注意を置いている．</li>
+</ul>
+
+<h3>D.1.7 確認の進め方</h3>
+<ul>
+<li><strong>数値の試験（Node.js）</strong>：各装置の計算のファイルと共有ライブラリを Node.js（v25.9.0）で実行し，Python（NumPy 2.5.4，SciPy 1.18.1．CPU，倍精度）で別に計算した参照値と比べた．S05 は PyTorch の自動微分（倍精度），S06 は mpmath（50 桁），S10 は学習に使った PyTorch のモデル（単精度）も参照に使った．装置の計算はすべて倍精度（JavaScript の数）である．</li>
+<li><strong>統計的な確認</strong>：乱数を使う量は，固定した seed で 1 回だけ評価し，許容幅は「生成器が正しければ通る」大きさに決めた．目安は約 4 標準誤差，Kolmogorov–Smirnov 検定（以下 KS 検定）の統計量 $D\lt 1.95/\sqrt{n}$（有意水準 約 0.1 %），$\chi^{2}$ 検定は上側 0.1 % 点．試験に合わせて seed を選び直したり，許容幅を後から広げたりはしていない．</li>
+<li><strong>独立な計算し直し</strong>：試験とは別に，各装置の主な値（本文の囲みの手順に出る数値を含む）を，試験の参照計算を見ずに書き直した Python（NumPy・SciPy．S06 は mpmath も）のプログラムで計算し直し，計算のファイルの値と照合した．差は表示の桁より十分小さかった．例外は 2 つで，S04 の SVM は停止の許容値 $\varepsilon=10^{-3}$ のためマージン幅などが 4 桁目で（相対差 最大 $3.6\times10^{-4}$），S06 の EI・PI は $z\approx-20$ より先の裾で（D.7.5）参照と違った．</li>
+<li><strong>画面の確認</strong>：ヘッドレスの Chrome（デスクトップ版）で幅 390・768・1280 px（S10 は章の枠に相当する 310・352 px も）の画面を開き，台本に従って操作（境界値，やり直し，全タブ，<code>?embed=1</code>，<code>?only=</code>，キーボード操作，本文の囲みの操作手順）し，画面の数値を Node.js の値と照合した（台本の中の「照合」）．同時に，ページの横スクロールが出ないこと，コンソールのエラーと読み込みの失敗が 0 であることを確かめ，撮影した画像の一部を目で見て文字の重なりなどを直した．</li>
+<li>共有の数値計算ライブラリそのものも，685 件の試験で確かめた：特殊関数（対数ガンマ関数，正則化不完全ガンマ・ベータ関数とその逆関数，誤差関数，Gauss 分布の累積分布関数と分位点，log-sum-exp，softmax など）を SciPy の special と 347 件，確率分布を SciPy の stats と 264 件，線形代数（Cholesky 分解，QR 分解，最小二乗，対称行列の固有分解，SVD など）を NumPy の linalg と 28 件，統計の関数を NumPy と 14 件，乱数の再現性 5 件と標本の統計 27 件．すべて成功した．</li>
+</ul>
+<div class="tablewrap"><table id="tabD-3">
+<caption>表D.3　確認の件数（2026 年 11 月 12〜13 日の記録．すべて成功）</caption>
+<thead><tr><th>装置</th><th>数値の試験（件）</th><th>画面の確認（手順／照合）</th><th><code>file://</code> で開いた確認</th></tr></thead>
+<tbody>
+<tr><td>共有ライブラリ</td><td>685</td><td>—</td><td>—</td></tr>
+<tr><td>S01 確率分布</td><td>593</td><td>218／41</td><td>開いた直後（390 px）</td></tr>
+<tr><td>S02 ベイズ更新</td><td>170</td><td>126／22</td><td>開いた直後（390 px）</td></tr>
+<tr><td>S03 回帰と過学習</td><td>217</td><td>283／61</td><td>開いた直後（3 幅）</td></tr>
+<tr><td>S04 分類とカーネル</td><td>275</td><td>339／71</td><td>開いた直後（3 幅）</td></tr>
+<tr><td>S05 ニューラルネットワーク</td><td>253</td><td>174／19</td><td>開いた直後</td></tr>
+<tr><td>S06 ガウス過程とベイズ最適化</td><td>221</td><td>158／24</td><td>開いた直後</td></tr>
+<tr><td>S07 潜在変数</td><td>208</td><td>154／38</td><td>開いた直後（390 px）</td></tr>
+<tr><td>S08 近似推論と MCMC</td><td>656</td><td>128／29</td><td>開いた直後（390 px）</td></tr>
+<tr><td>S09 系列モデル</td><td>285</td><td>169／44</td><td>台本の全手順</td></tr>
+<tr><td>S10 Attention と次トークン生成</td><td>587</td><td>179／42</td><td>台本の全手順</td></tr>
+</tbody>
+</table></div>
+<p>以下の各節の「数値を確かめた方法と範囲」の表の件数は，試験の項目の数（1 項目で 1 つの比較または 1 つの条件）である．画面の確認の「照合」は台本の中で画面の値や状態を確かめた箇所の数で，すべて成功した．表D.3 の数値の試験は 2026 年 11 月 13 日に全部を実行し直し，同じ件数ですべて成功することを確かめた．</p>
+
+<!-- ============================================================ D.2 S01 -->
+<h2 id="secD-2">D.2 S01 確率分布（<a href="sim/distributions.html">distributions</a>）</h2>
+
+<h3>D.2.1 対応する章・節とタブ</h3>
+<ul>
+<li>第3章：<a href="ch03_distributions.html#sec3-5">3.5 節</a>（シミュレーター3.1，タブ shape），<a href="ch03_distributions.html#sec3-7">3.7 節</a>（シミュレーター3.2，タブ mean）．ほかに 3.1，3.2，3.4，3.8〜3.10 節と，第2章 <a href="ch02_probability.html#sec2-8">2.8 節</a>（大数の法則）に関係する．</li>
+<li>タブ <code>shape</code>「① 分布の形と区間確率」，タブ <code>mean</code>「② 標本平均の振る舞い」．</li>
+</ul>
+
+<h3>D.2.2 何を計算しているか</h3>
+<ul>
+<li>①：二項，Poisson，Gauss，Cauchy（Lorentz 型），Gamma（形 $a$，率 $b$），Beta，Student の t（位置 $\mu$，尺度 $s$），Weibull の 8 分布について，確率密度（質量）関数，累積分布関数 $F$，分位点，平均・分散（存在しなければ「存在しません」と理由），中央値，最頻値，半値全幅を計算する．最頻値が 2 つある場合（Poisson の $\lambda$ が整数，二項の $(N+1)\mu$ が整数のとき．例：$\lambda=4$ で 3 と 4）は両方を「同じ確率で最大」と表示する．区間確率は
+$$P(x_1\le x\le x_2)=F(x_2)-F(x_1)$$
+で求める（離散分布は端の整数を含む）．累積分布関数は誤差関数，正則化不完全ガンマ関数・ベータ関数，逆正接などで計算し，画面の「確かめ」に，離散分布では確率質量関数の直接の和，連続分布では確率密度関数の二重指数型の数値積分を並べる．</li>
+<li>Cauchy 分布（と t 分布の $\nu=1$）で平均が存在しない理由として，$\int_{x_0-R}^{x_0+R}\abs{x-x_0}\,p(x)\,\dd x$ $=(\gamma/\pi)\ln(1+R^{2}/\gamma^{2})$ が $R$ とともに増え続けることを，$R=10\gamma,100\gamma,1000\gamma$ の数値で示す．</li>
+<li>標本（ヒストグラム）は 1 つ目の分布から引く．Gauss は Box–Muller 法，Cauchy は $\tan(\pi(u-1/2))$，t は $z/\sqrt{g/\nu}$（$z$ は標準 Gauss 乱数，$g$ は自由度 $\nu$ の $\chi^{2}$ 乱数），Gamma は Marsaglia–Tsang 法，二項は Bernoulli の和，Poisson は積の方法または PTRS 法．</li>
+<li>②：Gauss，Cauchy，t の独立な標本から，標本数 $n$ に対する標本平均 $\bar{x}_n$（または中央値）の推移を複数の系列で描く（横軸は対数．記録する点の数は $n$ の上限 $10^{3}$／$10^{4}$／$10^{5}$ で 151／180／197 点）．Gauss（と $\nu\gt 2$ の t）では $\pm\sigma/\sqrt{n}$ の帯，Cauchy では中心 $\pm\gamma$ の線（$\bar{x}_n$ の分布の半値半幅は $n$ によらない），中央値では漸近式 $\pm1/(2p(m)\sqrt{n})$ の帯を重ねる．</li>
+</ul>
+
+<h3>D.2.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>パラメーターの範囲（既定）：二項 $N$ 1〜200（20），成功確率 0〜1（0.3）；Poisson $\lambda$ 0.1〜60（4）；Gauss $\mu$ −5〜5，$\sigma$ 0.1〜5（既定 $\mu=0$，$\sigma=1$）；Cauchy $x_0$ −5〜5（0），$\gamma$ 0.1〜5（1）；Gamma $a$ 0.2〜20（2），$b$ 0.1〜10（1）；Beta $a,b$ 0.2〜20（2，5）；t の $\nu$ は 0.5〜1000 の 17 通り（1 と 2 を正確に含む．既定 3），$s$ 0.1〜5；Weibull $m$ 0.5〜30（5），$s_0$ 0.2〜5（1）．</li>
+<li>①の標本は なし／100／1000／10000 個で，<strong>上限は 10000 個</strong>（計算のファイルの上限も 10000）．D.2.6 の KS 検定・$\chi^{2}$ 検定の $n=20000$ は計算のファイルを直接呼んだ試験で，画面では選べない．②は $n$ の上限 $10^{3}$／$10^{4}$／$10^{5}$，系列 1〜20 本，尺度 0.2〜3（位置は 0 に固定）．最大で $10^{5}\times20$ 系列 × 2 分布 $=4\times10^{6}$ 個の乱数を 12 ms ずつ区切って計算する（Chrome で約 0.56 s）．</li>
+<li>既定の seed は ①②とも 20261112．②の系列 $j$ の seed は seed $+\,j\cdot$0x9E3779B9 なので，$n$ の上限や系列の数を変えても各系列の初めの部分は同じである．①の Cauchy 1000 個と②の Cauchy の系列 1 の最初の 1000 個は同じ値になる．</li>
+</ul>
+
+<h3>D.2.4 簡略化している点</h3>
+<ul>
+<li>パラメーターの範囲を制限し，t 分布の $\nu$ は 17 通りから選ぶ．</li>
+<li>①のヒストグラムは描く範囲の中だけを数える（範囲の外の個数を表示する）．</li>
+<li>②は位置を 0 に固定し，尺度は 3 つの分布で共通の値にする（半値全幅はそろえない）．中央値の帯は漸近近似である．</li>
+<li>二項分布と Gauss 近似の比較の例は用意していない（Gauss の $\mu$ の範囲 −5〜5 に収まらないため）．</li>
+</ul>
+
+<h3>D.2.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>Cauchy と $\nu\le 2$ の t 分布では，非常に大きな値の標本（$10^{5}$〜$10^{7}$ 程度）が出て，標本平均・標本分散が跳ぶ．これは計算の誤りではなく分布の性質であり，装置はそのまま表示する．</li>
+<li>Gamma の $a\lt 1$，Beta の $a\lt 1$ または $b\lt 1$，Weibull の $m\lt 1$ では端で密度が発散する．図は枠で切り，数値積分の「確かめ」は端で倍精度の限界のため最大 $10^{-8}$ 程度ずれる．</li>
+<li>縦軸を対数にしたとき，$10^{-300}$ 未満の値は 0 に丸まって線が切れる．</li>
+<li>NaN・∞ が出たら計算を止めて理由を表示する．</li>
+</ul>
+
+<h3>D.2.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-4" style="min-width:600px">
+<caption>表D.4　S01 の数値の試験（593 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>確率密度（質量）関数・累積分布関数・分位点（29 通りのパラメーター）</td><td>SciPy の stats</td><td>別実装</td><td>94</td><td>密度 rtol $10^{-11}$，累積分布 rtol $10^{-10}$，分位点 rtol $10^{-9}$</td></tr>
+<tr><td>平均・分散・中央値（存在しないものは「無い」と理由）</td><td>SciPy の stats</td><td>別実装</td><td>89</td><td>—</td></tr>
+<tr><td>正規化（密度の積分＝1，質量の和＝1）</td><td>理論値（適応 Simpson 則で 0.0001 % 点〜99.9999 % 点を積分して $1-2\times10^{-6}$）</td><td>解析解</td><td>53</td><td>—</td></tr>
+<tr><td>区間確率 $P(x_1\le x\le x_2)$</td><td>SciPy の stats，質量の直接の和，密度の二重指数型数値積分</td><td>別実装</td><td>212</td><td>rtol $10^{-9}$（端で密度が発散する場合だけ atol $10^{-8}$）</td></tr>
+<tr><td>半値全幅</td><td>解析式と，SciPy の brentq で求めた値</td><td>解析解・別実装</td><td>39</td><td>rtol $10^{-10}$</td></tr>
+<tr><td>Cauchy の部分積分 $(\gamma/\pi)\ln(1+R^{2}/\gamma^{2})$</td><td>SciPy の quad</td><td>別実装</td><td>25</td><td>rtol $10^{-8}$</td></tr>
+<tr><td>標本平均・中央値の逐次計算，時間を区切った計算，seed の再現性，理論値の式</td><td>直接の計算・一括の計算</td><td>解析解</td><td>23</td><td>中央値は完全一致</td></tr>
+<tr><td>標本の分布（連続分布）</td><td>KS 検定（$n=20000$）</td><td>統計的</td><td>22</td><td>$D\lt1.95/\sqrt{n}$</td></tr>
+<tr><td>標本の分布（離散）</td><td>$\chi^{2}$ 適合度検定（$n=20000$）</td><td>統計的</td><td>7</td><td>上側 0.1 % 点</td></tr>
+<tr><td>標本平均の散らばり：Gauss は $\sigma^{2}/n$，Cauchy の $\bar{x}$（$n=1000$，400 系列）は Cauchy 分布のまま（KS 検定と四分位範囲 ≈ $2\gamma$），中央値の標準偏差 ≈ $\pi\gamma/(2\sqrt{n})$</td><td>理論値</td><td>統計的</td><td>6</td><td>約 4 標準誤差，KS 検定</td></tr>
+<tr><td>ヒストグラムの標本の平均・分散</td><td>理論値</td><td>統計的</td><td>9</td><td>約 4 標準誤差</td></tr>
+<tr><td>最頻値（離散分布の同点を含む）</td><td>確率質量関数の最大を全列挙で求めた値</td><td>全列挙</td><td>9</td><td>完全一致</td></tr>
+<tr><td>入力の制限（範囲への丸め，上限．上限の外の 20000 個でも有限の値を返すこと）</td><td>—</td><td>—</td><td>5</td><td>—</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認では，境界値（$\nu$ の最小・最大，二項 $N=200$ と成功確率 0・1，Gamma $a=0.2$，Beta $a=b=0.2$，Weibull $m=30$，標本 0 個と 10000 個，系列 1 本，$n=10^{5}\times20$ 系列）と第3章の囲みの操作手順を含む 218 手順（照合 41）を実行した．</p>
+
+<!-- ============================================================ D.3 S02 -->
+<h2 id="secD-3">D.3 S02 ベイズ更新（<a href="sim/bayes-update.html">bayes-update</a>）</h2>
+
+<h3>D.3.1 対応する章・節とタブ</h3>
+<ul>
+<li>第4章：<a href="ch04_bayesian_inference.html#sec4-5">4.5 節</a>（シミュレーター4.1，タブ beta），<a href="ch04_bayesian_inference.html#sec4-8">4.8 節</a>（シミュレーター4.2，タブ gauss）．ほかに <a href="ch04_bayesian_inference.html#sec4-4">4.4 節</a>，<a href="ch04_bayesian_inference.html#sec4-6">4.6 節</a>．</li>
+<li>タブ <code>beta</code>「① Beta–Bernoulli（成功率）」，タブ <code>gauss</code>「② Gauss 分布の平均」．</li>
+</ul>
+
+<h3>D.3.2 何を計算しているか</h3>
+<ul>
+<li>①：事前分布 $\mathrm{Beta}(\mu\mid a,b)$ に，成功 $m$ 回・失敗 $l$ 回（$N=m+l$）を観測した後の事後分布 $\mathrm{Beta}(\mu\mid a+m,\,b+l)$．最尤推定値 $m/N$，MAP 推定値 $(a+m-1)/(a+b+N-2)$（$a+m\gt1$，$b+l\gt1$ のとき），事後平均 $(a+m)/(a+b+N)$（＝事後予測 $p(x=1\mid\data)$），事後の標準偏差，95 % 信用区間（等裾．正則化不完全ベータ関数の逆関数で求める），データの重み $w=N/(a+b+N)$．</li>
+<li>図の尤度は，面積を 1 にそろえた形（$\mathrm{Beta}(\mu\mid m+1,l+1)$ と同じ形）で描く．「逐次更新と一括更新を比べる」は，1 個ずつ更新したパラメーターの列と，2001 点の格子で 1 個ずつ数値的に掛け合わせた密度を，一括の解析解と比べる．</li>
+<li>②：ノイズの分散 $\sigma^{2}$ を既知として，事前分布 $\Normal(\mu\mid\mu_0,\sigma_0^{2})$ から
+$$\begin{aligned}\frac{1}{\sigma_N^{2}}&=\frac{1}{\sigma_0^{2}}+\frac{N}{\sigma^{2}},\\ \mu_N&=\sigma_N^{2}\left(\frac{\mu_0}{\sigma_0^{2}}+\frac{N\bar{x}}{\sigma^{2}}\right)\end{aligned}$$
+を求め，事後予測分布の分散を $\sigma^{2}$（ノイズ）と $\sigma_N^{2}$（知識不足）に分けて表示する．</li>
+</ul>
+
+<h3>D.3.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①：$a,b$ は 0.5〜30（0.5 刻み．既定 1，1），真の $\mu$ は 0.01〜0.99（既定 0.70），観測は 2000 回まで．②：$\mu_0$ −3〜3（0.0），$\sigma_0$ 0.1〜3（2.00），$\sigma$ 0.2〜3（1.00），真の $\mu$ −3〜3（1.5），観測は 1000 回まで．</li>
+<li>合成データ（教育用の合成データ．無次元）：①は一様乱数 $u\lt\mu$ なら成功，②は $x=\mu+\sigma\varepsilon$，$\varepsilon\sim\Normal(0,1)$．既定の seed は 20261112．seed を操作すると観測を消して引き直す．</li>
+</ul>
+
+<h3>D.3.4 簡略化している点</h3>
+<ul>
+<li>観測は独立で，$\mu$ は一定とする．②はノイズの分散を既知とする（未知なら事後予測は t 分布になる）．</li>
+<li>信用区間は等裾の区間で，最高密度区間ではない．パラメーターの範囲を制限している．</li>
+</ul>
+
+<h3>D.3.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>$a+m\lt1$ または $b+l\lt1$ では密度が端で発散し，内部に最大が無いので MAP 推定値を出さず，理由を表示する．$a+m=1$ または $b+l=1$（もう片方は 1 より大きい）では端が最大で，公式の値と一致する旨を注記する（例：一様事前で 3 回中 3 回成功の MAP は 1）．</li>
+<li>$N=0$ では最尤推定値は定義できない（表示しない）．事後分布が一様（$a+m=b+l=1$．Beta(1,1) のまま $N=0$ など）のときは，MAP 推定値を「1 つに決まらない」と表示する．</li>
+<li>$N$ が大きいと密度の山が鋭くなり縦軸が伸びるが，計算は対数で行うので桁あふれはしない．</li>
+</ul>
+
+<h3>D.3.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-5" style="min-width:600px">
+<caption>表D.5　S02 の数値の試験（170 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>Beta–Bernoulli の事後分布のパラメーター，事後平均・事後予測，標準偏差，MAP，最尤，95 % 信用区間，重み $w$（11 通りの $a,b,m,l$）</td><td>SciPy の stats.beta と解析解</td><td>解析解・別実装</td><td>98</td><td>事後平均 rtol $10^{-15}$，標準偏差 rtol $10^{-12}$，信用区間 最大絶対誤差 $10^{-11}$</td></tr>
+<tr><td>逐次更新＝一括更新（500 回，順序を逆にした場合，格子で 1 個ずつの数値計算 $N=10$〜2000）</td><td>一括の解析解</td><td>解析解</td><td>9</td><td>格子との相対差は最大 $7.46\times10^{-13}$（$N=2000$）</td></tr>
+<tr><td>seed の再現性，合成データの成功の割合・平均・分散</td><td>真の値</td><td>統計的</td><td>4</td><td>約 4 標準誤差</td></tr>
+<tr><td>Gauss の平均の事後分布 $\mu_N,\sigma_N^{2}$，予測分散，信用区間・予測区間，逐次＝一括（6 通り）</td><td>解析解と SciPy の stats.norm</td><td>解析解・別実装</td><td>50</td><td>$\mu_N$ rtol $10^{-13}$，$\sigma_N^{2}$ rtol $10^{-14}$，区間 $10^{-12}$</td></tr>
+<tr><td>MAP 推定値の場合分け（内部の最大，片方が 1 のときの端，一様のとき 1 つに決まらない，1 未満で発散）</td><td>密度の格子での最大，解析的な場合分け</td><td>解析解</td><td>9</td><td>—</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認は第4章の囲みの操作手順を含む 126 手順（照合 22）．</p>
+
+<!-- ============================================================ D.4 S03 -->
+<h2 id="secD-4">D.4 S03 回帰と過学習（<a href="sim/regression.html">regression</a>）</h2>
+
+<h3>D.4.1 対応する章・節とタブ</h3>
+<ul>
+<li>第6章：<a href="ch06_generalization.html#sec6-2">6.2 節</a>（シミュレーター6.1，タブ fit），<a href="ch06_generalization.html#sec6-4">6.4 節</a>（シミュレーター6.2，タブ biasvar），<a href="ch06_generalization.html#sec6-6">6.6 節</a>．</li>
+<li>第8章：<a href="ch08_linear_regression.html#sec8-6">8.6 節</a>（シミュレーター8.1，タブ fit），<a href="ch08_linear_regression.html#sec8-8">8.8 節</a>（シミュレーター8.2，タブ bayes），<a href="ch08_linear_regression.html#sec8-7">8.7 節</a>．</li>
+<li>タブ <code>fit</code>「① 多項式回帰と正則化」，<code>biasvar</code>「② バイアスと分散」，<code>bayes</code>「③ ベイズ線形回帰」．</li>
+</ul>
+
+<h3>D.4.2 何を計算しているか</h3>
+<ul>
+<li>データは第6章のデータ A（教育用の合成データ）：$s=(T-1300\ ^{\circ}\mathrm{C})/(200\ ^{\circ}\mathrm{C})\in[-1,1]$，$y=88+8s-5s^{2}+2\sin 3s+\varepsilon$（相対密度 %），$\varepsilon\sim\Normal(0,\sigma^{2})$．</li>
+<li>①：次数 $d$ の多項式（基底 $\phi_j(s)=s^{j}$，$j=0,\dots,d$ の $M=d+1$ 個，$\bm{\Phi}\in\R^{N\times M}$）で，<strong>目標値から固定の基準値 88 % を引いた $\bm{y}-88$</strong> に対して
+$$L(\bm{w})=\tfrac12\norm{(\bm{y}-88)-\bm{\Phi}\bm{w}}^{2}+\tfrac{\lambda}{2}\norm{\bm{w}}^{2}$$
+を最小にする．$\lambda=0$ は Householder の QR 分解，$\lambda\gt0$ は $[\bm{\Phi};\sqrt{\lambda}\bm{I}]$ の QR 分解で解く（逆行列は作らない）．$d+1\gt N$ かつ $\lambda=0$ では解が一意でないので，SVD による最小ノルム解を使い，その旨を表示する．訓練と検証（同じ分布から別に 200 点）の RMSE $=\sqrt{(1/N)\sum_n(y_n-f(s_n))^{2}}$，真の関数との RMSE，$\bm{\Phi}$ の条件数を表示する．</li>
+<li>②：$L$ 組の訓練データ集合に当てはめた曲線 $f^{(l)}(s)$ の平均 $\bar{f}(s)$ から，$(\text{バイアス})^{2}=\langle(\bar f-g)^{2}\rangle_s$，分散 $=\langle(1/L)\sum_{l=1}^{L}(f^{(l)}-\bar f)^{2}\rangle_s$，ノイズ $\sigma^{2}$ を求める（$\langle\cdot\rangle_s$ は $[-1,1]$ の中点則 200 点，$g$ は真の関数）．$\lambda$ の掃引は SVD で解き，平均と分散は 1 組ずつ逐次に更新する．</li>
+<li>③：事前分布 $p(\bm{w})=\Normal(\bm{w}\mid\bm{0},\sigma_w^{2}\bm{I})$ のもとで $\bm{S}_N^{-1}=\sigma_w^{-2}\bm{I}+\sigma^{-2}\bm{\Phi}^{\tp}\bm{\Phi}$，$\bm{m}_N=\sigma^{-2}\bm{S}_N\bm{\Phi}^{\tp}\bm{y}$（目標値はここでも $y-88$），予測 $\Normal(y_*\mid\bm{m}_N^{\tp}\bm{\phi}_*,\ \sigma^{2}+\bm{\phi}_*^{\tp}\bm{S}_N\bm{\phi}_*)$．知識不足の帯 $\pm2(\bm{\phi}^{\tp}\bm{S}_N\bm{\phi})^{1/2}$ と観測値の帯 $\pm2(\sigma^{2}+\bm{\phi}^{\tp}\bm{S}_N\bm{\phi})^{1/2}$ を別々に描く．基底は多項式（次数 $d$）か，Gauss 基底 9 個（中心 $c_j=-1,-0.75,\dots,1$，幅 $r=0.25$，定数の基底なし）．</li>
+</ul>
+
+<h3>D.4.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①：訓練データ数 $N$ 5〜50（10），ノイズの標準偏差 0〜3 %（1.0），次数 $d$ 0〜12（3），$\ln\lambda$ −20〜4（「正則化なし」が既定）．</li>
+<li>②：次数 0〜12（9），$\ln\lambda$ −14〜4（−3.0），1 組の $N$ 5〜50（15），ノイズ 0.2〜3 %，組の数 $L$ 10〜200（100）．計算は 1 コマ 12 ms 以内に区切る（Node.js での計測で既定 約 20〜25 ms，最大の設定で約 150 ms）．</li>
+<li>③：モデルが仮定する $\sigma$ 0.05〜5 %（1.00），$\sigma_w$ 0.1〜100（10.0），観測点は 100 点まで（初期 8 点），注目する点 $s_*$ −1.4〜1.4（1.20），事後分布からの関数の標本 0〜10 本．「データ A から引く」点のノイズは 1.0 % に固定（モデルの $\sigma$ とは別）．</li>
+<li>既定の seed は 20261112．点は 1 個ずつ（$s$ → $\varepsilon$ の順に）引くので，同じ seed なら $N$ を増やしても前の点は残る．検証データは seed + 1000003 の乱数列，③の標本は seed + 7（引き直すたびに +101）の乱数列を使う．</li>
+</ul>
+
+<h3>D.4.4 簡略化している点</h3>
+<ul>
+<li><strong>目標値から固定の基準値 88 % を引き，切片 $w_0$ を含む全係数に罰則（③では事前分布）をかけている．</strong>実務では切片に罰則をかけないことが多く，その場合とは $\lambda$ の効き方が少し違う（第8章で断っている）．88 % はデータから計算した値ではない．</li>
+<li>バイアス$^{2}$ は有限の $L$ 組からの推定なので，分散$/L$ 程度の誤差を含む．</li>
+<li>③の $\sigma$，$\sigma_w$ は与えた値で，周辺尤度の最大化はしない．基底は単項式で，直交多項式は使わない．</li>
+</ul>
+
+<h3>D.4.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>正則化なしの高い次数では $\bm{\Phi}$ の条件数が $10^{4}$〜$10^{8}$ になる（$N=10$，$d=9$ で $2.33\times10^{4}$）．$d+1\gt N$ かつ $\lambda=0$ は解が一意でないので最小ノルム解と注意文を出す．</li>
+<li>②で正則化なし・$N$ が小さいと分散が $10^{10}$ を超え，図の上端で切れる（$N=15$，$d=12$ で $4.7\times10^{18}$）．</li>
+<li>③で $\sigma$ を小さく，$\sigma_w$ を大きく，$d=12$ にすると，外挿で予測平均が −1400 % 程度まで振れる（数値は有限で計算は止まらないが，図の外に出る）．Gauss 基底では基底の中心から遠いと $\bm{\phi}\approx\bm{0}$ となり，知識不足の帯が 0 に近づく（データから遠いのに帯が細くなる．基底の置き方の仮定による）．</li>
+<li>NaN・∞ は計算を止めて理由を表示する．</li>
+</ul>
+
+<h3>D.4.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-6" style="min-width:600px">
+<caption>表D.6　S03 の数値の試験（217 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>データ A の真の関数，Gauss 基底の計画行列</td><td>NumPy</td><td>別実装</td><td>3</td><td>$10^{-12}$，$10^{-15}$</td></tr>
+<tr><td>①の係数（最小ノルム解を含む）と Ridge の係数，訓練・検証・真の関数との RMSE，条件数（13 通りの設定）</td><td>NumPy の lstsq，SciPy で解いた正規方程式</td><td>別実装</td><td>89</td><td>係数は相対ノルムで $\max(10^{-10},\ \text{条件数}\times10^{-13})$，RMSE rtol $10^{-7}$〜$10^{-8}$，条件数 rtol $10^{-8}$</td></tr>
+<tr><td>解の性質：QR の解＝SVD の解，正規方程式の残差，$N=d+1$ で補間，$\lambda\to\infty$ で $\bm{w}\approx\bm{\Phi}^{\tp}\bm{y}/\lambda$，$\norm{\bm{w}}$ が $\lambda$ について単調に減る，訓練 RMSE が次数について増えない</td><td>恒等式・極限</td><td>解析解</td><td>14</td><td>—</td></tr>
+<tr><td>②のバイアス$^{2}$・分散・$\langle(f^{(l)}-g)^{2}\rangle$</td><td>NumPy で直接計算した平均・分散</td><td>別実装</td><td>52</td><td>rtol $10^{-6}$〜$10^{-7}$．恒等式の相対差 $10^{-12}$ 未満，時間を区切った計算と一括の差 $10^{-10}$ 未満</td></tr>
+<tr><td>③の $\bm{m}_N$，$\bm{\phi}^{\tp}\bm{S}_N\bm{\phi}$，予測平均，MAP ＝ $\lambda=\sigma^{2}/\sigma_w^{2}$ の Ridge，データ 0 個で事前分布，観測を足すと $\bm{\phi}^{\tp}\bm{S}_N\bm{\phi}$ が増えない（5 通り）</td><td>NumPy（逆行列で作った $\bm{S}_N$）</td><td>別実装・解析解</td><td>36</td><td>相対ノルム差 $10^{-8}$</td></tr>
+<tr><td>seed の再現性</td><td>—</td><td>—</td><td>7</td><td>—</td></tr>
+<tr><td>合成データの $s$ の一様性，ノイズの分布・平均・分散（$n=20000$）</td><td>KS 検定，理論値</td><td>統計的</td><td>4</td><td>$D\lt1.95/\sqrt{n}$，4 標準誤差</td></tr>
+<tr><td>真の関数で予測したときの二乗誤差の平均 ≈ $\sigma^{2}$</td><td>理論値</td><td>統計的</td><td>1</td><td>4 標準誤差</td></tr>
+<tr><td>バイアス$^{2}$＋分散＋$\sigma^{2}$ ＝ 新しいノイズつき点での二乗誤差（独立な Monte Carlo 法）</td><td>実測 1.8489 と予測 1.8824</td><td>統計的</td><td>1</td><td>±0.2623（4 標準誤差）</td></tr>
+<tr><td>事後分布からの関数の標本の平均・分散（5 点）</td><td>$\bm{m}_N^{\tp}\bm{\phi}$，$\bm{\phi}^{\tp}\bm{S}_N\bm{\phi}$</td><td>統計的</td><td>10</td><td>4 標準誤差</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認は第6・8章の囲みの操作手順を含む 283 手順（照合 61）．<code>file://</code> で開いた直後の表示（3 幅）でもコンソールのエラーが無いことを確かめた．</p>
+
+<!-- ============================================================ D.5 S04 -->
+<h2 id="secD-5">D.5 S04 分類とカーネル（<a href="sim/classifier.html">classifier</a>）</h2>
+
+<h3>D.5.1 対応する章・節とタブ</h3>
+<ul>
+<li>第9章：<a href="ch09_linear_classification.html#sec9-4">9.4 節</a>（シミュレーター9.1），<a href="ch09_linear_classification.html#sec9-6">9.6 節</a>（シミュレーター9.2），<a href="ch09_linear_classification.html#sec9-3">9.3 節</a>．いずれもタブ logistic．</li>
+<li>第10章：<a href="ch10_kernel_methods.html#sec10-5">10.5 節</a>（シミュレーター10.1，タブ svm）．第11章：<a href="ch11_svm.html#sec11-5">11.5 節</a>（シミュレーター11.1），<a href="ch11_svm.html#sec11-6">11.6 節</a>（シミュレーター11.2）．いずれもタブ svm．</li>
+<li>タブ <code>logistic</code>「① ロジスティック回帰」（ラベル $y\in\{0,1\}$），<code>svm</code>「② カーネルと SVM」（ラベル $y\in\{-1,+1\}$）．</li>
+</ul>
+
+<h3>D.5.2 何を計算しているか</h3>
+<ul>
+<li>①：特徴 $\bm{\phi}(\bm{x})$（1 次 $(x_1,x_2)$，または 2 次項 $x_1^{2},x_1x_2,x_2^{2}$ を加えたもの），$a_n=\bm{w}^{\tp}\bm{\phi}(\bm{x}_n)+b$ として，交差エントロピーの<strong>和</strong>に正則化項を足した
+$$\begin{aligned}L(\bm{w},b)&=\sum_{n=1}^{N}\bigl[\ln(1+e^{a_n})-y_na_n\bigr]\\ &\quad+\tfrac{\lambda}{2}\norm{\bm{w}}^{2}\end{aligned}$$
+（$b$ は正則化しない）を，$\bm{w}=\bm{0}$，$b=0$ から勾配降下法で減らす．$\ln(1+e^{a})$ は桁あふれしない形で計算する．学習率の安定の目安として $2/L_c$（$L_c=\lambda_{\max}(\tilde{\bm{\Phi}}^{\tp}\tilde{\bm{\Phi}})/4+\lambda$，$\tilde{\bm{\Phi}}$ は特徴に定数 1 の列を加えた行列）を，比較のための最小値 $L^{*}$ を Newton 法で求めて表示する．最小値が有限の重みに無い場合（線形分離できるデータで $\lambda=0$ など）は Newton 法の判定でそう表示する．</li>
+<li>②：カーネル（線形 $\bm{x}^{\tp}\bm{x}'$，多項式 $(\bm{x}^{\tp}\bm{x}'+1)^{2}$ と $(\bm{x}^{\tp}\bm{x}'+1)^{3}$，RBF $\exp(-\gamma\norm{\bm{x}-\bm{x}'}^{2})$，$\gamma=1/(2\ell^{2})$）の SVM の双対問題
+$$\begin{aligned}\max_{\bm{\alpha}}\ &\sum_n\alpha_n-\tfrac12\sum_{n,m}\alpha_n\alpha_m y_ny_m k(\bm{x}_n,\bm{x}_m),\\ &0\le\alpha_n\le C,\qquad \sum_n\alpha_ny_n=0\end{aligned}$$
+を SMO 法で解く．パラメーターを変えるたびに $\bm{\alpha}=\bm{0}$ から解き直し，停止の判定は $m(\bm{\alpha})-M(\bm{\alpha})\le\varepsilon=10^{-3}$．$f(\bm{x})=\sum_n\alpha_ny_nk(\bm{x}_n,\bm{x})+b$ を描き，$b$ は自由なサポートベクトル（$0\lt\alpha_n\lt C$）から求める（無いときは中点）．画面には $f(\bm{x})$ が「スコアであって確率ではない」ことを書いてある．KKT 条件の残差，双対の目的関数 $D$，主問題の値 $P$，双対ギャップも表示する．</li>
+</ul>
+
+<h3>D.5.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>共通：データの型（線形分離できる／重なりあり／同心円／三日月／XOR．教育用の合成データ．2 つの記述子は標準化した無次元の値），データ数 $N$ 10〜200（2 刻み．既定 60），クリックで足す点を含めて 300 点まで．既定の seed は 20261112（両タブ）．</li>
+<li>①：$\lambda$ $10^{-3}$〜100（対数目盛．既定 0.010．「正則化なし」あり），学習率 $\eta$ $10^{-4}$〜1（対数目盛．既定 0.010），反復は 50000 回まで．</li>
+<li>②：$C$ 0.01〜1000（既定 1.00），$\gamma$ 0.01〜100（既定 1.00），SMO の反復の上限 10〜100,000 回（既定 100,000）．</li>
+<li><strong>$\gamma$ と $C$ のスライダーは $\log_{10}$ の 0.05 刻みなので，切りのよい値ちょうどにならない</strong>．表示「20.0」は $\gamma=10^{1.3}=19.953$，「0.0501」は $10^{-1.3}$，「5.01」は $10^{0.7}$ である（$C$ の「1000」は $10^{3}$ ちょうど）．$\eta$ も 0.3 を選べず 0.32 になる．第10・11章の本文の数値は画面の値（$\gamma=19.953$ など）で書いてある．$\gamma=20$ ちょうどで計算した値とは 4 桁目が違う（例：$C=1$ の三日月の双対の目的関数 $D$ は画面で 19.319，$\gamma=20$ ちょうどでは 19.336．マージン幅は 0.3233 と 0.3231）．</li>
+</ul>
+
+<h3>D.5.4 簡略化している点</h3>
+<ul>
+<li>入力は最初から標準化した値とし，2 次項は標準化しない（そのため安定な $\eta$ が小さくなる）．損失は平均ではなく和なので，安定な学習率は $N$ に依存する．</li>
+<li>全データの勾配降下法だけ（ミニバッチなし）．$b$ は正則化しない．評価は訓練の正解率だけ（検証・交差検証なし）．</li>
+<li>SMO に shrinking やカーネル値のキャッシュは使わない．スコアを確率に直す処理（Platt のスケーリング）はしない．多項式カーネルの定数は 1 に固定，RBF カーネルは $\sigma_f=1$．</li>
+</ul>
+
+<h3>D.5.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>$\eta\gt2/L_c$ では損失が振動したり増えたりする．$\norm{\bm{w}}\gt10^{6}$ か NaN で停止し，理由を表示する（目安を超えても収束する場合がある．目安は十分条件である）．</li>
+<li>$\lambda=0$ で線形分離できると最小値が無く，$\norm{\bm{w}}$ が増え続ける（「有限の重みでは無い」と表示）．1 クラスだけのデータでは $b$ が発散する．</li>
+<li>SVM は 2 つのクラスに少なくとも 1 点ずつ必要で，足りなければ理由を表示する．線形カーネル・重なりのあるデータ・大きな $C$ では SMO が遅く，上限に達すると「この解は最適ではありません」と表示する．大きな $C$ では $m-M$ が小さくても双対ギャップ $P-D$ が大きめに残る．</li>
+<li>同じ位置に反対のラベルの点がある場合（SMO の 2 次の係数が 0）も，小さな値（$10^{-12}$）で回避して収束する（試験で確認）．</li>
+<li><strong>停止の許容値 $\varepsilon=10^{-3}$ のため，サポートベクトルの数が厳密な双対の解と 1 個違うことがある．</strong>例：重なりのあるデータ，RBF $\gamma=1$，$C=1$ で画面は 35 個（○ 16，◇ 19）だが，そのうち 1 点は $\alpha_n=1.7\times10^{-3}$ の残りで，厳密な解では 34 個．$D$・マージン幅・正解率は表示の桁で一致する．点を足す順でも同じことが起きる（第11章の 3 点の例で順を変えると $\alpha_n=2.4\times10^{-4}$ が残り，サポートベクトル 3 個・幅 2.001）．</li>
+<li>条件の悪い SMO の反復回数は，乱数の 1 ulp の違いで環境によって少し変わる（D.1.3）．</li>
+</ul>
+
+<h3>D.5.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-7" style="min-width:600px">
+<caption>表D.7　S04 の数値の試験（275 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>①の損失・勾配・勾配降下法の 1 ステップ，$\lambda_{\max}$ と $L_c$（4 通りのデータ）</td><td>NumPy</td><td>別実装</td><td>68</td><td>rtol $10^{-12}$ 程度（$\lambda_{\max}$ は $10^{-10}$）</td></tr>
+<tr><td>勾配</td><td>中心差分</td><td>解析解</td><td>12</td><td>相対 $10^{-7}$</td></tr>
+<tr><td>最小点（Newton 法）</td><td>SciPy の BFGS＋Newton 法</td><td>別実装</td><td>24</td><td>$L^{*}$ rtol $10^{-10}$，$\bm{w}^{*}$ $10^{-6}$</td></tr>
+<tr><td>最小値が無い場合（線形分離・1 クラス）の判定，$\norm{\bm{w}}$ の単調増加，データ 0 個</td><td>解析的な性質</td><td>解析解</td><td>9</td><td>—</td></tr>
+<tr><td>交差エントロピーが桁あふれしないこと（$a=\pm800$ など）</td><td>直接の式・漸近形</td><td>解析解</td><td>23</td><td>—</td></tr>
+<tr><td>カーネルと Gram 行列</td><td>NumPy</td><td>別実装</td><td>7</td><td>$10^{-12}$</td></tr>
+<tr><td>SMO の解（$\varepsilon=10^{-9}$，7 通り）：双対の目的関数 $D$，$\norm{\bm{w}}^{2}$，箱制約・等式制約，KKT 残差，弱双対性，$b$，テスト点 8 個の $f(\bm{x})$．画面の既定 $\varepsilon=10^{-3}$ での $D$</td><td>SciPy の SLSQP・trust-constr で解いた双対問題（参照解の KKT 残差 $10^{-6}$ 以下）</td><td>別実装</td><td>77</td><td>$D$ rtol $10^{-8}$，KKT 残差 $10^{-8}$ 以下，$b$ $10^{-5}$，$f(\bm{x})$ $10^{-4}$，既定 $\varepsilon$ での $D$ の相対差 $10^{-3}$ 以下</td></tr>
+<tr><td>手計算できる例（2 点，3 点，ソフトマージンで $P=D=0.32$．第11章 11.4 節の型）</td><td>手計算の値</td><td>解析解</td><td>14</td><td>rtol $10^{-12}$</td></tr>
+<tr><td>特別な場合と反復の上限，各ステップで $D$ が減らないこと，$f(\bm{x})$ の式</td><td>—</td><td>解析解</td><td>11</td><td>—</td></tr>
+<tr><td>seed の再現性</td><td>—</td><td>—</td><td>16</td><td>—</td></tr>
+<tr><td>合成データの平均・分散・半径，象限の数</td><td>理論値</td><td>統計的</td><td>11</td><td>4 標準誤差，$\chi^{2}$（0.1 %）</td></tr>
+<tr><td>画面の既定値での数値の記録（初期の損失 $=N\ln 2$ など）</td><td>—</td><td>解析解</td><td>3</td><td>—</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認は第9〜11章の囲みの操作手順を含む 339 手順（照合 71）．<code>file://</code> で開いた直後の表示（3 幅）でもコンソールのエラーが無いことを確かめた．</p>
+
+<!-- ============================================================ D.6 S05 -->
+<h2 id="secD-6">D.6 S05 ニューラルネットワーク（<a href="sim/neural-net.html">neural-net</a>）</h2>
+
+<h3>D.6.1 対応する章・節とタブ</h3>
+<ul>
+<li>第14章：<a href="ch14_neural_networks.html#sec14-4">14.4 節</a>（シミュレーター14.1），<a href="ch14_neural_networks.html#sec14-5">14.5 節</a>（シミュレーター14.2）．いずれもタブ train．</li>
+<li>第15章：<a href="ch15_backpropagation.html#sec15-3">15.3 節</a>（シミュレーター15.1，タブ trace），<a href="ch15_backpropagation.html#sec15-4">15.4 節</a>（シミュレーター15.2，タブ gradcheck），<a href="ch15_backpropagation.html#sec15-5">15.5 節</a>（シミュレーター15.3，タブ train），<a href="ch15_backpropagation.html#sec15-8">15.8 節</a>．</li>
+<li>タブ <code>trace</code>「① 1 ステップを数値で追う」，<code>train</code>「② 学習を見る」，<code>gradcheck</code>「③ 勾配確認」．</li>
+</ul>
+
+<h3>D.6.2 何を計算しているか</h3>
+<ul>
+<li>隠れ層 1 層・出力 1 個のネットワーク：$\bm{a}^{(1)}=\bm{W}^{(1)}\bm{x}+\bm{b}^{(1)}$，$\bm{z}^{(1)}=h(\bm{a}^{(1)})$，$a^{(2)}=\bm{W}^{(2)}\bm{z}^{(1)}+b^{(2)}$，$\hat{y}=\sigma(a^{(2)})$（分類）または $\hat{y}=a^{(2)}$（回帰）．逆伝播は
+$$\begin{aligned}\delta^{(2)}&=\hat{y}-y,\\ \bm{\delta}^{(1)}&=h'(\bm{a}^{(1)})\odot\bigl(\bm{W}^{(2)\tp}\delta^{(2)}\bigr),\\ \pdiff{L}{\bm{W}^{(l)}}&=\bm{\delta}^{(l)}\bm{z}^{(l-1)\tp},\qquad \pdiff{L}{\bm{b}^{(l)}}=\bm{\delta}^{(l)}\end{aligned}$$
+（$\bm{z}^{(0)}=\bm{x}$）．</li>
+<li>①：2–2–1 のネットワーク（隠れ層 tanh，出力 sigmoid，交差エントロピー）で，順伝播 → 逆伝播 → 重みの更新 $\bm{w}\leftarrow\bm{w}-\eta\,\partial L/\partial\bm{w}$ の数値を順に表示する．既定値は第15章 15.3 節の手計算と同じ（$\bm{x}=(1.0,0.5)^{\tp}$，$y=1$，$\eta=0.5$）．乱数は使わない．</li>
+<li>②：損失 $L$ は，ミニバッチ $\mathcal{B}$ の平均 $(1/\abs{\mathcal{B}})\sum_{n\in\mathcal{B}}\ell_n$ に重み減衰の項 $(\lambda/2)(\norm{\bm{W}^{(1)}}^{2}+\norm{\bm{W}^{(2)}}^{2})$ を足したもの（バイアスには掛けない）．分類の $\ell$ は交差エントロピー（$\ln(1+e^{a})-ya$ の形で計算），回帰の $\ell$ は $\tfrac12(\hat{y}-y)^{2}$．素朴な確率的勾配降下法で学習する．回帰の目標値は訓練データの平均と標準偏差で標準化する（損失は標準化した単位，RMSE は % で表示）．初期値は tanh・sigmoid が Xavier（分散 $2/(\text{入力数}+\text{出力数})$），ReLU が He（$2/\text{入力数}$），出力層は Xavier，バイアスは 0．「全部 0」も選べる．</li>
+<li>③：全パラメーターについて，逆伝播の勾配と差分（中心差分と前進差分）を比べ，刻み $\epsilon$ に対する誤差の V 字を描く．合否は「ベクトルとしての相対誤差 $\norm{\bm{g}-\hat{\bm{g}}}/\max(\norm{\bm{g}},\norm{\hat{\bm{g}}})\le10^{-6}$」で判定する．</li>
+</ul>
+
+<h3>D.6.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①：$x_1,x_2$ −3〜3（0.1 刻み），$y\in\{0,1\}$，$\eta$ 0.05〜5（0.05 刻み）．</li>
+<li>②：課題は回帰（データ A）／同心円／三日月／XOR，隠れユニット数 1〜16（既定 3），活性化 tanh／ReLU／sigmoid，$\eta$ $10^{-3}$〜2.5（対数目盛で $\log_{10}\eta$ の 0.1 刻み．右端は $10^{0.4}\approx2.51$ で，計算のファイルの上限 3.16 には届かない．既定 0.10），ミニバッチ 全部／8／1（既定 8），重み減衰 $\lambda$ 0〜0.1 の 9 段（既定 0），訓練データ数 回帰 5〜50（20）・分類 40〜200（100），学習は 5000 エポックまで．検証データは別の乱数の流れで 200 個．</li>
+<li>③：$\epsilon$ は $10^{-12}$〜$10^{-1}$（対数で $10^{0.25}$ 刻み．既定 $10^{-5}$）．</li>
+<li>seed は 2 つ：初期値とミニバッチの順の seed，データの seed（どちらも既定 20261112）．</li>
+</ul>
+
+<h3>D.6.4 簡略化している点</h3>
+<ul>
+<li>隠れ層は 1 層，出力は 1 個．最適化は素朴な確率的勾配降下法だけ（Adam・モーメンタム・ドロップアウトは無い）．</li>
+<li>回帰の目標値は訓練データで標準化する．①の図の数値は 4 桁で表示する（表は 6 桁）．</li>
+<li>分類データ（同心円・三日月・XOR）の生成式は S04 とは別のもので，S05 の XOR は中心 $(\pm0.5,\pm0.5)$ の 4 群である（第14章 14.4 節の $\{0,1\}^{2}$ の手計算とは配置とラベルが違う）．</li>
+</ul>
+
+<h3>D.6.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>$\eta$ が大きい，またはミニバッチが小さいと発散する．NaN・∞ または損失 $\gt10^{6}$ で止めて理由を表示する．表示するエポックは損失が $10^{6}$ を超えたエポックである（例：回帰，隠れユニット 8，$\eta=1$，ミニバッチ 1 では 1 エポック目で損失 $4.2\times10^{21}$ となり停止．$\eta=2.5$，ミニバッチ 8 では 3 エポック目で訓練損失 $9.27\times10^{7}$ となり停止）．発散した後の RMSE は $10^{4}$ 以上なら指数の形（例 $5.72\times10^{24}$）で表示する．</li>
+<li>sigmoid の隠れ層では勾配が小さくなりやすく，ReLU では出力が 0 のまま動かないユニットが出る．分類で完全に分離できると，$\lambda=0$ では重みが増え続ける．</li>
+<li>初期値が全部 0 だと対称性が破れない（tanh では重みが 0 のまま動かず，バイアス $b^{(2)}$ だけが動く）．</li>
+<li>XOR を隠れユニット 2 個・既定の seed・$\eta=0.1$ で学習させると，正解率 75 % の局所的な解に留まる（隠れユニット 4 個なら 100 %）．表せることと学習で見つけられることは別である（第14章）．</li>
+<li>勾配確認では，$\epsilon$ が小さすぎると丸め誤差で差分が不正確になる．0 に近い勾配の成分は成分ごとの相対誤差が大きく見える（例：大きさ $3.8\times10^{-6}$ の成分で $4.6\times10^{-6}$）ので，ベクトルとしての相対誤差で判定している．ReLU の折れ目をまたぐ $\epsilon$ では差分が微分にならない．</li>
+</ul>
+
+<h3>D.6.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-8" style="min-width:600px">
+<caption>表D.8　S05 の数値の試験（253 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>①の 1 ステップ（既定値と別の入力の 4 通り）：$a$，$z$，$\hat{y}$，$L$，$\delta$，各勾配，更新後の重みと損失</td><td>NumPy の手書きの計算と PyTorch の自動微分（倍精度）</td><td>別実装</td><td>79</td><td>$10^{-15}$〜$10^{-13}$</td></tr>
+<tr><td>乱数で作ったネットワーク 32 通り（活性化 4 種 × 出力 2 種 × 形 4 種，重み減衰つき）の損失と勾配</td><td>PyTorch の自動微分</td><td>別実装</td><td>96</td><td>$10^{-13}$ に勾配の大きさを掛けた値</td></tr>
+<tr><td>ミニバッチ確率的勾配降下法 6 エポック（同じデータ・初期値・並べ順）</td><td>NumPy の実装</td><td>別実装</td><td>8</td><td>$10^{-12}$</td></tr>
+<tr><td>出力層の誤差 $\delta^{(2)}=\hat{y}-y$（sigmoid＋交差エントロピー，恒等＋二乗和/2）</td><td>$\partial\ell/\partial a^{(2)}$ の中心差分</td><td>解析解</td><td>29</td><td>rtol $10^{-8}$</td></tr>
+<tr><td>勾配確認（12 通りのネットワーク）．中心差分の誤差は $\epsilon^{2}$ に，前進差分は $\epsilon$ に比例</td><td>中心差分</td><td>解析解</td><td>16</td><td>ベクトルの相対誤差 $10^{-6}$ 以下．既定の重みで $\epsilon=10^{-5}$ のとき最大絶対誤差 $3.10\times10^{-12}$</td></tr>
+<tr><td>重み減衰の項，活性化が恒等なら線形写像，全部 0 の初期値の対称性，パラメーターの並べ方，発散の検出</td><td>解析的な性質</td><td>解析解</td><td>6</td><td>—</td></tr>
+<tr><td>合成データ（データ A の真の関数は解析的に．ノイズ，入力の一様性，同心円の半径，XOR のラベル，初期値の分散は統計的に）</td><td>理論値，KS 検定</td><td>解析解・統計的</td><td>15</td><td>4 標準誤差</td></tr>
+<tr><td>既定の設定での学習の記録</td><td>—</td><td>—</td><td>4</td><td>—</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認は第14・15章の囲みの操作手順を含む 174 手順（照合 19）．390 px では「いまの数値を式に入れると」の長い式が枠の中で横に送る形になる（ページは横にはみ出さない）．</p>
+
+<!-- ============================================================ D.7 S06 -->
+<h2 id="secD-7">D.7 S06 ガウス過程とベイズ最適化（<a href="sim/gp-bo.html">gp-bo</a>）</h2>
+
+<h3>D.7.1 対応する章・節とタブ</h3>
+<ul>
+<li>第12章：<a href="ch12_gaussian_process.html#sec12-7">12.7 節</a>（シミュレーター12.1，タブ gp），<a href="ch12_gaussian_process.html#sec12-6">12.6 節</a>，<a href="ch12_gaussian_process.html#sec12-8">12.8 節</a>．</li>
+<li>第13章：<a href="ch13_bayesian_optimization.html#sec13-5">13.5 節</a>（シミュレーター13.1，タブ bo），<a href="ch13_bayesian_optimization.html#sec13-8">13.8 節</a>（シミュレーター13.2，タブ compare），<a href="ch13_bayesian_optimization.html#sec13-4">13.4 節</a>，<a href="ch13_bayesian_optimization.html#sec13-6">13.6 節</a>．</li>
+<li>タブ <code>gp</code>「① ガウス過程回帰」，<code>bo</code>「② ベイズ最適化」，<code>compare</code>「③ ランダム探索との比較」．</li>
+</ul>
+
+<h3>D.7.2 何を計算しているか</h3>
+<ul>
+<li>目的の関数は第12章のデータ C（教育用の合成データ．添加量 $x\in[0,10]$ mol%，$y=\log_{10}(\sigma_{\mathrm{ion}}/\mathrm{S\,cm^{-1}})$，観測ノイズの標準偏差 0.05）．真の大域的な最大は $x=7.000$，$y=-3.4000$，局所的な極大は $x=2.200$，$y=-3.99988$．</li>
+<li>①：RBF カーネル $k(x,x')=\sigma_f^{2}\exp(-(x-x')^{2}/(2\ell^{2}))$，$\bm{K}_y=\bm{K}+\sigma^{2}\bm{I}$．<strong>平均関数は定数 $m$</strong>（既定は観測値の平均 $\bar{y}$）で，
+$$\begin{aligned}\mu_*&=m+\bm{k}_*^{\tp}\bm{a},\quad \bm{a}=\bm{K}_y^{-1}(\bm{y}-m\bm{1}),\\ \sigma_*^{2}&=k(x_*,x_*)-\bm{k}_*^{\tp}\bm{K}_y^{-1}\bm{k}_*,\end{aligned}$$
+$$\begin{aligned}&\ln p(\bm{y}\mid\bm{\theta})\\ &=-\tfrac12(\bm{y}-m\bm{1})^{\tp}\bm{K}_y^{-1}(\bm{y}-m\bm{1})\\ &\quad-\tfrac12\ln\abs{\bm{K}_y}-\tfrac N2\ln 2\pi\end{aligned}$$
+を，$\bm{K}_y$ の Cholesky 分解（数値的に正定値でなければ対角に小さな値＝ジッターを足して再試行し，その量を表示）と前進・後退代入で計算する（逆行列は作らない）．双対の係数ベクトルは画面でも第10・12章と同じ太字の $\bm{a}$ で表示する．潜在関数の帯 $\pm2\sigma_*$ と観測値の帯 $\pm2\sqrt{\sigma_*^{2}+\sigma^{2}}$ を別々に描く．丸めで $\sigma_*^{2}\lt0$ になったら 0 に切り，その個数を表示する．格子探索で $\ell$（41 点）または $\ell,\sigma_f,\sigma$（$41\times13\times21=11193$ 通り）を対数周辺尤度が最大になるように選べる．</li>
+<li>②：獲得関数を 401 点（0.025 mol% 刻み）で評価し，最大の点を次に観測する（同じ値なら $x$ の小さい方）．最大化では
+$$\begin{aligned}\mathrm{EI}&=(\mu_*-f_{\mathrm{best}}-\xi)\,\Phi(z)+\sigma_*\Normal(z\mid0,1),\\ z&=\frac{\mu_*-f_{\mathrm{best}}-\xi}{\sigma_*},\\ \mathrm{PI}&=\Phi(z),\qquad \mathrm{UCB}=\mu_*+\kappa\sigma_*\end{aligned}$$
+（$\sigma_*=0$ では $\mathrm{EI}=\max(\mu_*-f_{\mathrm{best}}-\xi,0)$），最小化（$-y$ を最小にする）では LCB $=\mu_*-\kappa\sigma_*$ と符号を変えた EI を使う．$f_{\mathrm{best}}$ は観測値の最良か，観測点での事後平均の最良を選べる．</li>
+<li>③：同じ予算でベイズ最適化・ランダム探索・等間隔の格子を繰り返し，<strong>単純後悔</strong> $r_n=y_{\max}-y(\hat{x}_n)$（$\hat{x}_n$ は $n$ 回目までに観測値が最大だった点，$y(\hat{x}_n)$ はその点の真の値）の中央値と四分位範囲を描く．格子は評価回数 $n$ ごとに「予算 $n$ なら置く格子」$x_k=10(k-\tfrac12)/n$ を測った場合とする．</li>
+</ul>
+
+<h3>D.7.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①：観測は 40 点まで（「例の 8 点」は $x=0.4,1.6,2.8,4.0,5.2,6.4,8.2,9.4$ mol%），$\ell$ 0.1〜10 mol%（対数目盛．既定 1.00），$\sigma_f$ 0.05〜3（0.80），モデルの $\sigma$ 0.005〜0.5（対数目盛．既定 0.0500．合成データのノイズ 0.05 とは別），定数の $m$ −6〜−3．</li>
+<li>②：初期点 1〜10（3．一様乱数），予算 2〜40（20），$\xi$ 0〜0.5，$\kappa$ 0〜5（2.0）．「毎回 $\ell$ を周辺尤度で選ぶ」では $\ell\in[0.2,5]$ の 25 点から選ぶ．自動実行は押したときだけ動く．</li>
+<li>③：予算 5〜40（20），繰り返し 10〜200（200）．1 コマ 12 ms で区切る（既定の 200 回 × 20 評価で約 0.4 s）．</li>
+<li>既定の seed は 20261112．③の繰り返し $r$ には，ベイズ最適化に seed $+r$，ランダム探索に seed $+100000+r$，格子のノイズに seed $+200000+r$ を使う．本文の図の一部は NumPy の乱数で別に計算したもので，装置（mulberry32）とは乱数列が違う（第13章で断っている）．</li>
+</ul>
+
+<h3>D.7.4 簡略化している点</h3>
+<ul>
+<li>入力は 1 次元．平均関数は定数で，周辺尤度では $\bar{y}$ を既知の値とみなす．</li>
+<li>獲得関数の最大化は 401 点の格子．ハイパーパラメーターは固定か格子探索だけ（勾配法や事前分布は使わない）．推奨点は観測値が最大の点．</li>
+<li>③の $\sigma_f$，$\sigma$，$f_{\mathrm{best}}$ の定義は固定．格子は $n$ ごとに別の配置．</li>
+</ul>
+
+<h3>D.7.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>$\sigma$ が小さく $\ell$ が大きいとき，または同じ $x$ の観測が重なると $\bm{K}_y$ がほぼ特異になる．ジッターを足して計算を続け，その量を画面に書く（試験では $\sigma=0$ で同じ $x$ が 2 個のときジッターが入ることを確認）．</li>
+<li>観測が少ないと周辺尤度の最大が平らになったり範囲の端に張り付いたりする（例の 8 点では $\sigma$ が下端 0.005 に張り付く）．</li>
+<li>$\ell$ が長く $\sigma$ が小さいと EI・PI がどこでも 0 になる．そのときは格子の左端を選び，赤字で注意を出す．</li>
+<li>共有ライブラリの標準 Gauss 分布の累積分布関数 $\Phi(z)$ は，$z\approx-20$ より先の裾で相対誤差が 0.4 % 程度になり，そこでの EI（$10^{-123}$ 程度）は mpmath の値と相対 3 % 違う．画面に出る数値には影響しないが，EI がどこでも $10^{-100}$ 以下になる設定（$\ell=10$，$\sigma$ が小さいなど）では，選ばれる点が丸めで決まる．③の比較でベイズ最適化が選んだ点 1331 回を NumPy でやり直すと，6 回だけ違う点を選んだ（4 回は $\ell$ を選ぶ周辺尤度が平らで同じ値の中の選び方の差，2 回は EI が全点 $10^{-300}$ 以下の場合）．</li>
+<li>観測ノイズのため，評価回数を増やしても単純後悔が増えることがある（既定の②では 10 回目と 16 回目）．</li>
+<li>$\ell=10$ に決め打ちするとベイズ最適化がランダム探索に負ける（予算 30，200 回で中央値 0.0488 対 0.0186）．$\ell$ を毎回周辺尤度で選べば負けない．</li>
+<li>NaN・∞ は計算を止めて理由を表示する．</li>
+</ul>
+
+<h3>D.7.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-9" style="min-width:600px">
+<caption>表D.9　S06 の数値の試験（221 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>データ C の 11 点，真の最大・局所的な極大の位置と値</td><td>SciPy の minimize_scalar</td><td>別実装</td><td>7</td><td>位置 $2\times10^{-7}$，値 $10^{-13}$</td></tr>
+<tr><td>予測平均・分散・事後共分散，対数周辺尤度とその 3 項（9 例）．観測 1 点・2 点の手計算の式，観測 0 点，遠方で事前分布に戻ること，$\sigma\to0$ で補間</td><td>Cholesky 分解を使わない NumPy の solve・slogdet，SciPy の multivariate_normal，2 × 2 の陽な逆行列</td><td>別実装・解析解</td><td>107</td><td>$10^{-10}$（手計算の式は $10^{-12}$〜$10^{-14}$）</td></tr>
+<tr><td>ジッター，分散の丸め，入力の検査</td><td>—</td><td>解析解</td><td>8</td><td>—</td></tr>
+<tr><td>$\ell$ に対する対数周辺尤度の曲線と格子探索の最大</td><td>NumPy</td><td>別実装</td><td>8</td><td>$10^{-10}$〜$10^{-12}$</td></tr>
+<tr><td>EI と PI（12 例），$\sigma_*\to0$ の極限，単調性，UCB・LCB の式</td><td>mpmath（50 桁）の数値積分</td><td>別実装・解析解</td><td>37</td><td>EI rtol $10^{-11}$，PI $10^{-12}$</td></tr>
+<tr><td>401 点の格子での獲得関数の値と選ばれる点（7 例）</td><td>NumPy</td><td>別実装</td><td>21</td><td>$f_{\mathrm{best}}$ rtol $10^{-12}$</td></tr>
+<tr><td>最大化と最小化の対応：獲得関数 3 種 × $f_{\mathrm{best}}$ 2 種 × $\ell$ 固定／選択 × seed 4 個で，観測点の列</td><td>目的関数の符号を反転した問題</td><td>解析解</td><td>14</td><td>15 回とも完全一致．LCB$(-y)=-$UCB$(y)$ はビット単位で一致</td></tr>
+<tr><td>seed の再現性，単純後悔の定義</td><td>—</td><td>—</td><td>9</td><td>—</td></tr>
+<tr><td>中央値と四分位範囲</td><td>NumPy の quantile</td><td>別実装</td><td>2</td><td>—</td></tr>
+<tr><td>合成データのノイズの平均・分散，ランダム探索の $x$ の一様性，事前・事後分布からの標本 4000 本の共分散（15 成分）</td><td>理論値，KS 検定</td><td>統計的</td><td>8</td><td>4 標準誤差，$D\lt1.95/\sqrt{n}$</td></tr>
+</tbody>
+</table></div>
+<p>③の比較の結果（ベイズ最適化とランダム探索の単純後悔）は，固定 seed の 200 回の実測値として記録し，合否はつけていない（四分位点は NumPy の quantile での計算し直しと一致した）．EI の参照に SciPy の quad を使わなかったのは，$z\approx-12$ の裾で相対誤差 2 % を出したためである．画面の確認は第12・13章の囲みの操作手順を含む 158 手順（照合 24）．</p>
+
+<!-- ============================================================ D.8 S07 -->
+<h2 id="secD-8">D.8 S07 潜在変数（<a href="sim/latent.html">latent</a>）</h2>
+
+<h3>D.8.1 対応する章・節とタブ</h3>
+<ul>
+<li>第17章：<a href="ch17_clustering_em.html#sec17-5">17.5 節</a>（シミュレーター17.1，タブ em），<a href="ch17_clustering_em.html#sec17-8">17.8 節</a>（シミュレーター17.2，タブ em）．</li>
+<li>第18章：<a href="ch18_latent_variables.html#sec18-2">18.2 節</a>（シミュレーター18.1，タブ pca），<a href="ch18_latent_variables.html#sec18-6">18.6 節</a>（シミュレーター18.2，タブ pca）．</li>
+<li>タブ <code>em</code>「① k-means と EM 法」，<code>pca</code>「② PCA」．</li>
+</ul>
+
+<h3>D.8.2 何を計算しているか</h3>
+<ul>
+<li>①（Gauss 混合の EM 法，2 次元）：E ステップで負担率
+$$\gamma_{nk}=\frac{\pi_k\Normal(\bm{x}_n\mid\bm{\mu}_k,\bm{\Sigma}_k)}{\sum_{j}\pi_j\Normal(\bm{x}_n\mid\bm{\mu}_j,\bm{\Sigma}_j)}$$
+を，M ステップで $N_k=\sum_n\gamma_{nk}$，$\pi_k=N_k/N$，$\bm{\mu}_k$，$\bm{\Sigma}_k$ を更新し，対数尤度 $\ln p(\bm{X}\mid\bm{\theta})$ の推移を描く．Gauss 密度は 2 × 2 の Cholesky 分解で計算する．「分散の下限」がオンのときは，M ステップの $\bm{\Sigma}_k$ の固有値を $\max(\lambda,c)$ に切り上げる（固有ベクトルはそのまま．平均を固定したときの「固有値 $\ge c$」の制約付き最尤解なので，対数尤度が減らない性質は保たれる）．収束の判定は対数尤度の増分 $\le10^{-10}(\abs{\ln p}+1)$．</li>
+<li>①（k-means）：最も近い平均への割り当てと平均の更新．縦軸は目的関数 $J$（対数尤度とは別の量）．</li>
+<li>②（2 次元）：標本共分散行列 $\bm{S}$（$1/N$ で割る）に対して，向き $\bm{u}$ の射影の分散 $\bm{u}^{\tp}\bm{S}\bm{u}$ と再構成誤差 $\tr\bm{S}-\bm{u}^{\tp}\bm{S}\bm{u}$ を角度の関数として描き，主軸を求める．</li>
+<li>②（スペクトル，60 本 × 200 点）：中心化したデータの SVD から固有値 $\lambda_i=s_i^{2}/N$，負荷量，得点を求め，$k$ 成分での再構成と平均の再構成誤差（＝捨てた固有値の和）を表示する．雑音だけのときの固有値の範囲の目安として $\sigma^{2}(\sqrt{D}\mp\sqrt{N})^{2}/N$ の帯（大きな行列での近似）を描く．</li>
+</ul>
+
+<h3>D.8.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①：データ 5 種（分離／重なり／細長い／大きさが違う／退化の例．教育用の合成データ．無次元），$K$ 1〜6（既定 2），$N$ 10〜300（150），分散の下限 $c$ $10^{-4}$〜1（0.010），反復は 1000 回まで．</li>
+<li>②：2 次元は $N$ 2〜300（100），$x_2$ の単位を変える倍率 0.1〜10，標準化の切替．スペクトルは純成分 2 または 3，雑音の標準偏差 0〜0.1（0.020），再構成の成分数 $k$ 0〜10．</li>
+<li>seed は 2 つ：データの seed（既定 20261113）と初期値の seed（既定 1．平均の初期値にするデータ点を選ぶ）．初期値は並べ替えたデータ点の先頭 $K$ 個を平均に，$\bm{\Sigma}_k=(\tr\bm{S}/2)\bm{I}$，$\pi_k=1/K$．</li>
+</ul>
+
+<h3>D.8.4 簡略化している点</h3>
+<ul>
+<li>①は 2 次元だけ．初期値は無作為に選んだデータ点（k-means++ などは使わない）．$K$ は手で選ぶ．</li>
+<li><strong>退化の例では，退化を確実に見せるため，最後の成分の初期の平均を孤立点に置いている</strong>（画面に明記）．どんな初期値でも退化が起きるわけではない．</li>
+<li>スペクトルは基線やピークの移動を含まず，雑音は一様な Gauss 雑音．</li>
+</ul>
+
+<h3>D.8.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>分散の下限なしでは，1 点（または直線）への退化で対数尤度が上限なく大きくなりうる．共分散の最小の固有値が $10^{-10}$ 未満になる更新は採用せず，「停止（退化）」と理由を表示する（退化の例，$K=2$ で −462.35 → −307.53 → −301.11 の後に停止）．</li>
+<li>負担率の和 $N_k$ がほとんど 0 の成分は前の値を残して注意を表示する（k-means の空の成分も同じ）．局所解がある（初期値の seed で結果が変わる）．</li>
+<li>2 次元 PCA で 2 つの固有値がほぼ等しいと主軸が定まりにくい．$N=2$ では第 2 固有値が 0 になる（注意を表示）．</li>
+<li>画面の値と Node.js の値は，Gauss 乱数の 1 ulp の違いのため 5 桁目までの一致として扱った．</li>
+</ul>
+
+<h3>D.8.6 数値を確かめた方法と範囲</h3>
+<p>参照の計算には，装置の計算のファイルが作ったデータをそのまま NumPy・SciPy に渡した（同じデータ・同じ初期値で比べるため）．</p>
+<div class="tablewrap"><table id="tabD-10" style="min-width:600px">
+<caption>表D.10　S07 の数値の試験（208 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>2 × 2 の Gauss 密度の対数</td><td>SciPy の multivariate_normal</td><td>別実装</td><td>16</td><td>rtol $10^{-13}$</td></tr>
+<tr><td>E ステップの負担率・初期の対数尤度，M ステップの $\bm{\mu}_k,\bm{\Sigma}_k,\pi_k,N_k$，収束までの対数尤度の列と反復数，収束値（5 通り）</td><td>NumPy の独立な実装</td><td>別実装</td><td>60</td><td>$10^{-11}$〜$10^{-13}$，対数尤度の列 $10^{-9}$，反復数 ±1，収束値 $\pi$ $10^{-7}$・$\bm{\mu}$ $10^{-6}$</td></tr>
+<tr><td>分散の下限（固有値の切り上げ）</td><td>NumPy の eigh</td><td>別実装</td><td>4</td><td>$10^{-12}$</td></tr>
+<tr><td>EM の対数尤度が減らないこと（5 データ × $K$ 5 通り × seed 5 個 × 下限 3 通り＝375 通り）</td><td>—</td><td>解析解</td><td>1</td><td>相対 $10^{-12}$ の丸めの範囲</td></tr>
+<tr><td>k-means の $J$ と平均，$J$ が両方の半ステップで増えないこと，空の成分</td><td>NumPy の Lloyd 法</td><td>別実装・解析解</td><td>12</td><td>rtol $10^{-12}$</td></tr>
+<tr><td>退化：下限なしで止まり有限の値を保つ，下限ありで収束，$c$ を小さくすると収束値が増える</td><td>—</td><td>解析解</td><td>6</td><td>—</td></tr>
+<tr><td>既定の設定での 1 反復目の数値（第17章の手計算用）</td><td>NumPy</td><td>別実装</td><td>3</td><td>$10^{-12}$〜$10^{-13}$</td></tr>
+<tr><td>2 次元 PCA：SVD の固有値＝共分散行列の固有値，主軸の角，24 方向の $\bm{u}^{\tp}\bm{S}\bm{u}$，主軸で再構成誤差＝$\lambda_2$，標準化で $1\pm r$，$N=2$ で $\lambda_2=0$</td><td>NumPy の eigh，Jacobi 法</td><td>別実装・解析解</td><td>43</td><td>角 $10^{-9}$，$10^{-8}$〜$10^{-12}$</td></tr>
+<tr><td>スペクトルの PCA：固有値（200 × 200 の Jacobi 法を含む），$k=0$〜7 の再構成誤差＝捨てた固有値の和，負荷量の正規直交性と符号を除く一致，符号を反転しても再構成が変わらない</td><td>NumPy</td><td>別実装・解析解</td><td>46</td><td>rtol $10^{-10}$</td></tr>
+<tr><td>seed の再現性</td><td>—</td><td>—</td><td>7</td><td>—</td></tr>
+<tr><td>合成データ（2 次元の点群の共分散 4 万点，成分の平均，Dirichlet 乱数の平均，雑音だけのときの固有値の平均と最大）</td><td>理論値</td><td>統計的</td><td>10</td><td>4 標準誤差（固有値の最大は ±20 %）</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認は第17・18章の囲みの操作手順を含む 154 手順（照合 38）．</p>
+
+<!-- ============================================================ D.9 S08 -->
+<h2 id="secD-9">D.9 S08 近似推論と MCMC（<a href="sim/inference-mcmc.html">inference-mcmc</a>）</h2>
+
+<h3>D.9.1 対応する章・節とタブ</h3>
+<ul>
+<li>第20章：<a href="ch20_approximate_inference.html#sec20-2">20.2 節</a>（シミュレーター20.1，タブ approx），<a href="ch20_approximate_inference.html#sec20-7">20.7 節</a>（シミュレーター20.2，タブ approx）．</li>
+<li>第21章：<a href="ch21_sampling.html#sec21-8">21.8 節</a>（シミュレーター21.1，タブ mh），<a href="ch21_sampling.html#sec21-10">21.10 節</a>（シミュレーター21.2，タブ mh）．</li>
+<li>タブ <code>approx</code>「① 近似分布を比べる」，<code>mh</code>「② Metropolis–Hastings 法」．</li>
+</ul>
+
+<h3>D.9.2 何を計算しているか</h3>
+<ul>
+<li>標的は 1 次元で，格子の上の数値積分で正規化できる 3 種：歪んだ単峰 $\tilde p(x)=x^{a-1}(1-x)^{b-1}$（Beta 型，$Z=B(a,b)$），双峰 $\tilde p(x)=w\,e^{-(x+d/2)^{2}/2}+(1-w)\,e^{-(x-d/2)^{2}/2}$，二重井戸 $\tilde p(x)=\exp[-b(x^{2}-1)^{2}]$（$b=E_b/(k_{\mathrm B}T)$）．$p(x)=\tilde p(x)/Z$（$Z$ は第20章の周辺尤度 $p(\data)$ にあたる）．</li>
+<li>①：近似分布 $q(x)=\Normal(x\mid m,s^{2})$ として，Laplace 近似（モード $x^{*}$，曲率 $\Lambda=-(\dd^{2}/\dd x^{2})\ln\tilde p\,\vert_{x^{*}}$，$q=\Normal(x\mid x^{*},\Lambda^{-1})$，$\ln Z\approx\ln\tilde p(x^{*})+\tfrac12\ln(2\pi/\Lambda)$．画面も $\Lambda$ で表示する），$\KL(q\,\|\,p)$ を最小にする Gauss 分布（Nelder–Mead 法．初期値で行き先が変わる），$\KL(p\,\|\,q)$ を最小にする Gauss 分布（平均と分散の一致）を比べ，両向きの KL，平均・分散，$\ELBO(q)=\Ex_q[\ln\tilde p]-\Ex_q[\ln q]$ と $\ln Z=\ELBO+\KL(q\,\|\,p)$ を表示する．積分は区間 4000 の Simpson 則（Beta 型は変数変換 $x=u^{3}(10-15u+6u^{2})$），$q$ の期待値は $m\pm12s$ を区間 2000 で計算する．</li>
+<li>②：Gauss 型のランダムウォーク提案 $x'=x+s\varepsilon$ の Metropolis–Hastings 法（受理確率 $\min(1,\tilde p(x')/\tilde p(x))$，$u\lt\min(1,r)$ で受理）．連鎖 1〜4 本．受理率（有効数字 3 桁で表示），積分自己相関時間 $\tau_{\mathrm{int}}=1+2\sum_{k=1}^{k_c}\rho_k$（打ち切り $k_c$ は Sokal の自動窓．画面も $\tau_{\mathrm{int}}$ で表示し，第26章の temperature $\tau$ とは別の量），有効標本数 $S/\tau_{\mathrm{int}}$，平均の Monte Carlo 標準誤差，split-$\hat{R}$（各連鎖を前後半に分けた形．順位正規化なし）を表示する．自己相関は FFT で計算する．折りたたみの中で，3 状態の離散分布の Metropolis 法の遷移行列を分数で表示する．</li>
+</ul>
+
+<h3>D.9.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①（乱数なし）：Beta の $a,b$ 1.5〜20（既定 3，9），双峰の左の重み $w$ 0.05〜0.95（0.60）と間隔 $d$ 0〜8（6.0），二重井戸の障壁 $b$ 0.25〜15（3.00）．</li>
+<li>②：提案幅 $s$ 0.01〜10（対数目盛．既定 0.300），連鎖 1〜4 本（4），初期値 散らす／すべて同じ点，burn-in 0／10／25／50 %（10 %），各連鎖 20,000 ステップまで．既定の標的は二重井戸 $b=2$．</li>
+<li>既定の seed は 20261112．連鎖 $k$（0〜3）は seed $+7919k$ の乱数列を使い，1 ステップに $\varepsilon$ → $u$ の順に 1 個ずつ引く．連鎖の数を変えても連鎖 1 の列は同じ．</li>
+</ul>
+
+<h3>D.9.4 簡略化している点</h3>
+<ul>
+<li>1 次元で，格子の上の数値積分で $Z$ を求められる標的だけ．$q$ は 1 次元の Gauss 分布だけ．</li>
+<li>Beta 型の標的では，Gauss 分布の $q$ が $x\lt0$ や $x\gt1$ に確率を置くので $\KL(q\,\|\,p)=\infty$ になる．そのため $\KL(q\,\|\,p)$ の最小化と ELBO の棒には「$0\lt x\lt1$ に切断して正規化した Gauss 分布」を使い，表には ∞ と切断した値を並べる（$\KL(p\,\|\,q)$ と Laplace 近似は切断しない）．</li>
+<li>MCMC はランダムウォーク提案だけ．$\hat{R}$ は順位正規化を行わない split-$\hat{R}$．</li>
+</ul>
+
+<h3>D.9.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>$\KL(q\,\|\,p)$ の最小化には局所解がある．Nelder–Mead 法が 4000 回で収束しなければそう表示する．Beta の $a,b$ が 1.5 に近いと Laplace 近似は大きく外れる．</li>
+<li>連鎖が短いと打ち切り $k_c$ が系列長の半分に達し，「系列が短すぎる」と表示する（$\tau_{\mathrm{int}}$，有効標本数，$\hat{R}$ は信頼できない）．台の外への提案は必ず棄却する．</li>
+<li>障壁が高いと連鎖が片方の井戸から出られない．障壁の例（二重井戸 $b=12$，$s=0.3$，4 本，2000 ステップ）では，4 本とも出発した井戸から出ず $\hat{R}=9.898$ になる．初期値を「すべて同じ点」にすると $\hat{R}=1.003$ なのに全体の平均は −0.98（真の値は 0）で，$\hat{R}\approx1$ でも収束の保証にならない．</li>
+<li>NaN・∞ は計算を止めて理由を表示する．</li>
+</ul>
+
+<h3>D.9.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-11" style="min-width:600px">
+<caption>表D.11　S08 の数値の試験（656 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>標的の $\ln Z$・平均・分散・エントロピー（15 標的）</td><td>SciPy の quad，解析解（$\ln B(a,b)$，二重井戸は変形 Bessel 関数の閉じた式）</td><td>別実装・解析解</td><td>71</td><td>atol $10^{-10}$〜$10^{-9}$（分散 rtol $10^{-9}$）</td></tr>
+<tr><td>Laplace 近似のモード・曲率 $\Lambda$・$\ln Z$ の近似・両向きの KL・ELBO（Beta 型は切断した $q$ も）</td><td>SciPy</td><td>別実装・解析解</td><td>168</td><td>モード atol $10^{-7}$，$\Lambda$ rtol $10^{-7}$，KL・ELBO atol $10^{-8}$</td></tr>
+<tr><td>$\KL(p\,\|\,q)$ の最小＝平均と分散の一致（近傍で増えること）</td><td>SciPy</td><td>別実装・解析解</td><td>66</td><td>atol $10^{-8}$</td></tr>
+<tr><td>$\KL(q\,\|\,p)$ の最小（初期値ごと）</td><td>SciPy の Nelder–Mead＋BFGS</td><td>別実装</td><td>62</td><td>KL atol $10^{-8}$，$m,s$ $2\times10^{-4}$</td></tr>
+<tr><td>手で選んだ $q$（27 個）の両向きの KL と ELBO，$\ELBO+\KL=\ln Z$，$\KL\ge0$，$\ELBO\le\ln Z$</td><td>SciPy の quad</td><td>別実装・解析解</td><td>186</td><td>atol $10^{-8}$（恒等式は $10^{-12}$）</td></tr>
+<tr><td>3 状態の Metropolis 法の遷移行列，定常分布，詳細釣り合い</td><td>分数で厳密に計算した値</td><td>解析解</td><td>37</td><td>$2\times10^{-16}$，$10^{-15}$</td></tr>
+<tr><td>自己相関関数（FFT），積分自己相関時間と窓，split-$\hat{R}$ とその $W$・$B$</td><td>NumPy の直接の和，Python で書いた Sokal の窓，共有ライブラリの別の実装</td><td>別実装</td><td>37</td><td>$10^{-10}$〜$10^{-12}$</td></tr>
+<tr><td>受理の規則，台の外の提案の棄却，seed の再現性</td><td>—</td><td>解析解</td><td>6</td><td>—</td></tr>
+<tr><td>障壁の例（$b=12$）の再現：井戸から出ないこと，$\hat{R}=9.898$，$\tau_{\mathrm{int}}\lt10$，同じ点から $\hat{R}=1.003$</td><td>記録した値</td><td>—</td><td>4</td><td>—</td></tr>
+<tr><td>不変性：標的から厳密に引いた 3000 点を出発点に 25 ステップ進めても分布が変わらない（4 標的）</td><td>KS 検定，$\chi^{2}$ 検定</td><td>統計的</td><td>12</td><td>$D\lt1.95/\sqrt{n}$，上側 0.1 %，最初の受理率は 4 標準誤差</td></tr>
+<tr><td>1 本の長い連鎖の平均・分散</td><td>真の値</td><td>統計的</td><td>6</td><td>Monte Carlo 標準誤差の 4 倍以内</td></tr>
+<tr><td>計算時間の記録</td><td>—</td><td>—</td><td>1</td><td>—</td></tr>
+</tbody>
+</table></div>
+<p>積分自己相関時間の推定値は，AR(1) 系列で理論値 $(1+\phi)/(1-\phi)$ と並べて記録したが（$\phi=0.9$ で推定 14.06，理論 19.0），これは推定量の比較の参考で，合否の試験ではない．画面の確認は第20・21章の囲みの操作手順を含む 128 手順（照合 29）．</p>
+
+<!-- ============================================================ D.10 S09 -->
+<h2 id="secD-10">D.10 S09 系列モデル（<a href="sim/hmm.html">hmm</a>）</h2>
+
+<h3>D.10.1 対応する章・節とタブ</h3>
+<ul>
+<li>第22章：<a href="ch22_sequences_hmm.html#sec22-6">22.6 節</a>（シミュレーター22.1，タブ hmm），<a href="ch22_sequences_hmm.html#sec22-8">22.8 節</a>（シミュレーター22.2，タブ hmm の手計算モード．<code>?embed=1&amp;only=hmm&amp;mode=hand</code>），<a href="ch22_sequences_hmm.html#sec22-9">22.9 節</a>（シミュレーター22.3，タブ kalman）．</li>
+<li>タブ <code>hmm</code>「① 隠れ Markov モデル」（表示：生成した系列／手計算 $T=3$），<code>kalman</code>「② Kalman フィルター」．</li>
+</ul>
+
+<h3>D.10.2 何を計算しているか</h3>
+<ul>
+<li>①：隠れ状態 2 つ（1＝正常，2＝劣化），初期分布 $\pi_i$，遷移行列 $A_{ij}=p(z_t=j\mid z_{t-1}=i)$，出力確率 $B_{jv}$（離散 3 値：低・中・高）または Gauss 型の出力（正常の平均 0，劣化の平均 $\Delta$，標準偏差 1）．スケーリングした forward 計算
+$$\begin{aligned}c_t&=p(x_t\mid x_{1:t-1}),\\ \hat\alpha_t(j)&=p(z_t=j\mid x_{1:t}),\\ \ln p(x_{1:T})&=\sum_{t=1}^{T}\ln c_t\end{aligned}$$
+でフィルタリングと尤度を，backward 計算と $\gamma_t=\hat\alpha_t\hat\beta_t$ で平滑化を，対数で行う Viterbi 法（$\omega_t(j)=\max_{z_{1:t-1}}p(x_{1:t},z_{1:t-1},z_t=j)$，同点は番号の小さい状態）で最も確からしい状態の列を求める．対数領域で計算する版も同時に計算し，スケーリング版との差を表示する．</li>
+<li>手計算モード（$T=3$）では，規格化しない $\alpha_t(j)=p(x_{1:t},z_t=j)$，$\beta_t(j)=p(x_{t+1:T}\mid z_t=j)$，$\gamma_t$，$\omega_t$，バックポインター $\psi_t$ と，状態の列 8 通りの全列挙の表を並べる．</li>
+<li>②：1 次元のランダムウォーク $z_t=z_{t-1}+\sqrt{q}\,\varepsilon_t$ と観測 $x_t=z_t+\sqrt{r}\,\eta_t$ に対する Kalman フィルター：
+$$\begin{aligned}P_{t\mid t-1}&=P_{t-1}+q\quad(t\ge2),\\ K_t&=\frac{P_{t\mid t-1}}{P_{t\mid t-1}+r},\\ \mu_t&=\mu_{t\mid t-1}+K_t(x_t-\mu_{t\mid t-1}),\\ P_t&=(1-K_t)P_{t\mid t-1}.\end{aligned}$$
+<strong>$t=1$ の予測は $\mu_{1\mid0}=\mu_0=0$，$P_{1\mid0}=P_0=1$（$q$ を足さない）</strong>とする規約である．観測が欠けた時刻は更新をせず，$P_t$ が $q$ ずつ増える．定常値 $K_\infty$，$P_\infty$ も表示する．</li>
+</ul>
+
+<h3>D.10.3 入力の範囲と上限，乱数</h3>
+<ul>
+<li>①：$\pi_1$ 0〜1（既定 0.95），$A_{11}$ 0〜1（0.97），$A_{22}$ 0〜1（0.95），出力分布の離れ具合 $s$ 0〜1（0.70．$B_{1\cdot}=((1+s)/3,1/3,(1-s)/3)$，$B_{2\cdot}=((1-s)/3,1/3,(1+s)/3)$），Gauss 型の $\Delta$ 0〜4（1.5），系列長 $T$ 10〜200（100）．</li>
+<li>②：データの $q$ 0.001〜1（0.200），$r$ 0.01〜4（1.00），$T$ 10〜200（100），観測の欠け（$T=100$ で時刻 31〜45 と 71〜80）．フィルターの $q,r$ をデータと別にできる．</li>
+<li>既定の seed は 20261112（教育用の合成データ．無次元）．各時刻で状態 → 観測の順に乱数を使う．パラメーターを変えると同じ seed で系列を作り直す．</li>
+</ul>
+
+<h3>D.10.4 簡略化している点</h3>
+<ul>
+<li>状態は 2 つで，$A$，$B$ は時刻によらない．パラメーターは既知とし，学習（Baum–Welch 法）は扱わない．推定にはデータの生成と同じパラメーターを使う（Kalman フィルターだけは $q,r$ を別にできる）．Gauss 型の出力の標準偏差は 1 に固定．</li>
+<li>Kalman フィルターは 1 次元のランダムウォークだけで，平滑化（RTS）は無い．$\mu_0=0$，$P_0=1$ に固定．</li>
+</ul>
+
+<h3>D.10.5 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>規格化しない $\alpha$ は $T=2000$ で 0 に丸まる（試験で確認．$T=200$ では $10^{-91}$〜$10^{-128}$ でまだ丸まらない）．装置はスケーリング版と対数版で計算するので，この問題は起きない．</li>
+<li>確率 0 の遷移と確率 0 の出力が重なって観測列の確率が 0 になると，理由を表示して止める（手計算モードで $\pi_1=0$，$A_{22}=1$，$B_{2,\text{低}}=0$，$x_1=$ 低 で再現できる）．</li>
+<li>$s=0$ や $\Delta=0$ では同点が多く，Viterbi 法は番号の小さい状態を選ぶ．</li>
+<li>フィルターの $q$ を真の値より小さくしすぎると，$\pm2\sqrt{P_t}$ の帯の被覆率が大きく下がる（データ $q=0.2$ に対してフィルターの $q=0.01$ で 43.0 %）．</li>
+</ul>
+
+<h3>D.10.6 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-12" style="min-width:600px">
+<caption>表D.12　S09 の数値の試験（285 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>手計算モード 2 例の $\alpha,\beta,\gamma,p(x_{1:3})$，$\omega$ と Viterbi の経路</td><td>NumPy と 8 通りの全列挙</td><td>全列挙・別実装</td><td>37</td><td>rtol $10^{-13}$〜$10^{-15}$</td></tr>
+<tr><td>短い系列 8 例（$T\le8$．離散・Gauss，$A$・$\pi$ に 0 を含む場合，$s=1$）：スケーリング版・対数版の尤度と $\gamma$，Viterbi</td><td>Python の全列挙，SciPy の対数領域の計算</td><td>全列挙・別実装</td><td>80</td><td>rtol $10^{-13}$</td></tr>
+<tr><td>長い系列（$T=200$，2000）：尤度，$\gamma$，Viterbi の対数確率</td><td>SciPy の logsumexp による対数領域の計算</td><td>別実装</td><td>42</td><td>尤度 rtol $10^{-12}$，$\gamma$ $2.5\times10^{-13}\cdot T$</td></tr>
+<tr><td>境界と異常（確率 0 の観測列での停止，$s=0$ で $\gamma$ が事前の周辺分布，$\Delta=30$，同点）</td><td>解析的な値</td><td>解析解</td><td>10</td><td>—</td></tr>
+<tr><td>Kalman フィルター：逐次計算，$\mu_t,P_t$，定常値，4000 ステップ後の $K_t\to K_\infty$，欠けで $P$ が $q$ ずつ増えること</td><td>NumPy の逐次計算，同時 Gauss 分布の条件付け（NumPy の solve），閉じた式</td><td>別実装・解析解</td><td>95</td><td>逐次 $10^{-12}$，条件付け rtol $10^{-9}$，定常値 rtol $10^{-12}$</td></tr>
+<tr><td>seed の再現性．画面の既定（$\pi_1=0.95$，$A_{11}=0.97$，$A_{22}=0.95$，$s=0.7$，$T=100$）で作った系列（劣化の区間 $t=69$〜86，最初の 20 個の観測）</td><td>記録した値</td><td>—</td><td>5</td><td>—</td></tr>
+<tr><td>合成データ：遷移・出力の頻度，定常分布，Gauss 出力の平均・分散，Kalman の標準化した予測誤差の平均・分散・自己相関，被覆率</td><td>理論値，$\chi^{2}$ 検定</td><td>統計的</td><td>15</td><td>約 4 標準誤差（相関のある量は積分自己相関時間で補正），上側 0.1 %</td></tr>
+<tr><td>計算時間の記録</td><td>—</td><td>—</td><td>1</td><td>—</td></tr>
+</tbody>
+</table></div>
+<p>画面の確認では，第22章の囲みの操作手順を含む 169 手順（照合 44）を <code>http</code> と <code>file://</code> の両方で実行し，画面の値（既定の $\ln p(x_{1:T})=-102.6791$ など）を Node.js の値と照合した．章の枠に相当する 330 px では，手計算・Kalman・生成の式の欄が枠より広くなるが，欄の中で横に送れば全部読める．</p>
+
+<!-- ============================================================ D.11 S10 -->
+<h2 id="secD-11">D.11 S10 Attention と次トークン生成（<a href="sim/attention.html">attention</a>）</h2>
+
+<h3>D.11.1 対応する章・節とタブ</h3>
+<ul>
+<li>第24章：<a href="ch24_attention.html#sec24-3">24.3 節</a>（シミュレーター24.1，タブ attn），<a href="ch24_attention.html#sec24-6">24.6 節</a>（シミュレーター24.2，タブ attn）．</li>
+<li>第25章：<a href="ch25_transformer.html#sec25-8">25.8 節</a>（シミュレーター25.1，タブ model）．第26章：<a href="ch26_gpt.html#sec26-6">26.6 節</a>（シミュレーター26.1，タブ model），<a href="ch26_gpt.html#sec26-9">26.9 節</a>（シミュレーター26.2，タブ model）．</li>
+<li>タブ <code>attn</code>「① Attention を数値で追う」，<code>model</code>「② 小規模な学習済みモデル」．</li>
+</ul>
+
+<h3>D.11.2 この装置にあるもの・無いもの</h3>
+<p>この装置では，次の 3 つをはっきり区別する（画面の上部にも常に表示している）．</p>
+<div class="tablewrap"><table id="tabD-13" style="min-width:760px">
+<caption>表D.13　S10 で扱うものと扱わないもの</caption>
+<thead><tr><th></th><th>① 手で設定した重みの計算デモ</th><th>② この教材のために学習した小規模な Transformer</th><th>③ 実際の GPT</th></tr></thead>
+<tbody>
+<tr><td style="white-space:nowrap">どこにあるか</td><td>タブ attn</td><td>タブ model</td><td><strong>この装置には無い</strong></td></tr>
+<tr><td style="white-space:nowrap">重み</td><td>読者が数値欄に入れた値（既定値は第24章の手計算と同じ）．学習していない</td><td>次トークン予測で学習した値（PyTorch，CPU，単精度）</td><td>—</td></tr>
+<tr><td style="white-space:nowrap">構成</td><td>1 ヘッド，$d_k=d_v=d_{\mathrm{model}}$（2〜4），$T$ 3〜5，バイアスと出力の射影 $\bm{W}_O$ は無い</td><td>decoder のみ，pre-LN，学習する位置埋め込み，GELU（tanh 近似），埋め込みと出力射影の重み共有．$n_{\mathrm{layer}}=2$，$n_{\mathrm{head}}=2$，$d_{\mathrm{model}}=32$（1 ヘッドあたり 16），FFN の中間 128，文脈長 $T_{\max}=24$</td><td>同じ型（decoder のみの Transformer，次トークン予測）だが，規模・学習データ・学習の方法はこの装置とまったく違う</td></tr>
+<tr><td style="white-space:nowrap">パラメーター数</td><td>$3d_{\mathrm{model}}^{2}$（$\bm{W}_Q,\bm{W}_K,\bm{W}_V$）</td><td><strong>28,384 個</strong></td><td>—</td></tr>
+<tr><td style="white-space:nowrap">語彙・データ</td><td>—</td><td>語彙 67（単語単位．<code>&lt;bos&gt;</code>，<code>&lt;eos&gt;</code>，句点を含む）．学習データは<strong>教育用の合成文</strong>：材料 27 種の表と文の型 8 種から機械的に作った短い文だけ（実在の文章は使っていない）．訓練 6211 文，検証 693 文</td><td>—</td></tr>
+<tr><td style="white-space:nowrap">評価値</td><td>—</td><td>検証の perplexity 1.65（生成規則から求めた下限 1.65，bigram モデル 2.52，一様 67）．事実を問う文脈 144 件の上位 1 位の正答率 139/144（頻度の少ない材料では 62/67）．材料を指定した生成（$\tau=1$）での事実の誤り：頻度の少ない材料で 47/520（9.0 %）</td><td>この装置の数値は<strong>実際の GPT の誤り率ではない</strong></td></tr>
+</tbody>
+</table></div>
+<p>画面の「bigram モデル」は，直前の 1 トークンだけを見て次のトークンの頻度を数えたモデル（加算スムージング $\alpha=0.1$）であり，Transformer でも GPT でもない．②との比較のためだけに置いている．</p>
+<div class="box warn">
+<p class="box-title">注意：Attention の重みは判断理由とは限らない</p>
+<p>画面に出す Attention の重みは，各位置がほかの位置から情報を集める割合であり，計算の途中の量である．重みが大きい位置を「モデルがそう判断した理由」と読んではいけない．画面でも重みの図の直下にこの注意を書いている．</p>
+</div>
+
+<h3>D.11.3 何を計算しているか</h3>
+<ul>
+<li>①：系列を行に並べた $\bm{X}\in\R^{T\times d_{\mathrm{model}}}$ から $\bm{Q}=\bm{X}\bm{W}_Q$，$\bm{K}=\bm{X}\bm{W}_K$，$\bm{V}=\bm{X}\bm{W}_V$，
+$$\begin{aligned}&\mathrm{Attention}(\bm{Q},\bm{K},\bm{V})\\ &=\softmax\!\left(\frac{\bm{Q}\bm{K}^{\tp}}{\sqrt{d_k}}+\bm{M}\right)\bm{V}\end{aligned}$$
+を段階ごとに表示する（softmax は各行で列方向に取る．causal mask は $M_{ij}=-\infty\ (j\gt i)$）．softmax の結果が Attention の重み $A_{ij}$（位置 $i$ が位置 $j$ から集める割合）である．$\sqrt{d_k}$ で割る／割らない，mask のオン・オフを切り替えられ，各行の重みの和（＝1）を表示する．</li>
+<li>②：埋め込み＋位置埋め込み → 2 層（LayerNorm → 2 ヘッドの causal self-attention → 残差，LayerNorm → FFN → 残差）→ 最後の LayerNorm → 埋め込み行列の転置との積でロジット（logit）$\bm{o}_t\in\R^{67}$ を得る順伝播を，ブラウザーの中で倍精度で計算する（位置 $t$ のロジットが条件 $x_{\le t}$ のもとでの次のトークンの分布を与える）．次トークンの分布は，ロジットを temperature $\tau$ で割って softmax（最大値を引いて計算）→ top-k（大きい順に $k$ 個）→ top-p（再正規化した確率を大きい順に累積し，累積が $p$ 以上になった位置まで残す）→ 残ったものを再正規化，の順で作る．サンプリングは一様乱数を 1 個引き，大きい順に累積して初めてそれを超えたトークンを選ぶ．生成した列の対数確率と perplexity は，どの分布（$\tau=1$ のモデルそのもの，または実際に使った分布）の確率かを画面に書いて表示する．</li>
+<li>生成した文は，学習データを作った表と型に照らして「正しい」「誤り（表と矛盾）」「学習データに根拠のない文」「型に合わない文」に分け，<code>&lt;eos&gt;</code> の前に句点の無い列は「未完」として判定しない．</li>
+</ul>
+
+<h3>D.11.4 入力の範囲と上限，乱数，学習の条件</h3>
+<ul>
+<li>①：$T$ 3〜5，$d_{\mathrm{model}}$ 2〜4，行列の値は −5〜5（0.5 刻み．範囲外は丸める）．プリセット 5 種．</li>
+<li>②：文脈は 24 トークンまで（超えると生成のボタンが無効になる）．$\tau$ 0.05〜3（0.05 刻み），top-k 0〜67（0 は制限なし），top-p 0.05〜1．文脈のプリセット 14 種．サンプリングの seed は既定 20261112（1 トークンにつき一様乱数 1 個．greedy と，残る語が 1 語のときは引かない）．</li>
+<li>学習の条件（記録）：学習データの作成に NumPy の乱数（seed 20261112）．材料ごとの文の数は頻度の 3 層（多い 1000，中 100，少ない 8）で，少ない層の材料の各事実は訓練にちょうど 1 回ずつ出る．AdamW（学習率 $3\times10^{-3}$，100 step の warmup のあと cosine で 0 へ，weight decay 0.01），ミニバッチ 32 行 × 24 トークン，1500 step（訓練データの約 20 周），seed 1，CPU・単精度，学習時間 14.0 s．</li>
+<li>学習の調整：最初の構成では事実の誤りが 0 だったので，頻度の少ない層の割合を下げ，学習の周回を抑えて今の構成にした．試した 12 通りの構成はすべて記録してあり，最終の構成は学習の seed を 1 と決めてから採用した（seed 2，3 の結果を見る前）．</li>
+</ul>
+
+<h3>D.11.5 簡略化している点</h3>
+<ul>
+<li>①は 1 ヘッドで，$d_k=d_v=d_{\mathrm{model}}$，バイアスと $\bm{W}_O$ は無い．</li>
+<li>②は語彙 67，文脈長 24，単語単位のトークン（サブワードではない）．学習データは合成文だけで，文の型は 8 種しかない．判定は 8 つの型に完全に一致する文だけを対象にする．</li>
+</ul>
+
+<h3>D.11.6 不安定になる条件と装置のふるまい</h3>
+<ul>
+<li>①で入力を ±5 にするとスコアが大きくなり softmax が飽和する（最大値を引いて計算するので数値はあふれない）．</li>
+<li>②で $\tau$ が小さいと greedy と同じになり，大きいと型に合わない文が増える．上位の確率が僅差の文脈では，seed によって正しい文と誤った文が入れ替わる．</li>
+<li>頻度の少ない事実では，確率の高い誤り（例：「水銀 は 常温 で」の次に「固体」を 0.998）が出る．確率が高いことは正しいことを意味しない．</li>
+</ul>
+
+<h3>D.11.7 数値を確かめた方法と範囲</h3>
+<div class="tablewrap"><table id="tabD-14" style="min-width:600px">
+<caption>表D.14　S10 の数値の試験（587 件．すべて成功）</caption>
+<thead><tr><th>確かめた量</th><th>比べた相手</th><th>種類</th><th>件数</th><th>許容差など</th></tr></thead>
+<tbody>
+<tr><td>装置が読む重み・表が元のデータと同じであること</td><td>元のデータ</td><td>—</td><td>3</td><td>—</td></tr>
+<tr><td>①の $\bm{Q},\bm{K},\bm{V}$，スコア，重み，出力，行の和（30 例），既定値の閉じた式，mask の性質，行の入れ替えに対する同変性（50 例）</td><td>NumPy，SciPy の softmax，閉じた式</td><td>別実装・解析解</td><td>204</td><td>重み $10^{-14}$，出力 $10^{-13}$，閉じた式 rtol $10^{-15}$</td></tr>
+<tr><td>②の順伝播：50 文脈の最後の位置のロジット．長さ 24 の 1 文脈では全中間値（埋め込み，各層の Attention の重み・残差・出力，最後の LayerNorm，全位置のロジット）</td><td>学習に使った PyTorch のモデル（単精度）</td><td>別実装</td><td>14</td><td>ロジットの最大絶対誤差 $4.5\times10^{-6}$（許容 $10^{-4}$），埋め込みと重み $10^{-5}$，そのほか $10^{-4}$</td></tr>
+<tr><td>②の Attention の重み，列の対数確率．行の和＝1（ずれ $10^{-14}$ 未満），未来の位置の重み＝0（厳密），causal mask で前の位置のロジットが後ろのトークンによらないこと</td><td>NumPy（倍精度）の独立な順伝播，PyTorch の対数確率</td><td>別実装・解析解</td><td>29</td><td>重み $10^{-12}$，対数確率 $10^{-11}$（PyTorch とは $10^{-3}$）</td></tr>
+<tr><td>次トークンの分布（temperature・top-k・top-p．78 例）：残る語の集合と順序，分布，与えた一様乱数でのサンプリング結果</td><td>学習時の生成と同じ規則で書いた参照</td><td>別実装</td><td>320</td><td>分布 $10^{-14}$</td></tr>
+<tr><td>生成文の判定（288 文）．学習データの全文が「正しい」と判定されること</td><td>評価に使った判定と同じ規則の参照</td><td>別実装</td><td>6</td><td>全件一致</td></tr>
+<tr><td>bigram モデルの表，seed の再現性</td><td>—</td><td>—</td><td>8</td><td>—</td></tr>
+<tr><td>サンプリングの頻度（3 通りの設定で各 20000 回）</td><td>$\chi^{2}$ 検定</td><td>統計的</td><td>3</td><td>有意水準 0.001</td></tr>
+</tbody>
+</table></div>
+<p>②の評価値のうち，正答率と生成での誤り率は学習の後に Python で一度だけ測った値であり，ブラウザーの中で測り直したものではない（生成の誤り率は Python の乱数で生成した文で数えたので，装置の乱数では再現できない）．検証の perplexity 1.65 は，装置の重みを使った NumPy（倍精度）の順伝播で検証の 693 文から計算し直して 1.6506 を得た（bigram モデルは 2.5249）．画面の確認は第24〜26章の囲みの操作手順を含む 179 手順（照合 42）を <code>http</code> と <code>file://</code> の両方で実行し，章の枠に相当する 310・352 px で「いまの数値を式に入れると」の式が枠に収まることも確かめた．</p>
+
+<!-- ============================================================ D.12 -->
+<h2 id="secD-12">D.12 確かめていないこと・限界のまとめ</h2>
+
+<h3>D.12.1 確かめていない環境</h3>
+<ul>
+<li><strong>画面を確かめた環境はヘッドレスの Chrome（デスクトップ版）だけである．</strong>幅は 390・768・1280 px（S10 は 310・352 px も）．</li>
+<li><strong>Chrome 以外のブラウザー（Safari，Firefox など）では確かめていない</strong>．とくに MathML の表示（太字，筆記体，表の左揃え，伸びる括弧）はブラウザーによって違う可能性がある．</li>
+<li><strong>実機のスマートフォン・タブレットでのタッチ操作は確かめていない</strong>．390 px の確認は，デスクトップ版の Chrome の幅を狭めて行ったものである．</li>
+<li><strong>読み上げソフト（スクリーンリーダー）での読み上げは確かめていない</strong>．キーボードでの操作は台本で確かめた．<code>prefers-reduced-motion</code>（動きを減らす設定）の環境での表示も確かめていない（どの装置も自動では動かない作り）．</li>
+<li>サーバーを立てずにファイルを直接開いた場合（<code>file://</code>）は，10 本すべてで開いた直後にコンソールのエラーが無いことを確かめた．台本の操作まで <code>file://</code> で行ったのは S09 と S10 だけである（表D.3）．</li>
+<li>章に埋め込んだときの枠の高さの追従は，装置ごとの画面の確認には含めていない．章の枠の幅に相当する狭い幅での表示は，S10（310・352 px．式は枠に収まる）と S09（330 px．式の欄の中で横に送る）だけで確かめた．</li>
+</ul>
+
+<h3>D.12.2 既知の制約</h3>
+<ul>
+<li><strong>乱数の 1 ulp の違い</strong>：Gauss 乱数は Node.js と Chrome で最後の 1 ulp だけ違うことがある（D.1.3）．表示の桁ではふつう見えないが，条件の悪い SVM の反復回数は環境で少し変わる（7,614 回と 7,583 回）．</li>
+<li><strong>対数目盛のスライダーの値</strong>：S04 の $\gamma$ と $C$ は $\log_{10}$ の 0.05 刻みで，切りのよい値ちょうどにならない（表示 20.0 は 19.953，0.0501 は $10^{-1.3}$，5.01 は $10^{0.7}$）．$\eta$ は 0.3 を選べず 0.32．S05 の $\eta$ の右端は 2.5（$10^{0.4}$）で 3.16 には届かない．S06 の $\ell$ は 0.2 の位置で 0.1995，5 の位置で 5.012．本文の数値は画面に実際に出る値で書いてある．</li>
+<li><strong>S01 の標本数</strong>：①の標本は 10000 個が上限である（試験の $n=20000$ は画面の外）．</li>
+<li><strong>S04 のサポートベクトルの数</strong>：SMO の停止の許容値 $\varepsilon=10^{-3}$ のため，厳密な解と 1 個違うことがある（D.5.5）．</li>
+<li><strong>S06 の裾の精度</strong>：$\Phi(z)$ は $z\approx-20$ より先で相対誤差 0.4 % 程度．EI がどこでも極端に小さい設定では，選ばれる点が丸めで決まる（D.7.5）．</li>
+<li><strong>S03 の基準値</strong>：目標値から固定の 88 % を引き，切片を含む全係数に罰則をかける簡略化をしている（D.4.4）．</li>
+<li><strong>S04 の損失の規約</strong>：交差エントロピーの和で，安定な学習率は $N$ に依存する．S05 は平均の損失である（第7・8・9・14・15 章の損失の規約の違いに対応）．</li>
+<li><strong>S06 の平均関数</strong>：定数 $m$（既定 $\bar{y}$）を入れた式で計算する．推奨点は観測値が最大の点で，ノイズのため単純後悔が評価回数とともに増えることがある．</li>
+<li><strong>S07 の退化の例</strong>：最後の成分の初期の平均を孤立点に置いて退化を起こしている．</li>
+<li><strong>S08 の Beta 型の標的</strong>：$\KL(q\,\|\,p)$ の最小化と ELBO は切断した Gauss 分布で計算する．$\hat{R}$ は順位正規化なしの split-$\hat{R}$．</li>
+<li><strong>S09 の Kalman フィルター</strong>：$t=1$ の予測で $q$ を足さない規約．$P_{1\mid0}=P_0+q$ とする書き方とは数値が合わない．</li>
+<li><strong>S10</strong>：②は GPT ではなく，評価値は実際の GPT の誤り率ではない．Attention の重みは判断理由とは限らない．</li>
+</ul>
+
+<h3>D.12.3 確かめた範囲の外</h3>
+<ul>
+<li>数値の試験は，各表に書いたパラメーターの組と件数の範囲で行った．スライダーのすべての組み合わせを試したわけではない．とくに，境界の近くでの条件の悪い計算（高い次数，大きな $C$，長い $\ell$ と小さな $\sigma$ など）では，参照計算との一致も条件数に応じて悪くなる．</li>
+<li>統計的な確認は，固定した seed で 1 回だけ行ったもので，有意水準 0.1 % 程度の検定である．統計的な確認に合格したことは，生成器や算法が正しいことの証明ではない．</li>
+<li>本文の章の数値のうち，装置と同じ乱数列（mulberry32）で作った図・表は装置の画面と一致するが，NumPy の乱数で別に作った図・表（第13章の比較など）は乱数列が違うので，数値は一致しない（各章の図の説明に書いてある）．</li>
+<li>学習済みのモデル（S10 ②）の評価は，この小さなモデルとこの合成文での値であり，ほかのモデルやデータには当てはまらない．</li>
+</ul>
+
+<nav class="pager">
+  <a href="appC_solutions.html">← 付録C：演習問題の解答</a>
+  <span class="spacer"></span>
+  <a href="index.html">目次へ →</a>
+</nav>
+</main>
+</body>
+</html>

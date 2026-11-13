@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ニューラルネットワーク シミュレーター — 順伝播・誤差逆伝播・学習</title>
+<meta name="description" content="2–2–1 のネットワークで順伝播・誤差逆伝播・重みの更新を数値で追い，隠れユニット数・活性化関数・学習率を変えて学習の様子と学習された基底関数を見て，逆伝播の勾配を中心差分で確かめるシミュレーターです．">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第14・15章のシミュレーター S05．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim .stagebtns .btn { font-size: .8rem; }
+#qsim .stagebtns .btn.done { background: var(--accent-soft); }
+#qsim .tablewrap.tall { max-height: 26em; overflow-y: auto; }
+#qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+#qsim table.grid td.eqc { text-align: left; color: var(--sub); font-size: .74rem; }
+#qsim table.grid tr.sec td { background: var(--panel-soft); font-weight: 700; text-align: left; color: #15202b; }
+#qsim table.grid tr.hi td { background: #fdf5e3; }
+#qsim .steplist { font-size: .78rem; color: var(--sub); margin: 6px 0 0; padding-left: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+#qsim .steplist li::before { content: counter(list-item) ". "; }
+#qsim [data-role=stepTrace] { margin-bottom: 12px; }
+#qsim .steplist li.now { color: var(--accent-strong); font-weight: 700; }
+#qsim .steplist li.done { color: var(--fg); }
+#qsim .basisstage[hidden] { display: none; }
+#qsim table.grid td { white-space: nowrap; }
+#qsim .narrowonly { display: none; }
+@media (max-width: 480px) { #qsim table.grid .eqc, #qsim table.grid .absc { display: none; } #qsim .narrowonly { display: block; } #qsim table.grid { font-size: .74rem; } }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>ニューラルネットワーク — 順伝播・誤差逆伝播・学習</h1>
+  <p class="lead">小さなネットワークで，入力から出力を計算する順伝播，損失の勾配を出力側から配る誤差逆伝播，勾配の向きに重みを動かす更新を，1 つずつ数値で追います．次に，隠れユニット数・活性化関数・学習率・ミニバッチ・重み減衰を変えて学習の様子と「データに合わせて動く基底関数」を観察し，最後に逆伝播の勾配が差分による近似と一致することを確かめてください．</p>
+
+  <div class="tabs" role="tablist" aria-label="シミュレーターの切り替え">
+    <button class="tab is-active" data-tab="trace" role="tab" type="button">① 1 ステップを数値で追う</button>
+    <button class="tab" data-tab="train" role="tab" type="button">② 学習を見る</button>
+    <button class="tab" data-tab="gradcheck" role="tab" type="button">③ 勾配確認</button>
+  </div>
+
+  <!-- ① trace：2–2–1 の 1 ステップ -->
+  <section class="panel" data-panel="trace">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">2–2–1 のネットワーク（隠れ層 tanh，出力 sigmoid，損失は交差エントロピー）</p>
+        <p class="psub">図の下の「順伝播」「逆伝播」「重みを更新」を順に押すと，図と表に数値が足されていきます．</p>
+        <div class="stage">
+          <canvas data-role="cvNet"></canvas>
+          <div data-role="lgNet"></div>
+          <p class="cap" data-role="capNet">丸は入力 <i>x</i><sub><i>i</i></sub>，隠れユニット h<sub><i>j</i></sub>，出力．線の脇の「<i>w</i>」は重み（入力 <i>i</i> → 隠れ <i>j</i> は <i>W</i><sup>(1)</sup><sub><i>ji</i></sub>，隠れ <i>j</i> → 出力は <i>W</i><sup>(2)</sup><sub><i>j</i></sub>），「∂<i>L</i>/∂<i>w</i>」はその勾配です．バイアスの勾配は ∂<i>L</i>/∂<i>b</i> = <i>δ</i> なので，<i>δ</i> だけを書いています．図の数値は有効数字 4 桁，下の表は 6 桁です．</p>
+        </div>
+        <div class="controls" data-role="stepTrace"></div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqTrace" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>数値の表（有効数字 6 桁）</h3>
+          <div class="tablewrap" data-role="tblTrace"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlTrace"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readTrace" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② train：学習を見る -->
+  <section class="panel" data-panel="train" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle" data-role="titleFit">予測曲線と訓練データ</p>
+        <p class="psub" data-role="subFit">「実行」で学習を進めます．1 エポックはすべての訓練データを 1 回ずつ使うまでの更新のまとまりです．</p>
+        <div class="stage">
+          <canvas data-role="cvFit"></canvas>
+          <div data-role="lgFit"></div>
+          <p class="cap" data-role="capFit"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvLoss"></canvas>
+          <div data-role="lgLoss"></div>
+          <p class="cap" data-role="capLoss"></p>
+        </div>
+        <div class="stage basisstage" data-role="basisStage">
+          <canvas data-role="cvBasis"></canvas>
+          <div data-role="lgBasis"></div>
+          <p class="cap" data-role="capBasis"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqTrain" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlTrain"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readTrain" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ gradcheck：勾配確認 -->
+  <section class="panel" data-panel="gradcheck" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">差分の刻み <i>ε</i> と，逆伝播の勾配との差</p>
+        <p class="psub">すべてのパラメーターについて，逆伝播の勾配と差分による近似の差のうち最大のものを <i>ε</i> の関数として描きます．</p>
+        <div class="stage">
+          <canvas data-role="cvV"></canvas>
+          <div data-role="lgV"></div>
+          <p class="cap" data-role="capV"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqGC" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>全パラメーターの比較（いまの <i>ε</i>）</h3>
+          <div class="tablewrap tall" data-role="tblGC"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlGC"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readGC" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">このページの操作部分は JavaScript で動きます．JavaScript が無効なので，図と操作は表示されません．下の説明（操作手順・式・条件・問い）は読めます．本文は<a href="../ch15_backpropagation.html#sec15-3" target="_top">第15章 15.3 節</a>と<a href="../ch14_neural_networks.html#sec14-5" target="_top">第14章 14.5 節</a>から読めます．</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>このシミュレーターの説明（操作手順・式・条件・問い）</summary>
+
+      <h2>操作手順と観察する点</h2>
+      <ol>
+        <li>①で「順伝播」を押します．<span class="look">見る点：<i>a</i><sup>(1)</sup> = (0.45, 0.8)，<i>z</i><sup>(1)</sup> = (0.421899, 0.664037)，<i>a</i><sup>(2)</sup> = −0.0421378，<i>ŷ</i> = 0.489467，<i>L</i> = 0.714438．<i>y</i> = 1 なのに <i>ŷ</i> が 0.5 より小さいので，損失は ln 2 ≈ 0.693 より少し大きくなります．</span></li>
+        <li>「逆伝播」を押します．<span class="look">見る点：出力の誤差 <i>δ</i><sup>(2)</sup> = <i>ŷ</i> − <i>y</i> = −0.510533 が，重み <i>W</i><sup>(2)</sup> = (1.0, −1.0) と tanh の傾き 1 − <i>z</i><sup>2</sup> を掛けて隠れ層に配られ，<i>δ</i><sup>(1)</sup> = (−0.419659, 0.285416) になること．隠れユニット 2 の <i>δ</i> の符号が逆になるのは <i>W</i><sup>(2)</sup><sub>2</sub> が負だからです．</span></li>
+        <li>「重みを更新」を押します．<span class="look">見る点：各重みが −<i>η</i>∂<i>L</i>/∂<i>w</i> だけ動き，損失が 0.714438 から 0.343888 に下がること．もう一度「順伝播」から繰り返すと，損失はさらに下がります．</span></li>
+        <li>①で学習率 <i>η</i> を 5 にして同じことをします．次に <i>y</i> = 0 にします．<span class="look">見る点：<i>η</i> が大きいと 1 回の更新で動きすぎること．<i>y</i> を変えると <i>δ</i><sup>(2)</sup> の符号が変わり，すべての勾配の符号が反転すること．</span></li>
+        <li>②で課題「回帰（データ A）」のまま「実行」を押し，隠れユニット数 <i>H</i> を 1，3，8 と変えます．<span class="look">見る点：下の図で，隠れユニットの出力 <i>z</i><sub><i>j</i></sub>(<i>s</i>) が学習とともに位置と傾きを変える「動く基底関数」であること．「寄与」に切り替えると，それらの重ね合わせが上の予測曲線になることが分かります．データ A は滑らかなので，既定の seed では 2000 エポック後の訓練 RMSE は <i>H</i> = 1，3，8 で 0.945，0.927，0.919 % とノイズの標準偏差 1 % 程度で，検証 RMSE（1.24，1.24，1.22 %）もほとんど変わりません．<i>H</i> を増やすと表せる形は増えますが，このデータではそれが必要ありません．</span></li>
+        <li>②で課題を「同心円」にして 2000 エポックほど学習させます（既定の <i>H</i> = 3）．<span class="look">見る点：訓練損失は下がり続ける（2000 エポックで 0.0153）のに，検証損失はエポック 806 の 0.104 を最小に上がり始め，2000 エポックで 0.360 になる（過学習）こと．検証損失が最小のエポック（◆）で止めるのが早期終了です．<i>H</i> = 4 で重み減衰 <i>λ</i> を 0，10<sup>−3</sup>，10<sup>−2</sup> と変えると，2000 エポックの検証損失は 0.342，0.218，0.308 になり，<i>λ</i> が大きすぎると訓練損失も下がらなくなること（0.0129，0.0488，0.214）．</span></li>
+        <li>②で学習率を最大近くにしてミニバッチを 1 にします．<span class="look">見る点：損失が振動し，発散すると計算が止まって理由が表示されること．</span>「初期値」を「全部 0」にして実行します．<span class="look">見る点：tanh では重みがすべて 0 のまま動かず，予測は定数（訓練データの平均）になること．sigmoid では重みは動きますが，どの隠れユニットも同じ値のままで，<i>H</i> を増やしても表せる形が増えないこと（対称性）．</span></li>
+        <li>③で <i>ε</i> を 10<sup>−12</sup> から 10<sup>−1</sup> まで動かします．<span class="look">見る点：中心差分の誤差は <i>ε</i> ≈ 10<sup>−5</sup> 付近で最小（10<sup>−12</sup> 程度）になり，<i>ε</i> を小さくしすぎると丸め誤差で，大きくしすぎると打ち切り誤差で大きくなる（V 字）．大きい <i>ε</i> の側で，中心差分の誤差は傾き 2，前進差分は傾き 1 で増えること．</span></li>
+      </ol>
+      <p>キーボードでは Tab でボタンとスライダーへ移り，Enter（または Space）で押し，矢印キーでスライダーを動かせます．タブは ←→ で切り替えられます．</p>
+
+      <h2>計算している式とアルゴリズム</h2>
+      <p>隠れ層 1 層，出力 1 個のネットワークです．入力 <i>x</i> ∈ ℝ<sup><i>D</i></sup>，隠れユニット数 <i>H</i>，<i>W</i><sup>(1)</sup> ∈ ℝ<sup><i>H</i>×<i>D</i></sup>，<i>W</i><sup>(2)</sup> ∈ ℝ<sup>1×<i>H</i></sup>，活性化関数 <i>h</i>(·)（tanh，ReLU，sigmoid）．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.55em"><mtr><mtd><msup><mi mathvariant="bold-italic">a</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mi mathvariant="bold-italic">x</mi><mo>+</mo><msup><mi mathvariant="bold-italic">b</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>,</mo><mspace width="1em"/><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><mi>h</mi><mo stretchy="false">(</mo><msup><mi mathvariant="bold-italic">a</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>+</mo><msup><mi>b</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup></mtd></mtr><mtr><mtd><mover><mi>y</mi><mo>^</mo></mover><mo>=</mo><mi>σ</mi><mo stretchy="false">(</mo><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><mrow><mn>1</mn><mo>+</mo><msup><mi>e</mi><mrow><mo>−</mo><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup></mrow></msup></mrow></mfrac><mspace width="0.6em"/><mtext>（分類）</mtext><mo>,</mo><mspace width="1em"/><mover><mi>y</mi><mo>^</mo></mover><mo>=</mo><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mspace width="0.6em"/><mtext>（回帰）</mtext></mtd></mtr></mtable></math></div>
+      <p>1 個のデータの損失は，分類（<i>y</i> ∈ {0, 1}）では交差エントロピー，回帰では二乗誤差の半分です．分類の損失は ln 0 を避けるため，ln(1 + <i>e</i><sup><i>a</i></sup>) を桁あふれしない形で計算しています．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.55em"><mtr><mtd><mi>ℓ</mi><mo>=</mo><mo>−</mo><mrow><mo>[</mo><mi>y</mi><mi>ln</mi><mover><mi>y</mi><mo>^</mo></mover><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>y</mi><mo stretchy="false">)</mo><mi>ln</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mover><mi>y</mi><mo>^</mo></mover><mo stretchy="false">)</mo><mo>]</mo></mrow><mo>=</mo><mi>ln</mi><mo stretchy="false">(</mo><mn>1</mn><mo>+</mo><msup><mi>e</mi><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup></msup><mo stretchy="false">)</mo><mo>−</mo><mi>y</mi><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>,</mo><mspace width="1.2em"/><mi>ℓ</mi><mo>=</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mrow><mo stretchy="false">(</mo><mover><mi>y</mi><mo>^</mo></mover><mo>−</mo><mi>y</mi><mo stretchy="false">)</mo></mrow><mn>2</mn></msup></mtd></mtr><mtr><mtd><mi>L</mi><mo>=</mo><mfrac><mn>1</mn><mrow><mo stretchy="false">|</mo><mi>ℬ</mi><mo stretchy="false">|</mo></mrow></mfrac><munder><mo>∑</mo><mrow><mi>n</mi><mo>∈</mo><mi>ℬ</mi></mrow></munder><msub><mi>ℓ</mi><mi>n</mi></msub><mo>+</mo><mfrac><mi>λ</mi><mn>2</mn></mfrac><mrow><mo>(</mo><msup><mrow><mo>‖</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>‖</mo></mrow><mn>2</mn></msup><mo>+</mo><msup><mrow><mo>‖</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>‖</mo></mrow><mn>2</mn></msup><mo>)</mo></mrow></mtd></mtr></mtable></math></div>
+      <p>ℬ はミニバッチ（データの番号の集合），<i>λ</i> は重み減衰の係数です（バイアスには掛けません）．誤差逆伝播は <i>δ</i> ≡ ∂<i>ℓ</i>/∂<i>a</i> を出力側から順に求めます．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.55em"><mtr><mtd><msup><mi>δ</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><mover><mi>y</mi><mo>^</mo></mover><mo>−</mo><mi>y</mi><mo>,</mo><mspace width="1em"/><msup><mi mathvariant="bold-italic">δ</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi>h</mi><mo>′</mo></msup><mo stretchy="false">(</mo><msup><mi mathvariant="bold-italic">a</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">)</mo><mo>⊙</mo><mrow><mo>(</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo><mi>T</mi></mrow></msup><msup><mi>δ</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>)</mo></mrow></mtd></mtr><mtr><mtd><mfrac><mrow><mo>∂</mo><mi>ℓ</mi></mrow><mrow><mo>∂</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup></mrow></mfrac><mo>=</mo><msup><mi mathvariant="bold-italic">δ</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi>T</mi></mrow></msup><mo>,</mo><mspace width="1em"/><mfrac><mrow><mo>∂</mo><mi>ℓ</mi></mrow><mrow><mo>∂</mo><msup><mi mathvariant="bold-italic">b</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup></mrow></mfrac><mo>=</mo><msup><mi mathvariant="bold-italic">δ</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup><mo>,</mo><mspace width="1em"/><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mn>0</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><mi mathvariant="bold-italic">x</mi></mtd></mtr><mtr><mtd><msup><mi>h</mi><mo>′</mo></msup><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>−</mo><msup><mi>tanh</mi><mn>2</mn></msup><mi>a</mi><mspace width="0.5em"/><mtext>（tanh）</mtext><mo>,</mo><mspace width="0.8em"/><mi>σ</mi><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo stretchy="false">[</mo><mn>1</mn><mo>−</mo><mi>σ</mi><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mspace width="0.5em"/><mtext>（sigmoid）</mtext><mo>,</mo><mspace width="0.8em"/><mn>1</mn><mspace width="0.3em"/><mo stretchy="false">(</mo><mi>a</mi><mo>&gt;</mo><mn>0</mn><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.3em"/><mn>0</mn><mspace width="0.3em"/><mo stretchy="false">(</mo><mi>a</mi><mo>≤</mo><mn>0</mn><mo stretchy="false">)</mo><mspace width="0.5em"/><mtext>（ReLU）</mtext></mtd></mtr></mtable></math></div>
+      <p>ミニバッチの勾配は 1 個ずつの勾配の平均に <i>λ</i><i>W</i> を足したものです．更新は勾配降下法 <i>w</i> ← <i>w</i> − <i>η</i> ∂<i>L</i>/∂<i>w</i>（<i>η</i> は学習率）．1 エポックの初めに訓練データの順番を乱数で並べ替え，大きさ <i>B</i> のミニバッチごとに更新します（「全部」なら 1 エポックに 1 回の更新）．</p>
+      <p>③の勾配確認では，各パラメーター <i>w</i> だけを ±<i>ε</i> 動かした損失から</p>
+      <div class="eq"><math display="block"><mrow><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><mi>w</mi></mrow></mfrac><mo>≈</mo><mfrac><mrow><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo>+</mo><mi>ε</mi><mo stretchy="false">)</mo><mo>−</mo><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo>−</mo><mi>ε</mi><mo stretchy="false">)</mo></mrow><mrow><mn>2</mn><mi>ε</mi></mrow></mfrac><mspace width="0.5em"/><mtext>（中心差分．誤差 </mtext><mi>O</mi><mo stretchy="false">(</mo><msup><mi>ε</mi><mn>2</mn></msup><mo stretchy="false">)</mo><mtext>）</mtext><mo>,</mo><mspace width="1em"/><mfrac><mrow><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo>+</mo><mi>ε</mi><mo stretchy="false">)</mo><mo>−</mo><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo stretchy="false">)</mo></mrow><mi>ε</mi></mfrac><mspace width="0.5em"/><mtext>（前進差分．誤差 </mtext><mi>O</mi><mo stretchy="false">(</mo><mi>ε</mi><mo stretchy="false">)</mo><mtext>）</mtext></mrow></math></div>
+      <p>を作り，逆伝播の値と比べます．成分ごとの相対誤差は |<i>g</i><sub>逆伝播</sub> − <i>g</i><sub>差分</sub>| / max(|<i>g</i><sub>逆伝播</sub>|, |<i>g</i><sub>差分</sub>|, 10<sup>−8</sup>)，ベクトルとしての相対誤差は ‖<i>g</i><sub>逆伝播</sub> − <i>g</i><sub>差分</sub>‖ / max(‖<i>g</i><sub>逆伝播</sub>‖, ‖<i>g</i><sub>差分</sub>‖) です．</p>
+
+      <h2>データと乱数の条件</h2>
+      <ul>
+        <li>①は 1 個のデータ（既定 <i>x</i> = (1.0, 0.5)，<i>y</i> = 1）と，本文第15章 15.3 と同じ重み：<i>W</i><sup>(1)</sup> = ((0.5, −0.3), (0.8, 0.2))（1 行目が隠れユニット 1），<i>b</i><sup>(1)</sup> = (0.1, −0.1)，<i>W</i><sup>(2)</sup> = (1.0, −1.0)，<i>b</i><sup>(2)</sup> = 0.2，学習率 <i>η</i> = 0.5．乱数は使いません．</li>
+        <li>②の回帰は<strong>教育用の合成データ</strong>「データ A（焼成温度と相対密度）」です：<i>s</i> ~ U(−1, 1)，焼成温度 <i>T</i> = 1300 °C + 200 °C × <i>s</i>，相対密度 <i>y</i> = <i>g</i>(<i>s</i>) + <i>ε</i>，<i>g</i>(<i>s</i>) = 88 + 8<i>s</i> − 5<i>s</i><sup>2</sup> + 2 sin 3<i>s</i>（%），<i>ε</i> ~ 𝒩(0, 1.0<sup>2</sup>)（%）．訓練データ数は 5〜50（既定 20）．目標値は訓練データの平均 <i>ȳ</i> と標準偏差 <i>s</i><sub><i>y</i></sub> で標準化した (<i>y</i> − <i>ȳ</i>)/<i>s</i><sub><i>y</i></sub> で学習し，図は % に戻して描きます（損失は標準化した単位）．実在の材料のデータではありません．</li>
+        <li>②の分類も<strong>教育用の合成データ</strong>（無次元の 2 次元の点，<i>y</i> ∈ {0, 1} が半々）です．同心円：半径 1.0（<i>y</i> = 0）または 0.5（<i>y</i> = 1）に 𝒩(0, 0.1<sup>2</sup>) を足し，角度は一様．三日月：<i>y</i> = 0 は (cos <i>t</i>, sin <i>t</i>)，<i>y</i> = 1 は (1 − cos <i>t</i>, 0.5 − sin <i>t</i>)，<i>t</i> ~ U(0, π)，(0.5, 0.25) を引いて各座標に 𝒩(0, 0.1<sup>2</sup>)．XOR：中心 (±0.5, ±0.5)，<i>x</i><sub>1</sub><i>x</i><sub>2</sub> &gt; 0 の象限が <i>y</i> = 1，各座標に 𝒩(0, 0.2<sup>2</sup>)．訓練データ数は 40〜200（既定 100）．</li>
+        <li>検証データは訓練データと同じ分布から別に 200 個（別の乱数の流れ）．訓練データ数を変えても検証データは変わりません．</li>
+        <li>乱数は seed つきの生成器（mulberry32）です．「データの seed」（既定 20261112）が訓練・検証データを，「乱数の seed」（既定 20261112）が重みの初期値とミニバッチの順番を決めます．同じ seed でやり直すと同じ学習の経過になります．</li>
+        <li>初期値：tanh・sigmoid は Xavier（Glorot）の正規分布（分散 2/(fan<sub>in</sub> + fan<sub>out</sub>)），ReLU は He の正規分布（分散 2/fan<sub>in</sub>），出力層は Xavier，バイアスは 0．「全部 0」も選べます．</li>
+        <li>計算量の上限：隠れユニット 16 個，5000 エポック．③の <i>ε</i> の図は 10<sup>−12</sup>〜10<sup>−1</sup> の 34 点です．</li>
+      </ul>
+
+      <h2>簡略化している点</h2>
+      <ul>
+        <li>隠れ層は 1 層，出力は 1 個です（多クラスの softmax は扱いません）．</li>
+        <li>最適化は素朴な（確率的）勾配降下法だけです．モーメンタム・Adam・学習率の減衰・ドロップアウトは使いません．</li>
+        <li>回帰の目標値の標準化には訓練データの平均と標準偏差を使います（検証データの情報は使いません）．</li>
+        <li>①の図の数値は有効数字 4 桁に丸めて表示しています（計算は倍精度．表は 6 桁）．</li>
+      </ul>
+
+      <h2>結果が不安定になる条件</h2>
+      <ul>
+        <li>学習率が大きいと損失が振動し，発散します．損失が NaN・無限大，または 10<sup>6</sup> を超えたら学習を止め，理由を表示します．ミニバッチが小さいほど勾配のばらつきが大きく，同じ学習率でも不安定になりやすくなります．</li>
+        <li>sigmoid を隠れ層に使い，入力の重みが大きくなると，<i>h</i>′ ≤ 1/4 が小さくなって学習が遅くなります（勾配消失の入口）．ReLU では，<i>a</i> ≤ 0 にとどまったユニットは勾配が 0 になり，もう動きません．</li>
+        <li>分類で訓練データを完全に分けられると，重み減衰がなければ重みが増え続け，訓練損失は 0 に近づき続けます．検証損失は上がることがあります（過学習）．</li>
+        <li>勾配確認で <i>ε</i> を小さくしすぎると，<i>L</i>(<i>w</i> ± <i>ε</i>) の差が丸め誤差（約 10<sup>−16</sup> × <i>L</i>）に埋もれます．勾配がもともと 0 に近い成分では，成分ごとの相対誤差が見かけ上大きくなります（ベクトルとしての相対誤差で判断します）．ReLU の折れ目 <i>a</i> = 0 をまたぐ <i>ε</i> では差分が正しい微分になりません．</li>
+        <li>初期値が全部 0 だと，tanh・ReLU では <i>z</i><sup>(1)</sup> = <i>h</i>(0) = 0 なので ∂<i>L</i>/∂<i>W</i><sup>(2)</sup> = 0，<i>W</i><sup>(2)</sup> = 0 なので <i>δ</i><sup>(1)</sup> = 0 となり，重みはどれも動きません（動くのは <i>b</i><sup>(2)</sup> だけで，予測は定数）．sigmoid では <i>W</i><sup>(1)</sup> は動きますが，どの隠れユニットも同じ値のままです．</li>
+      </ul>
+
+      <h2>本文の対応節</h2>
+      <ul>
+        <li><a href="../ch14_neural_networks.html#sec14-3" target="_top">第14章 14.3 層と行列の形</a></li>
+        <li><a href="../ch14_neural_networks.html#sec14-4" target="_top">第14章 14.4 非線形性がなぜ必要か</a>（XOR）</li>
+        <li><a href="../ch14_neural_networks.html#sec14-5" target="_top">第14章 14.5 基底関数を学習するモデル</a>（②の下の図）</li>
+        <li><a href="../ch14_neural_networks.html#sec14-6" target="_top">第14章 14.6 出力層と損失</a>（<i>δ</i> = <i>ŷ</i> − <i>y</i>）</li>
+        <li><a href="../ch15_backpropagation.html#sec15-2" target="_top">第15章 15.2 誤差逆伝播の導出</a></li>
+        <li><a href="../ch15_backpropagation.html#sec15-3" target="_top">第15章 15.3 数値で追う</a>（①）</li>
+        <li><a href="../ch15_backpropagation.html#sec15-4" target="_top">第15章 15.4 勾配確認</a>（③）</li>
+        <li><a href="../ch15_backpropagation.html#sec15-5" target="_top">第15章 15.5 ミニバッチ学習の手順</a>（②）</li>
+        <li><a href="../ch15_backpropagation.html#sec15-8" target="_top">第15章 15.8 過学習と正則化</a>（重み減衰，早期終了）</li>
+      </ul>
+
+      <h2>操作後に答える短い問い</h2>
+      <ol>
+        <li>①の既定値で，隠れユニット 1 と 2 の <i>δ</i><sup>(1)</sup> の符号が逆になるのはなぜですか．また，∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub>12</sub> が ∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub>11</sub> のちょうど半分なのはなぜですか．
+          <details class="ans"><summary>答えの例</summary><p><i>δ</i><sup>(1)</sup><sub><i>j</i></sub> = (1 − <i>z</i><sub><i>j</i></sub><sup>2</sup>) <i>W</i><sup>(2)</sup><sub><i>j</i></sub> <i>δ</i><sup>(2)</sup> で，1 − <i>z</i><sup>2</sup> &gt; 0 と <i>δ</i><sup>(2)</sup> = −0.510533 は共通なので，符号は <i>W</i><sup>(2)</sup><sub><i>j</i></sub> = +1.0，−1.0 で決まります（−0.419659 と +0.285416）．∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub><i>ji</i></sub> = <i>δ</i><sup>(1)</sup><sub><i>j</i></sub> <i>x</i><sub><i>i</i></sub> で，<i>x</i><sub>2</sub>/<i>x</i><sub>1</sub> = 0.5/1.0 だからです（−0.209829 = 0.5 × (−0.419659)）．</p></details></li>
+        <li>①で 1 回更新すると損失は 0.714438 → 0.343888 になります．<i>η</i> を非常に小さくしたとき，損失の減り方は何で決まりますか．
+          <details class="ans"><summary>答えの例</summary><p>1 次の Taylor 展開で <i>L</i>(<i>w</i> − <i>η</i><i>g</i>) ≈ <i>L</i> − <i>η</i>‖<i>g</i>‖<sup>2</sup> なので，減り方は勾配の大きさの 2 乗 ‖<i>g</i>‖<sup>2</sup> = 1.00151（全 9 個のパラメーター）に比例します．<i>η</i> = 0.5 の実際の減少 0.370550 は 0.5 × 1.00151 ≈ 0.501 より小さく，1 次の近似からずれています（<i>η</i> = 0.5 は「小さい」とは言えません）．</p></details></li>
+        <li>②の同心円で，訓練損失が下がり続けるのに検証損失が上がるのはなぜですか．どこで学習を止めるとよいですか．
+          <details class="ans"><summary>答えの例</summary><p>訓練データを完全に分けられるようになると，重みを大きくして境界の近くの訓練データまで確信度を上げるほど訓練損失は下がりますが，検証データの点を誤って高い確信度で分類すると交差エントロピーは大きくなります．検証損失が最小のエポック（図の◆）で止める（早期終了）か，重み減衰 <i>λ</i> で重みが大きくなるのを抑えます．</p></details></li>
+        <li>③で <i>ε</i> を小さくすると，ある所までは誤差が減り，その先で増えるのはなぜですか．
+          <details class="ans"><summary>答えの例</summary><p>中心差分の打ち切り誤差は約 (<i>ε</i><sup>2</sup>/6)|<i>L</i>‴| で <i>ε</i> とともに減りますが，<i>L</i>(<i>w</i> + <i>ε</i>) と <i>L</i>(<i>w</i> − <i>ε</i>) はそれぞれ約 10<sup>−16</sup> × <i>L</i> の丸め誤差を持ち，それを 2<i>ε</i> で割るので丸め誤差は 1/<i>ε</i> に比例して増えます．両者がつり合う <i>ε</i> ≈ 10<sup>−5</sup> 付近で誤差が最小になります．</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">機械学習 — 確率から GPT まで（目次）へ戻る</a>　｜　本文：<a href="../ch14_neural_networks.html#sec14-5" target="_top">第14章 14.5 節</a>，<a href="../ch15_backpropagation.html#sec15-3" target="_top">第15章 15.3 節</a>　｜　数式はブラウザ標準の MathML で組んでいます（外部ライブラリ不使用）．</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="neural-net.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.NeuralNet;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112, DATA_SEED = 20261112;
+  var LIM = M.LIMITS;
+
+  /* ---- MathML の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  /* 数：小数 3 桁以内で表せる値（入力・重みの既定値など）はそのまま，それ以外は有効数字 d 桁（既定 4） */
+  function mn(v, d) {
+    if (typeof v !== 'number') return '<mn>' + v + '</mn>';
+    var r = Math.round(v * 1000);
+    return '<mn>' + (Math.abs(v * 1000 - r) < 1e-7 * Math.max(1, Math.abs(r)) && Math.abs(v) < 1e5 ? U.mn(String(r / 1000)) : fmt(v, d || 4)) + '</mn>';
+  }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function row(s) { return '<mtr><mtd>' + s + '</mtd></mtr>'; }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.6em">' + rows.join('') + '</mtable></math>'; }
+  function sp(w) { return '<mspace width="' + (w || '0.6em') + '"/>'; }
+  function lp(l) { return '<mrow><mo stretchy="false">(</mo><mn>' + l + '</mn><mo stretchy="false">)</mo></mrow>'; }
+  function bsym(s, l, sub) { var b = '<mi mathvariant="bold-italic">' + s + '</mi>'; return l == null ? b : (sub ? '<msubsup>' + b + '<mrow>' + sub + '</mrow>' + lp(l) + '</msubsup>' : '<msup>' + b + lp(l) + '</msup>'); }
+  function ssym(s, l, sub) { var b = '<mi>' + s + '</mi>'; return sub ? '<msubsup>' + b + '<mrow>' + sub + '</mrow>' + lp(l) + '</msubsup>' : '<msup>' + b + lp(l) + '</msup>'; }
+  var YHAT = '<mover><mi>y</mi><mo>^</mo></mover>';
+  /* 式の途中で行を改める（幅の狭い画面で読めるように）．BRK は字下げつき，NL は字下げなし */
+  var NL = '</mtd></mtr><mtr><mtd>', BRK = NL + '<mspace width="1.5em"/>';
+  /* 列ベクトル・行列（数値） */
+  function vecM(v, d) { return '<mrow><mo>(</mo><mtable>' + v.map(function (x) { return '<mtr><mtd>' + mn(x, d) + '</mtd></mtr>'; }).join('') + '</mtable><mo>)</mo></mrow>'; }
+  function rowM(v, d) { return '<mrow><mo>(</mo><mtable><mtr>' + v.map(function (x) { return '<mtd>' + mn(x, d) + '</mtd>'; }).join('') + '</mtr></mtable><mo>)</mo></mrow>'; }
+  function matM(A, d) { return '<mrow><mo>(</mo><mtable>' + A.map(function (r) { return '<mtr>' + r.map(function (x) { return '<mtd>' + mn(x, d) + '</mtd>'; }).join('') + '</mtr>'; }).join('') + '</mtable><mo>)</mo></mrow>'; }
+  function paren(x) { return x < 0 ? mo('(') + mn(x) + mo(')') : mn(x); }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function f6(v) { return fmt(v, 6); }
+  /* 与えた値（入力・重みの既定値）は短く，計算した値は 6 桁 */
+  function g6(v) { var r = Math.round(v * 1000); return Math.abs(v * 1000 - r) < 1e-7 * Math.max(1, Math.abs(r)) ? U.mn(String(r / 1000)) : f6(v); }
+  function f4(v) { return fmt(v, 4); }
+  function num(v) { return U.mn(String(Math.round(v * 1000) / 1000)); }
+
+  /* ---- タブの間で共有する状態（③の勾配確認が①・②のネットワークを参照する） ---- */
+  var SH = {
+    trace: { net: null, x: M.TRACE_DEFAULT.x.slice(), y: M.TRACE_DEFAULT.y },
+    train: null,
+    listeners: []
+  };
+  SH.trace.net = M.makeNet(M.TRACE_DEFAULT.W1, M.TRACE_DEFAULT.b1, M.TRACE_DEFAULT.W2, M.TRACE_DEFAULT.b2, 'tanh', 'sigmoid');
+
+  /* =================================================================
+     ① trace：2–2–1 の 1 ステップ
+     ================================================================= */
+  function TraceSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var cv = q('cvNet'), ctl = q('ctlTrace');
+    var S = { x: M.TRACE_DEFAULT.x.slice(), y: M.TRACE_DEFAULT.y, eta: M.TRACE_DEFAULT.eta, stage: 0, k: 0, hist: [] };
+    var P0 = M.TRACE_DEFAULT;
+    var cur = { W1: P0.W1.map(function (r) { return r.slice(); }), b1: P0.b1.slice(), W2: P0.W2.slice(), b2: P0.b2 };
+    var T = null;   /* いまの重みでの trace の結果 */
+    var STAGES = ['初期', '順伝播', '逆伝播', '重みを更新'];
+    function recompute() { T = M.trace({ W1: cur.W1, b1: cur.b1, W2: cur.W2, b2: cur.b2, x: S.x, y: S.y, eta: S.eta }); SH.trace.net = T.net; SH.trace.x = S.x.slice(); SH.trace.y = S.y; }
+    recompute();
+    var redraw = function () { self.update(); };
+
+    var bF = U.button('順伝播', function () {
+      if (S.stage === 3) { cur = { W1: T.net2.W1, b1: T.net2.b1, W2: T.net2.W2, b2: T.net2.b2 }; recompute(); }
+      S.stage = 1; redraw();
+    }, { title: 'a⁽¹⁾, z⁽¹⁾, a⁽²⁾, ŷ, L を計算します' });
+    var bB = U.button('逆伝播', function () { if (S.stage === 1) { S.stage = 2; redraw(); } }, { title: 'δ⁽²⁾, δ⁽¹⁾ と各勾配を計算します' });
+    var bU = U.button('重みを更新', function () { if (S.stage === 2) { S.stage = 3; S.k++; S.hist.push([T.L, T.Ln]); redraw(); } }, { title: 'w ← w − η ∂L/∂w．更新後の損失も計算します' });
+    var bR = U.button('最初に戻す', function () {
+      cur = { W1: P0.W1.map(function (r) { return r.slice(); }), b1: P0.b1.slice(), W2: P0.W2.slice(), b2: P0.b2 };
+      S.x = P0.x.slice(); S.y = P0.y; S.eta = P0.eta; S.stage = 0; S.k = 0; S.hist = [];
+      rX1.set(S.x[0], true); rX2.set(S.x[1], true); pY.set(String(S.y), true); rEta.set(S.eta, true);
+      recompute(); redraw();
+    }, { title: '重み・入力・学習率を既定値（本文 15.3 と同じ）に戻します' });
+    var steps = U.el('ol', 'steplist');
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    function inputChanged() { S.stage = 0; recompute(); U.status(msg, '入力・目標値・学習率を変えたので，いまの重みのまま「初期」に戻しました．', ''); redraw(); }
+    var rX1 = U.range({ label: '入力 <i>x</i><sub>1</sub>', min: LIM.traceX[0], max: LIM.traceX[1], step: 0.1, value: S.x[0], fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.x[0] = Math.round(v * 10) / 10; inputChanged(); } });
+    var rX2 = U.range({ label: '入力 <i>x</i><sub>2</sub>', min: LIM.traceX[0], max: LIM.traceX[1], step: 0.1, value: S.x[1], fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.x[1] = Math.round(v * 10) / 10; inputChanged(); } });
+    var pY = U.pills({ label: '目標値 <i>y</i>（クラス）', options: [{ value: '1', label: '<i>y</i> = 1' }, { value: '0', label: '<i>y</i> = 0' }], value: '1', onChange: function (v) { S.y = +v; inputChanged(); } });
+    var rEta = U.range({ label: '学習率 <i>η</i>', min: 0.05, max: 5, step: 0.05, value: S.eta, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.eta = Math.round(v * 100) / 100; inputChanged(); } });
+    var stp = q('stepTrace');
+    stp.appendChild(U.el('div', 'ctlhead', '計算を 1 段ずつ進める'));
+    stp.appendChild(U.buttonRow([bF, bB, bU, bR], 'stagebtns'));
+    stp.appendChild(steps);
+    stp.appendChild(msg);
+    ctl.appendChild(U.el('div', 'ctlhead', '入力・目標値・学習率'));
+    [rX1, rX2].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(pY.el); ctl.appendChild(rEta.el);
+    ctl.appendChild(U.el('span', 'hint', '入力・目標値・学習率を変えると，いまの重みのまま「初期」の段に戻ります．重みを既定値に戻すのは「最初に戻す」です．'));
+
+    U.legendHTML(q('lgNet'), [
+      { label: '順伝播の値（<i>a</i>，<i>z</i>，<i>ŷ</i>，<i>L</i>）', color: col.accent, width: 2.4 },
+      { label: '逆伝播の値（<i>δ</i>，∂<i>L</i>/∂<i>w</i>）', color: col.orange, dash: dash.dashed, width: 2.4 },
+      { label: '更新後の値（→ の右）', color: col.green, dash: dash.dotted, width: 2.4 },
+      { label: '正の重み（実線）／負の重み（破線）．太さは |<i>w</i>|', color: col.gray, width: 2 }]);
+
+    function drawNet() {
+      var F = U.fitCanvas(cv, { aspect: 0.62, minHeight: (cv.getBoundingClientRect().width || 600) < 480 ? 430 : 340, maxHeight: 440 }), c = F.c, W = F.W, Hc = F.H;
+      var narrow = W < 480, fs = narrow ? 10.5 : 11.5, r = narrow ? 15 : 19, lh = fs + 3;
+      var xin = narrow ? 30 : 60, xhid = W * 0.47, xout = W - (narrow ? 34 : 70);
+      var yA = Hc * (narrow ? 0.3 : 0.35), yB = Hc * (narrow ? 0.76 : 0.72), yO = Hc * 0.535;
+      var pin = [[xin, yA], [xin, yB]], phid = [[xhid, yA], [xhid, yB]], pout = [xout, yO];
+      var st = S.stage, net = T.net, net2 = T.net2;
+      var L = U.labeler(c, [2, 2, W - 2, Hc - 2]);
+      /* 線（重み）：正は実線，負は破線．太さ ∝ |w| */
+      function edge(p0, p1, w) {
+        c.save(); c.strokeStyle = w >= 0 ? 'rgba(31,35,40,.55)' : 'rgba(31,35,40,.55)'; c.lineWidth = 1 + 2.2 * Math.min(1.5, Math.abs(w));
+        c.setLineDash(w >= 0 ? [] : [6, 4]); c.beginPath(); c.moveTo(p0[0], p0[1]); c.lineTo(p1[0], p1[1]); c.stroke(); c.restore();
+      }
+      var j, i;
+      for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) edge(pin[i], phid[j], net.W1[j][i]);
+      for (j = 0; j < 2; j++) edge(phid[j], pout, net.W2[j]);
+      /* ŷ はフォントによって山形がずれるので，y を書いて山形を自分で描く．txt は左寄せで (x0, yc) に置く */
+      function hatText(txt, x0, yc, size, color, bold, halo) {
+        var t = txt.replace(/\u0177/g, 'y');
+        U.label(c, t, x0, yc, { size: size, color: color, align: 'left', bold: bold, halo: halo });
+        for (var k = txt.indexOf('\u0177'); k >= 0; k = txt.indexOf('\u0177', k + 1)) {
+          var xa = x0 + U.textWidth(c, t.slice(0, k), size, bold), wy = U.textWidth(c, 'y', size, bold), xm = xa + wy * 0.55, yt = yc - size * 0.42;
+          c.save(); c.strokeStyle = color; c.lineWidth = bold ? 1.4 : 1.1; c.beginPath(); c.moveTo(xm - size * 0.22, yt); c.lineTo(xm, yt - size * 0.22); c.lineTo(xm + size * 0.22, yt); c.stroke(); c.restore();
+        }
+      }
+      /* 丸 */
+      function node(p, txt, fill) {
+        c.save(); c.beginPath(); c.arc(p[0], p[1], r, 0, 2 * Math.PI); c.fillStyle = fill; c.fill(); c.lineWidth = 1.8; c.strokeStyle = col.ink; c.stroke(); c.restore();
+        hatText(txt, p[0] - U.textWidth(c, txt.replace(/\u0177/g, 'y'), fs + 1, true) / 2, p[1] + 1, fs + 1, col.ink, true, false);
+        L.block(p[0] - r - 2, p[1] - r - 2, p[0] + r + 2, p[1] + r + 2);
+      }
+      node(pin[0], 'x₁', '#f4f6f9'); node(pin[1], 'x₂', '#f4f6f9');
+      node(phid[0], 'h₁', '#e7eff7'); node(phid[1], 'h₂', '#e7eff7');
+      node(pout, st >= 1 ? 'ŷ' : '出', '#eaf6ef');
+      /* 文字の塊（行の配列 [文字, 色]）を置く．dir：'up'（丸の上に積む）/'down'，align */
+      function block(lines, x, y, dir, align) {
+        var w = 0; lines.forEach(function (ln) { w = Math.max(w, U.textWidth(c, ln[0], fs, ln[2])); });
+        var h = lines.length * lh, x0 = align === 'left' ? x : align === 'right' ? x - w : x - w / 2;
+        x0 = Math.max(3, Math.min(W - 3 - w, x0));
+        var y0 = dir === 'up' ? y - h : y;
+        y0 = Math.max(3, Math.min(Hc - 3 - h, y0));
+        c.save(); c.fillStyle = 'rgba(255,255,255,.95)'; c.fillRect(x0 - 2, y0 - 2, w + 4, h + 3); c.restore();
+        lines.forEach(function (ln, k) { hatText(ln[0], x0, y0 + lh * (k + 0.5), fs, ln[1], !!ln[2]); });
+        L.block(x0 - 2, y0 - 1, x0 + w + 2, y0 + h + 1);
+      }
+      /* 入力 */
+      block([['x₁ = ' + fx(S.x[0], 1), col.ink, true]], pin[0][0] - r, pin[0][1] - r - 4, 'up', 'left');
+      block([['x₂ = ' + fx(S.x[1], 1), col.ink, true]], pin[1][0] - r, pin[1][1] + r + 4, 'down', 'left');
+      /* 隠れユニット */
+      for (j = 0; j < 2; j++) {
+        var lines = [];
+        lines.push([st === 3 ? 'b = ' + f4(net.b1[j]) + ' → ' + f4(net2.b1[j]) : 'b = ' + f4(net.b1[j]), st === 3 ? col.green : col.ink]);
+        if (st >= 1) lines.push(['a = ' + f4(T.a1[j]) + '，z = ' + f4(T.z1[j]), col.accent, true]);
+        if (st >= 2) lines.push(['δ = ' + f4(T.delta1[j]), col.orange, true]);
+        if (j === 0) block(lines,phid[j][0], phid[j][1] - r - 4, 'up', 'center');
+        else block(lines, phid[j][0], phid[j][1] + r + 4, 'down', 'center');
+      }
+      /* 出力 */
+      var up = [['y = ' + S.y, col.ink, true], [st === 3 ? 'b = ' + f4(net.b2) + ' → ' + f4(net2.b2) : 'b = ' + f4(net.b2), st === 3 ? col.green : col.ink]];
+      block(up, pout[0] + r, pout[1] - r - 4, 'up', 'right');
+      var dn = [];
+      if (st >= 1) { dn.push(['a = ' + f4(T.a2), col.accent]); dn.push(['ŷ = ' + f4(T.yhat), col.accent, true]); dn.push(['L = ' + f4(T.L) + (st === 3 ? ' → ' + f4(T.Ln) : ''), st === 3 ? col.green : col.accent, true]); }
+      if (st >= 2) dn.push([(narrow ? 'δ = ' : 'δ = ŷ − y = ') + f4(T.delta2), col.orange, true]);
+      if (dn.length) block(dn, pout[0] + r, pout[1] + r + 9, 'down', 'right');
+      /* 白い下地を敷いて線の上でも読めるようにする（置き場所は labeler が決める） */
+      function addBg(txt, x, y, o) {
+        var b = L.add(txt, x, y, o);
+        c.save(); c.fillStyle = 'rgba(255,255,255,.95)'; c.fillRect(b.r[0], b.r[1] + 1, b.r[2] - b.r[0], b.r[3] - b.r[1] - 2); c.restore();
+        U.label(c, txt, b.L, b.y, Object.assign({}, o, { align: 'left' }));
+        return b;
+      }
+      /* 線の脇の文字：重み（と勾配・更新後） */
+      function edgeLab(p0, p1, t, w, g, w2) {
+        var x = p0[0] + t * (p1[0] - p0[0]), y = p0[1] + t * (p1[1] - p0[1]);
+        var s1 = 'w = ' + f4(w) + (st === 3 ? ' → ' + f4(w2) : '');
+        var o1 = { size: fs - 0.5, color: st === 3 ? col.green : col.ink, bold: st === 3, dy: [0, -10, 10, -20, 20, -30, 30] };
+        var b1 = addBg(s1, x, y - (st >= 2 ? 7 : 0), o1);
+        if (st >= 2) addBg('∂L/∂w = ' + f4(g), b1.L + U.textWidth(c, s1, fs - 0.5, st === 3) / 2, b1.y + lh, { size: fs - 0.5, color: col.orange, dy: [0, 8, -8, 16, 24, -16, 32] });
+      }
+      var tt = narrow ? 0.24 : 0.32;
+      for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) edgeLab(pin[i], phid[j], (i === j) ? 0.5 : tt, net.W1[j][i], T.gW1[j][i], net2.W1[j][i]);
+      for (j = 0; j < 2; j++) edgeLab(phid[j], pout, narrow ? 0.2 : 0.4, net.W2[j], T.gW2[j], net2.W2[j]);
+      var stTxt = '段階：' + STAGES[st] + '（更新 ' + S.k + ' 回目まで）';
+      U.label(c, stTxt, W - 6, 12, { size: fs - 0.5, color: col.sub, align: 'right' });
+      U.setCanvasLabel(cv, '2–2–1 のネットワーク．入力 x = (' + fx(S.x[0], 1) + ', ' + fx(S.x[1], 1) + ')，目標値 y = ' + S.y + '．段階：' + STAGES[st] + '．' +
+        (st >= 1 ? '隠れ層の出力 z = (' + f4(T.z1[0]) + ', ' + f4(T.z1[1]) + ')，出力 ŷ = ' + f4(T.yhat) + '，損失 L = ' + f4(T.L) + '．' : '') +
+        (st >= 2 ? '出力の誤差 δ = ' + f4(T.delta2) + '，隠れ層の誤差 δ = (' + f4(T.delta1[0]) + ', ' + f4(T.delta1[1]) + ')．' : '') +
+        (st === 3 ? '更新後の損失 ' + f4(T.Ln) + '．' : ''));
+    }
+
+    function tbl() {
+      var st = S.stage, h = '<p class="hint narrowonly">幅の狭い画面では「式」の列を省いています（式は上の欄にあります）．</p><table class="grid"><thead><tr><th class="l">量</th><th>値</th><th class="l eqc">式</th></tr></thead><tbody>';
+      function sec(t) { h += '<tr class="sec"><td colspan="3">' + t + '</td></tr>'; }
+      function r3(name, val, eq, hi) { h += '<tr' + (hi ? ' class="hi"' : '') + '><td class="l">' + name + '</td><td>' + val + '</td><td class="eqc">' + eq + '</td></tr>'; }
+      var n = T.net, n2 = T.net2, j, i;
+      sec('入力と重み（いまの値）');
+      r3('<i>x</i>', '(' + g6(S.x[0]) + ', ' + g6(S.x[1]) + ')', '<i>y</i> = ' + S.y + '，<i>η</i> = ' + num(S.eta));
+      for (j = 0; j < 2; j++) r3('<i>W</i><sup>(1)</sup><sub>' + (j + 1) + '·</sub>，<i>b</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', '(' + g6(n.W1[j][0]) + ', ' + g6(n.W1[j][1]) + ')，' + g6(n.b1[j]), '隠れユニット ' + (j + 1) + ' への重みとバイアス');
+      r3('<i>W</i><sup>(2)</sup>，<i>b</i><sup>(2)</sup>', '(' + g6(n.W2[0]) + ', ' + g6(n.W2[1]) + ')，' + g6(n.b2), '');
+      if (st >= 1) {
+        sec('順伝播');
+        for (j = 0; j < 2; j++) r3('<i>a</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.a1[j]), '<i>W</i><sub>' + (j + 1) + '1</sub><i>x</i><sub>1</sub> + <i>W</i><sub>' + (j + 1) + '2</sub><i>x</i><sub>2</sub> + <i>b</i><sub>' + (j + 1) + '</sub>');
+        for (j = 0; j < 2; j++) r3('<i>z</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.z1[j]), 'tanh <i>a</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>');
+        r3('<i>a</i><sup>(2)</sup>', f6(T.a2), '<i>W</i><sup>(2)</sup><i>z</i><sup>(1)</sup> + <i>b</i><sup>(2)</sup>');
+        r3('<i>ŷ</i>', f6(T.yhat), 'σ(<i>a</i><sup>(2)</sup>)');
+        r3('<i>L</i>', f6(T.L), S.y === 1 ? '−ln <i>ŷ</i>' : '−ln(1 − <i>ŷ</i>)', true);
+      }
+      if (st >= 2) {
+        sec('逆伝播');
+        r3('<i>δ</i><sup>(2)</sup>', f6(T.delta2), '<i>ŷ</i> − <i>y</i>');
+        for (j = 0; j < 2; j++) r3('<i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub><i>δ</i><sup>(2)</sup>', f6(T.backW2d[j]), '出力から隠れ ' + (j + 1) + ' へ戻す量');
+        for (j = 0; j < 2; j++) r3('<i>h</i>′(<i>a</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>)', f6(T.dh[j]), '1 − <i>z</i><sub>' + (j + 1) + '</sub><sup>2</sup>');
+        for (j = 0; j < 2; j++) r3('<i>δ</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.delta1[j]), '<i>h</i>′ × <i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub><i>δ</i><sup>(2)</sup>');
+        for (j = 0; j < 2; j++) r3('∂<i>L</i>/∂<i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub>', f6(T.gW2[j]), '<i>δ</i><sup>(2)</sup><i>z</i><sub>' + (j + 1) + '</sub>');
+        r3('∂<i>L</i>/∂<i>b</i><sup>(2)</sup>', f6(T.gb2), '<i>δ</i><sup>(2)</sup>');
+        for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) r3('∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub>' + (j + 1) + (i + 1) + '</sub>', f6(T.gW1[j][i]), '<i>δ</i><sup>(1)</sup><sub>' + (j + 1) + '</sub><i>x</i><sub>' + (i + 1) + '</sub>');
+        for (j = 0; j < 2; j++) r3('∂<i>L</i>/∂<i>b</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.gb1[j]), '<i>δ</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>');
+      }
+      if (st >= 3) {
+        sec('更新（<i>w</i> ← <i>w</i> − <i>η</i> ∂<i>L</i>/∂<i>w</i>，<i>η</i> = ' + num(S.eta) + '）と更新後の順伝播');
+        for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) r3('<i>W</i><sup>(1)</sup><sub>' + (j + 1) + (i + 1) + '</sub>', f6(n2.W1[j][i]), g6(n.W1[j][i]) + ' → ');
+        for (j = 0; j < 2; j++) r3('<i>b</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(n2.b1[j]), g6(n.b1[j]) + ' → ');
+        for (j = 0; j < 2; j++) r3('<i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub>', f6(n2.W2[j]), g6(n.W2[j]) + ' → ');
+        r3('<i>b</i><sup>(2)</sup>', f6(n2.b2), g6(n.b2) + ' → ');
+        r3('更新後の <i>a</i><sup>(1)</sup>', '(' + f6(T.a1n[0]) + ', ' + f6(T.a1n[1]) + ')', '');
+        r3('更新後の <i>z</i><sup>(1)</sup>', '(' + f6(T.z1n[0]) + ', ' + f6(T.z1n[1]) + ')', '');
+        r3('更新後の <i>a</i><sup>(2)</sup>，<i>ŷ</i>', f6(T.a2n) + '，' + f6(T.yhatn), '');
+        r3('更新後の <i>L</i>', f6(T.Ln), '更新前 ' + f6(T.L) + '（差 ' + f6(T.Ln - T.L) + '）', true);
+      }
+      h += '</tbody></table>';
+      q('tblTrace').innerHTML = h;
+    }
+
+    function eq() {
+      var st = S.stage, n = T.net, rows = [], X = S.x;
+      var a1 = bsym('a', 1), z1 = bsym('z', 1), W1 = bsym('W', 1), b1 = bsym('b', 1), x = bsym('x');
+      if (st === 0) {
+        rows.push(row(a1 + mo('=') + W1 + x + mo('+') + b1 + BRK + mo('=') + matM(n.W1) + vecM(X) + mo('+') + vecM(n.b1)));
+      }
+      if (st >= 1 && st < 3) {
+        rows.push(row(a1 + mo('=') + '<mrow><mo>(</mo><mtable>' + [0, 1].map(function (j) { return '<mtr><mtd>' + mn(n.W1[j][0]) + mo('×') + paren(X[0]) + mo('+') + paren(n.W1[j][1]) + mo('×') + paren(X[1]) + mo('+') + paren(n.b1[j]) + '</mtd></mtr>'; }).join('') + '</mtable><mo>)</mo></mrow>' + BRK + mo('=') + vecM(T.a1)));
+        rows.push(row(z1 + mo('=') + mi('tanh') + sp('0.2em') + a1 + mo('=') + vecM(T.z1)));
+        rows.push(row(ssym('a', 2) + mo('=') + paren(n.W2[0]) + mo('×') + mn(T.z1[0]) + mo('+') + paren(n.W2[1]) + mo('×') + mn(T.z1[1]) + mo('+') + paren(n.b2) + mo('=') + mn(T.a2)));
+        rows.push(row(YHAT + mo('=') + mi('σ') + mo('(') + mn(T.a2) + mo(')') + mo('=') + mn(T.yhat)));
+        rows.push(row(mi('L') + mo('=') + (S.y === 1 ? mo('−') + mi('ln') + sp('0.15em') + mn(T.yhat) : mo('−') + mi('ln') + mo('(') + mn(1) + mo('−') + mn(T.yhat) + mo(')')) + mo('=') + mn(T.L)));
+      }
+      if (st === 2) {
+        rows.push(row(ssym('δ', 2) + mo('=') + YHAT + mo('−') + mi('y') + mo('=') + mn(T.yhat) + mo('−') + mn(S.y) + mo('=') + mn(T.delta2)));
+        rows.push(row(frac(mo('∂') + mi('L'), mo('∂') + bsym('W', 2)) + mo('=') + ssym('δ', 2) + bsym('z', 1, null) + '<msup><mrow/><mi>T</mi></msup>' + BRK + mo('=') + paren(T.delta2) + mo('×') + rowM(T.z1) + mo('=') + rowM(T.gW2)));
+        rows.push(row(bsym('δ', 1) + mo('=') + '<msup><mi>h</mi><mo>′</mo></msup>' + mo('(') + a1 + mo(')') + mo('⊙') + bsym('W', 2) + '<msup><mrow/><mi>T</mi></msup>' + ssym('δ', 2) + BRK + mo('=') + vecM(T.dh) + mo('⊙') + vecM(T.backW2d) + mo('=') + vecM(T.delta1)));
+        rows.push(row(frac(mo('∂') + mi('L'), mo('∂') + W1) + mo('=') + bsym('δ', 1) + x + '<msup><mrow/><mi>T</mi></msup>' + BRK + mo('=') + vecM(T.delta1) + rowM(X) + mo('=') + matM(T.gW1)));
+      }
+      if (st === 3) {
+        var n2 = T.net2;
+        rows.push(row(W1 + mo('←') + matM(n.W1) + BRK + mo('−') + mn(S.eta) + mo('×') + matM(T.gW1) + BRK + mo('=') + matM(n2.W1)));
+        rows.push(row(b1 + mo('←') + vecM(n.b1) + mo('−') + mn(S.eta) + mo('×') + vecM(T.gb1) + BRK + mo('=') + vecM(n2.b1)));
+        rows.push(row(bsym('W', 2) + mo('←') + rowM(n.W2) + BRK + mo('−') + mn(S.eta) + mo('×') + rowM(T.gW2) + BRK + mo('=') + rowM(n2.W2) + NL + ssym('b', 2) + mo('←') + mn(n.b2) + mo('−') + mn(S.eta) + mo('×') + paren(T.gb2) + mo('=') + mn(n2.b2)));
+        rows.push(row(mt('更新後：') + YHAT + mo('=') + mn(T.yhatn) + mo(',') + sp('0.5em') + mi('L') + mo('=') + mn(T.Ln) + sp('0.5em') + mt('（更新前') + sp('0.3em') + mn(T.L) + mt('）')));
+      }
+      q('eqTrace').innerHTML = table(rows) + (st === 0 ? '<p class="hint">「順伝播」を押すと，この式の値と tanh，sigmoid，損失を計算します．</p>' : '');
+    }
+
+    function readout() {
+      var r = [['段階', STAGES[S.stage]], ['更新の回数', String(S.k)]];
+      if (S.stage >= 1) { r.push(['出力 <i>ŷ</i>', f6(T.yhat)]); r.push(['損失 <i>L</i>', f6(T.L)]); }
+      if (S.stage >= 2) r.push(['勾配の大きさ ‖<i>g</i>‖（9 個）', f6(Math.sqrt(T.gradNorm2))]);
+      if (S.stage === 3) { r.push(['更新後の損失', f6(T.Ln)]); r.push(['損失の変化', f6(T.Ln - T.L)]); r.push(['1 次の近似 −<i>η</i>‖<i>g</i>‖<sup>2</sup>', f6(-S.eta * T.gradNorm2)]); }
+      var h = kv(r);
+      if (S.hist.length) h += '<p class="hint">損失の履歴（更新の前 → 後）：' + S.hist.slice(-8).map(function (p, k) { return (S.hist.length - Math.min(8, S.hist.length) + k + 1) + ' 回目 ' + f4(p[0]) + ' → ' + f4(p[1]); }).join('，') + '</p>';
+      q('readTrace').innerHTML = h;
+      steps.innerHTML = STAGES.map(function (s, k) { return '<li class="' + (k === S.stage ? 'now' : k < S.stage ? 'done' : '') + '">' + s + (k === S.stage ? '（いまここ）' : '') + '</li>'; }).join('');
+      bF.disabled = !(S.stage === 0 || S.stage === 3); bB.disabled = S.stage !== 1; bU.disabled = S.stage !== 2;
+      bF.textContent = S.stage === 3 ? '順伝播（更新後の重みで）' : '順伝播';
+    }
+
+    var self = {
+      update: function () {
+        if (!U.guardFinite([T.a1, T.z1, T.a2, T.L, T.Ln, M.flatten(T.net2)], msg, '計算')) return;
+        drawNet(); tbl(); eq(); readout();
+        U.postHeightLater();
+      }
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② train：学習を見る
+     ================================================================= */
+  var WD_LIST = [0, 1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1];
+  var TASKS = [{ value: 'regression', label: '回帰（データ A）' }, { value: 'circles', label: '同心円' }, { value: 'moons', label: '三日月' }, { value: 'xor', label: 'XOR' }];
+  var RANGES = { circles: [[-1.5, 1.5], [-1.5, 1.5]], moons: [[-1.8, 1.8], [-1.3, 1.3]], xor: [[-1.3, 1.3], [-1.3, 1.3]] };
+  var BR = U.cmap('blueRed');
+  /* 濃淡は白と 45 % 混ぜた不透明の色（半透明のセルを重ねると継ぎ目が見えるため） */
+  function soft(t) { var m = /rgb\((\d+),(\d+),(\d+)\)/.exec(BR(t)); return 'rgb(' + [1, 2, 3].map(function (i) { return Math.round(0.55 * (+m[i]) + 0.45 * 255); }).join(',') + ')'; }
+  var ACTNAME = { tanh: 'tanh', relu: 'ReLU', sigmoid: 'sigmoid' };
+  /* 学習の状態（③からも参照するので，パネルの外に置く） */
+  function newTrainState(o) {
+    var st = Object.assign({ kind: 'regression', H: 3, act: 'tanh', eta: 0.1, batch: 8, wdIdx: 0, init: 'random', Nreg: 20, Ncls: 100, seed: DEFAULT_SEED, dataSeed: DATA_SEED, speed: 1 }, o || {});
+    st.task = M.makeTask(st.kind, st.dataSeed, st.kind === 'regression' ? st.Nreg : st.Ncls);
+    st.reset = function () {
+      st.rng = C.rng(st.seed);
+      st.net = M.initNet(st.rng, st.task.D, st.H, st.act, st.task.out, st.init === 'zero' ? 'zero' : null);
+      st.epoch = 0; st.updates = 0; st.hist = { e: [], tr: [], va: [] }; st.diverged = '';
+      st.record();
+    };
+    st.wd = function () { return WD_LIST[st.wdIdx]; };
+    st.record = function () {
+      var tr = M.lossOnly(st.net, st.task.train.X, st.task.train.Y, null, 0).L, va = M.lossOnly(st.net, st.task.val.X, st.task.val.Y, null, 0).L;
+      st.hist.e.push(st.epoch); st.hist.tr.push(tr); st.hist.va.push(va);
+    };
+    st.epochStep = function () {
+      var o = M.trainEpoch(st.net, st.task.train.X, st.task.train.Y, { eta: st.eta, batch: st.batch, wd: st.wd() }, st.rng);
+      st.updates += o.steps;
+      if (!o.ok) { st.diverged = o.reason; st.divEpoch = st.epoch + 1; return false; }
+      st.net = o.net; st.epoch++; st.record();
+      var last = st.hist.tr[st.hist.tr.length - 1];
+      if (!isFinite(last) || last > LIM.divergeLoss) { st.divEpoch = st.epoch; st.diverged = '訓練損失が ' + (isFinite(last) ? U.fmt(last, 3) + ' になり，10⁶ を超えました' : 'NaN または無限大になりました'); return false; }
+      return true;
+    };
+    st.reset();
+    return st;
+  }
+  function trainState() { if (!SH.train) SH.train = newTrainState(); return SH.train; }
+
+  function TrainSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var cvFit = q('cvFit'), cvLoss = q('cvLoss'), cvBasis = q('cvBasis'), ctl = q('ctlTrain');
+    var S = trainState();
+    var view = { basis: 'z' };
+    var redraw = function () { self.update(); };
+    function rebuild() { S.task = M.makeTask(S.kind, S.dataSeed, S.kind === 'regression' ? S.Nreg : S.Ncls); run.reset(); }
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+
+    var pTask = U.pills({ label: '課題', options: TASKS, value: S.kind, onChange: function (v) { S.kind = v; syncN(); rebuild(); } });
+    var rH = U.range({ label: '隠れユニット数 <i>H</i>', min: LIM.H[0], max: LIM.H[1], step: 1, value: S.H, fmt: function (v) { return String(Math.round(v)); }, onInput: function (v) { S.H = Math.round(v); run.reset(); } });
+    var pAct = U.pills({ label: '隠れ層の活性化関数 <i>h</i>', options: [{ value: 'tanh', label: 'tanh' }, { value: 'relu', label: 'ReLU' }, { value: 'sigmoid', label: 'sigmoid' }], value: S.act, onChange: function (v) { S.act = v; run.reset(); } });
+    var rEta = U.range({ label: '学習率 <i>η</i>（対数）', min: LIM.eta[0], max: LIM.eta[1], step: 0.1, log: true, value: S.eta, fmt: function (v) { return fmt(v, 2); }, onInput: function (v) { S.eta = v; redraw(); } });
+    var pB = U.pills({ label: 'ミニバッチの大きさ <i>B</i>', options: [{ value: '0', label: '全部' }, { value: '8', label: '8' }, { value: '1', label: '1' }], value: String(S.batch), onChange: function (v) { S.batch = +v; redraw(); } });
+    var rWd = U.range({ label: '重み減衰 <i>λ</i>', min: 0, max: WD_LIST.length - 1, step: 1, value: S.wdIdx, fmt: function (v) { var w = WD_LIST[Math.round(v)]; return w === 0 ? '0（なし）' : fmt(w, 1); }, onInput: function (v) { S.wdIdx = Math.round(v); redraw(); } });
+    var pInit = U.pills({ label: '初期値', options: [{ value: 'random', label: '乱数（Xavier／He）' }, { value: 'zero', label: '全部 0' }], value: S.init, onChange: function (v) { S.init = v; run.reset(); } });
+    var rN = U.range({ label: '訓練データ数 <i>N</i>', min: 5, max: 50, step: 1, value: S.Nreg, fmt: function (v) { return String(Math.round(v)); }, onInput: function (v) { if (S.kind === 'regression') S.Nreg = Math.round(v); else S.Ncls = Math.round(v); rebuild(); } });
+    function syncN() {
+      var reg = S.kind === 'regression', inp = rN.input;
+      inp.min = reg ? LIM.NregTrain[0] : LIM.NclsTrain[0]; inp.max = reg ? LIM.NregTrain[1] : LIM.NclsTrain[1]; inp.step = reg ? 1 : 10;
+      rN.set(reg ? S.Nreg : S.Ncls, true);
+      rN.input.setAttribute('aria-valuemin', inp.min);
+      rN.out.textContent = String(reg ? S.Nreg : S.Ncls);
+    }
+    /* U.range は min/max を作成時の値で clamp するので，get を差し替える（範囲は課題で変わる） */
+    rN.get = function () { return Math.max(+rN.input.min, Math.min(+rN.input.max, Math.round(parseFloat(rN.input.value)))); };
+    rN.set = function (v) { rN.input.value = v; rN.out.textContent = String(v); rN.input.setAttribute('aria-valuetext', String(v)); };
+    rN.input.addEventListener('input', function () { rN.out.textContent = String(rN.get()); });
+    var pSpeed = U.pills({ label: '速さ', options: [{ value: '1', label: '1 エポック／コマ' }, { value: '10', label: '10 エポック／コマ' }], value: String(S.speed), onChange: function (v) { S.speed = +v; } });
+    var run = U.runner({
+      maxSteps: LIM.maxEpochs,
+      stepsPerFrame: 1,
+      labels: { step: '1 エポック' },
+      isVisible: function () { return !panel.hidden; },
+      step: function () {
+        if (S.diverged) return false;
+        var k = 0, ok = true;
+        while (k < S.speed && ok && S.epoch < LIM.maxEpochs) { ok = S.epochStep(); k++; }
+        if (S.speed > 1 && k > 1) run.setSteps(run.steps() + k - 1);
+        return ok && S.epoch < LIM.maxEpochs;
+      },
+      reset: function () { S.reset(); },
+      draw: function () { self.update(); }
+    });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; run.reset(); } });
+    seed.el.querySelector('label').textContent = '乱数の seed（初期値とミニバッチの順）';
+    var nData = U.number({ label: 'データの seed（訓練・検証データ）', min: 0, max: 4294967295, step: 1, int: true, value: S.dataSeed, onChange: function (v) { S.dataSeed = v; rebuild(); } });
+    var pBasis = U.pills({ label: '下の図に描くもの（回帰のみ）', options: [{ value: 'z', label: '<i>z</i><sub><i>j</i></sub>(<i>s</i>)' }, { value: 'c', label: '寄与 <i>s</i><sub><i>y</i></sub><i>W</i><sup>(2)</sup><sub><i>j</i></sub><i>z</i><sub><i>j</i></sub>(<i>s</i>)' }], value: view.basis, onChange: function (v) { view.basis = v; redraw(); } });
+
+    ctl.appendChild(pTask.el); ctl.appendChild(rH.el); ctl.appendChild(pAct.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(run.el); ctl.appendChild(pSpeed.el); ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(rEta.el); ctl.appendChild(pB.el); ctl.appendChild(rWd.el);
+    ctl.appendChild(U.el('span', 'hint', '学習率・ミニバッチ・重み減衰は学習の途中でも変えられます（重みはそのまま）．課題・<i>H</i>・活性化関数・初期値・データ数・seed を変えると，最初からやり直します．'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(pInit.el); ctl.appendChild(rN.el); ctl.appendChild(seed.el); ctl.appendChild(nData.el); ctl.appendChild(pBasis.el);
+    syncN();
+
+    function lgFit() {
+      if (S.kind === 'regression') U.legendHTML(q('lgFit'), [
+        { label: '真の関数 <i>g</i>(<i>s</i>)', color: col.gray, dash: dash.dashed, width: 2 },
+        { label: 'ネットワークの予測 <i>ŷ</i>(<i>s</i>)', color: col.accent, width: 2.6 },
+        { label: '訓練データ（教育用の合成データ）', color: col.orange, shape: 'circle' }]);
+      else U.legendHTML(q('lgFit'), [
+        { label: '<i>y</i> = 1 の訓練データ', color: col.red, shape: 'circle' },
+        { label: '<i>y</i> = 0 の訓練データ', color: col.accent, shape: 'triangle' },
+        { label: '決定境界 <i>ŷ</i> = 0.5', color: col.ink, width: 2.4 },
+        { label: '濃淡：<i>ŷ</i>（青 0 → 白 0.5 → 赤 1）', color: '#f4a582', kind: 'band', alpha: 0.8 }]);
+    }
+    U.legendHTML(q('lgLoss'), [
+      { label: '訓練損失', color: col.accent, width: 2.4 },
+      { label: '検証損失', color: col.orange, dash: dash.dashed, width: 2.4 },
+      { label: '検証損失の最小', color: col.green, shape: 'diamond' }]);
+
+    function drawFit() {
+      var F = U.fitCanvas(cvFit, { aspect: 0.62, minHeight: 260, maxHeight: 430 }), c = F.c, box;
+      var net = S.net, T = S.task;
+      if (S.kind === 'regression') {
+        box = U.plotBox(F.W, F.H, { l: 46, r: 12, t: 14, b: 40 });
+        var ax = U.axes(c, box, [-1, 1], [70, 100], { xl: 's = (T − 1300 °C)/(200 °C)', yl: '相対密度 (%)' });
+        var xs = C.linspace(-1, 1, 241);
+        U.line(c, ax, xs, xs.map(M.trueA), { color: col.gray, dash: dash.dashed, width: 2 });
+        U.line(c, ax, xs, xs.map(function (s) { return T.ymean + T.ystd * M.forward(net, [s]).yhat; }), { color: col.accent, width: 2.6 });
+        U.points(c, ax, T.train.X.map(function (x) { return x[0]; }), T.train.raw, { shape: 'circle', color: col.orange, size: 7 });
+        var L = U.labeler(c, box);
+        L.add('真の関数', ax.X(-0.62), ax.Y(M.trueA(-0.62)) + 14, { color: col.gray, size: 10.5 });
+        L.add('予測', ax.X(0.82), ax.Y(T.ymean + T.ystd * M.forward(net, [0.82]).yhat) - 14, { color: col.accent, size: 11, bold: true });
+        U.setCanvasLabel(cvFit, '回帰：データ A の訓練データ ' + T.train.X.length + ' 点と，隠れユニット ' + S.H + ' 個のネットワークの予測曲線．エポック ' + S.epoch + '．');
+      } else {
+        var R = RANGES[S.kind];
+        box = U.plotBox(F.W, F.H, { l: 40, r: 12, t: 12, b: 38 });
+        var ax2 = U.axes(c, box, R[0], R[1], { xl: 'x₁（無次元）', yl: 'x₂（無次元）' });
+        var n = F.W < 480 ? 41 : 61, Z = M.gridPredict(net, R[0], R[1], n);
+        var dx = (R[0][1] - R[0][0]) / (n - 1), dy = (R[1][1] - R[1][0]) / (n - 1);
+        U.heatmap(c, ax2, Z, { xr: [R[0][0] - dx / 2, R[0][1] + dx / 2], yr: [R[1][0] - dy / 2, R[1][1] + dy / 2], vmin: 0, vmax: 1, cmap: soft });
+        U.contour(c, ax2, Z, 0.5, { color: col.ink, width: 2.4 });
+        var X1 = [], Y1 = [], X0 = [], Y0 = [];
+        T.train.X.forEach(function (x, k) { if (T.train.Y[k]) { X1.push(x[0]); Y1.push(x[1]); } else { X0.push(x[0]); Y0.push(x[1]); } });
+        U.points(c, ax2, X1, Y1, { shape: 'circle', color: col.red, size: 7 });
+        U.points(c, ax2, X0, Y0, { shape: 'triangle', color: col.accent, size: 8 });
+        c.save(); c.strokeStyle = U.colors.frame; c.strokeRect(box[0] + 0.5, box[1] + 0.5, box[2] - box[0] - 1, box[3] - box[1] - 1); c.restore();
+        U.setCanvasLabel(cvFit, '分類（' + TASKS.filter(function (t) { return t.value === S.kind; })[0].label + '）：訓練データ ' + T.train.X.length + ' 点，ŷ の濃淡と決定境界 ŷ = 0.5．エポック ' + S.epoch + '，訓練の正解率 ' + U.fmtPct(M.accuracy(net, T.train.X, T.train.Y)) + '．');
+      }
+    }
+    function drawLoss() {
+      var F = U.fitCanvas(cvLoss, { aspect: 0.4, minHeight: 200, maxHeight: 300 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 52, r: 12, t: 12, b: 40 });
+      var h = S.hist, all = h.tr.concat(h.va).filter(function (v) { return isFinite(v) && v > 0; });
+      var lo = Math.min.apply(null, all.concat([1])), hi = Math.max.apply(null, all.concat([1e-3]));
+      lo = Math.pow(10, Math.floor(Math.log10(Math.max(lo, 1e-6)) - 0.05)); hi = Math.pow(10, Math.ceil(Math.log10(hi) + 0.05));
+      if (hi / lo < 100) lo = hi / 100;
+      var xmax = Math.max(20, S.epoch);
+      var ax = U.axes(c, box, [0, xmax], [lo, hi], { xl: 'エポック', yl: S.kind === 'regression' ? '損失（標準化した単位）' : '損失（nat）', ylog: true });
+      U.line(c, ax, h.e, h.tr, { color: col.accent, width: 2.2 });
+      U.line(c, ax, h.e, h.va, { color: col.orange, dash: dash.dashed, width: 2.2 });
+      var L = U.labeler(c, box);
+      var kmin = 0; for (var k = 1; k < h.va.length; k++) if (h.va[k] < h.va[kmin]) kmin = k;
+      if (h.e.length > 1) {
+        U.marker(c, ax.X(h.e[kmin]), ax.Y(h.va[kmin]), 'diamond', 11, col.green, true);
+        var last = h.e.length - 1;
+        L.add('訓練', Math.min(box[2] - 20, ax.X(h.e[last]) - 4), ax.Y(h.tr[last]) + 12, { color: col.accent, size: 10.5, bold: true, align: 'right' });
+        L.add('検証', Math.min(box[2] - 20, ax.X(h.e[last]) - 4), ax.Y(h.va[last]) - 12, { color: col.orange, size: 10.5, bold: true, align: 'right' });
+        L.add('最小 ' + fmt(h.va[kmin], 3) + '（' + h.e[kmin] + '）', ax.X(h.e[kmin]) + 6, ax.Y(h.va[kmin]) + 14, { color: col.green, size: 10, align: 'left' });
+      } else U.text(c, ax, xmax / 2, Math.sqrt(lo * hi), '「実行」または「1 エポック」で学習が進みます', { color: col.sub, size: 11 });
+      U.setCanvasLabel(cvLoss, 'エポックに対する訓練損失と検証損失（縦軸は対数）．エポック ' + S.epoch + '，訓練損失 ' + fmt(h.tr[h.tr.length - 1], 3) + '，検証損失 ' + fmt(h.va[h.va.length - 1], 3) + '，検証損失の最小はエポック ' + h.e[kmin] + '．');
+      q('capLoss').innerHTML = '横軸はエポック（最大 ' + U.fmtInt(LIM.maxEpochs) + '），縦軸は損失（対数目盛）．訓練損失は訓練データ ' + S.task.train.X.length + ' 個，検証損失は別の 200 個で計算した重み減衰を含まない平均の損失です．' + (S.kind === 'regression' ? '回帰の損失は標準化した目標値での ½(<i>ŷ</i> − <i>y</i>)<sup>2</sup> の平均です．' : '分類の損失は交差エントロピーの平均（単位 nat）です．');
+    }
+    function drawBasis() {
+      var stg = q('basisStage');
+      if (S.kind !== 'regression') { stg.hidden = true; return; }
+      stg.hidden = false;
+      var F = U.fitCanvas(cvBasis, { aspect: 0.45, minHeight: 210, maxHeight: 320 }), c = F.c, net = S.net, T = S.task;
+      var box = U.plotBox(F.W, F.H, { l: 52, r: 30, t: 12, b: 40 });
+      var xs = C.linspace(-1, 1, 161), ys = [], lo = Infinity, hi = -Infinity, j;
+      for (j = 0; j < net.H; j++) {
+        ys.push(xs.map(function (s) { var z = M.forward(net, [s]).z1[j]; return view.basis === 'z' ? z : T.ystd * net.W2[j] * z; }));
+        ys[j].forEach(function (v) { if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+      }
+      if (!(hi > lo)) { lo -= 1; hi += 1; }
+      var pad = 0.08 * (hi - lo); lo -= pad; hi += pad;
+      var ax = U.axes(c, box, [-1, 1], [lo, hi], { xl: 's = (T − 1300 °C)/(200 °C)', yl: view.basis === 'z' ? '隠れユニットの出力' : '寄与 (%)' });
+      var L = U.labeler(c, box);
+      var dl = [dash.solid, dash.dashed, dash.dotted, dash.dashdot, dash.long];
+      for (j = 0; j < net.H; j++) {
+        var cc = U.series[j % 8];
+        U.line(c, ax, xs, ys[j], { color: cc, width: 2, dash: dl[j % 5] });
+      }
+      for (j = 0; j < net.H; j++) L.add(String(j + 1), box[2] + 4, ax.Y(ys[j][xs.length - 1]), { color: U.series[j % 8], size: 10, bold: true, align: 'left', dy: [0, -10, 10, -20, 20, -30, 30] });
+      U.setCanvasLabel(cvBasis, '隠れユニット ' + net.H + ' 個の' + (view.basis === 'z' ? '出力 z_j(s)' : '寄与') + 'を s の関数として描いた図．エポック ' + S.epoch + '．');
+      q('capBasis').innerHTML = (view.basis === 'z' ? '各隠れユニットの出力 <i>z</i><sub><i>j</i></sub>(<i>s</i>) = <i>h</i>(<i>W</i><sup>(1)</sup><sub><i>j</i></sub><i>s</i> + <i>b</i><sup>(1)</sup><sub><i>j</i></sub>)．第8章の固定の基底関数と違い，学習で位置と傾きが動きます．' : '寄与 <i>s</i><sub><i>y</i></sub><i>W</i><sup>(2)</sup><sub><i>j</i></sub><i>z</i><sub><i>j</i></sub>(<i>s</i>)（%）．これらの和に <i>ȳ</i> + <i>s</i><sub><i>y</i></sub><i>b</i><sup>(2)</sup> を足すと上の予測曲線になります．') + '右端の数字がユニットの番号 <i>j</i> です（色と線種でも区別）．';
+    }
+    function capFit() {
+      var T = S.task, cond = '隠れユニット ' + S.H + ' 個（' + ACTNAME[S.act] + '），<i>η</i> = ' + fmt(S.eta, 2) + '，<i>B</i> = ' + (S.batch ? S.batch : '全部') + '，<i>λ</i> = ' + (S.wd() ? fmt(S.wd(), 1) : '0') + '，初期値 ' + (S.init === 'zero' ? '全部 0' : '乱数') + '，乱数の seed ' + S.seed + '，データの seed ' + S.dataSeed + '．';
+      if (S.kind === 'regression') {
+        q('titleFit').textContent = '予測曲線と訓練データ（データ A：焼成温度と相対密度）';
+        q('capFit').innerHTML = '<strong>教育用の合成データ</strong>：<i>y</i> = <i>g</i>(<i>s</i>) + 𝒩(0, 1.0<sup>2</sup>) %，<i>g</i>(<i>s</i>) = 88 + 8<i>s</i> − 5<i>s</i><sup>2</sup> + 2 sin 3<i>s</i>，訓練 ' + T.train.X.length + ' 点（検証 200 点は図に描いていません）．目標値は <i>ȳ</i> = ' + fx(T.ymean, 2) + ' %，<i>s</i><sub><i>y</i></sub> = ' + fx(T.ystd, 2) + ' % で標準化して学習しています．' + cond;
+      } else {
+        var nm = TASKS.filter(function (t) { return t.value === S.kind; })[0].label;
+        q('titleFit').textContent = '決定境界と訓練データ（' + nm + '）';
+        q('capFit').innerHTML = '<strong>教育用の合成データ</strong>（' + nm + '．ノイズの標準偏差 ' + M.CLS_NOISE[S.kind] + '．生成式は下の説明）．訓練 ' + T.train.X.length + ' 点（<i>y</i> = 1 は ●，<i>y</i> = 0 は ▲），検証 200 点は図に描いていません．' + cond;
+      }
+    }
+    function readout() {
+      var T = S.task, net = S.net, h = S.hist, k, kmin = 0;
+      for (k = 1; k < h.va.length; k++) if (h.va[k] < h.va[kmin]) kmin = k;
+      var w2 = M.flatten(net).filter(function (_, i) { var nm = M.paramNames(net)[i].kind; return nm === 'W1' || nm === 'W2'; }).reduce(function (s, v) { return s + v * v; }, 0);
+      var r = [['エポック（更新の回数）', S.epoch + '（' + U.fmtInt(S.updates) + '）'],
+        ['1 エポックの更新の回数', String(Math.ceil(T.train.X.length / (S.batch && S.batch < T.train.X.length ? S.batch : T.train.X.length)))],
+        ['訓練損失', fmt(h.tr[h.tr.length - 1], 4)], ['検証損失', fmt(h.va[h.va.length - 1], 4)],
+        ['検証損失の最小（エポック）', fmt(h.va[kmin], 4) + '（' + h.e[kmin] + '）']];
+      /* 発散の直後は RMSE が 10²⁴ 程度になる．toFixed の長い桁の列で表が崩れないよう，大きい値は有効数字で書く */
+      var fr = function (v) { return Math.abs(v) < 1e4 ? fx(v, 3) : fmt(v, 3); };
+      if (S.kind === 'regression') { r.push(['RMSE 訓練／検証', fr(M.rmse(net, T, 'train')) + ' ／ ' + fr(M.rmse(net, T, 'val')) + ' %']); r.push(['（ノイズの標準偏差）', '1.000 %']); }
+      else r.push(['正解率 訓練／検証', U.fmtPct(M.accuracy(net, T.train.X, T.train.Y)) + ' ／ ' + U.fmtPct(M.accuracy(net, T.val.X, T.val.Y))]);
+      r.push(['パラメーター数', String(M.nParams(net)) + '（' + S.H + '×' + T.D + ' + ' + S.H + ' + ' + S.H + ' + 1）']);
+      r.push(['‖<i>W</i><sup>(1)</sup>‖<sup>2</sup> + ‖<i>W</i><sup>(2)</sup>‖<sup>2</sup>', fmt(w2, 4)]);
+      q('readTrain').innerHTML = kv(r);
+      return { w2: w2 };
+    }
+    function eq(info) {
+      var T = S.task, net = S.net, rows = [], h = S.hist, wd = S.wd();
+      var L = M.lossOnly(net, T.train.X, T.train.Y, null, wd);
+      rows.push(row(mi('L') + mo('=') + frac(mn(1), mi('N')) + '<munder><mo>∑</mo><mi>n</mi></munder><msub><mi>ℓ</mi><mi>n</mi></msub>' + mo('+') + frac(mi('λ'), mn(2)) + mo('‖') + bsym('W') + mo('‖') + '<msup><mrow/><mn>2</mn></msup>' + BRK + mo('=') + mn(L.Ldata) + mo('+') + frac(wd ? mn(wd, 1) : mn(0), mn(2)) + mo('×') + mn(info.w2) + mo('=') + mn(L.L) + sp('0.5em') + mt('（訓練データ全体）')));
+      var Nt = T.train.X.length, B = S.batch && S.batch < Nt ? S.batch : Nt;
+      rows.push(row(mt('1 エポックの更新の回数') + sp('0.3em') + mo('⌈') + mi('N') + mo('/') + mi('B') + mo('⌉') + mo('=') + mo('⌈') + mn(Nt) + mo('/') + mn(B) + mo('⌉') + mo('=') + mn(Math.ceil(Nt / B)) + NL + mi('w') + mo('←') + mi('w') + mo('−') + mn(S.eta, 2) + frac(mo('∂') + mi('L'), mo('∂') + mi('w'))));
+      /* 予測の中身：基底関数の重ね合わせ */
+      var xP = S.kind === 'regression' ? [0.5] : [0.5, 0.5], fw = M.forward(net, xP), show = Math.min(net.H, 3), terms = '';
+      for (var j = 0; j < show; j++) terms += (j ? mo('+') : '') + paren(net.W2[j]) + mo('×') + paren(fw.z1[j]);
+      if (net.H > show) terms += mo('+') + mo('⋯');
+      var head = S.kind === 'regression' ? ssym('a', 2) + mo('(') + mi('s') + mo('=') + mn(0.5) + mo(')') : ssym('a', 2) + mo('(') + bsym('x') + mo('=') + mo('(') + mn(0.5) + mo(',') + mn(0.5) + mo(')') + mo(')');
+      rows.push(row(head + mo('=') + '<munderover><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>1</mn></mrow><mi>H</mi></munderover>' + ssym('W', 2, mi('j')) + '<msub><mi>z</mi><mi>j</mi></msub>' + mo('+') + ssym('b', 2)));
+      rows.push(row(sp('1.5em') + mo('=') + terms + mo('+') + paren(net.b2) + mo('=') + mn(fw.a2) + (net.H > show ? sp('0.5em') + mt('（' + net.H + ' 項のうち初めの ' + show + ' 項を表示）') : '')));
+      if (S.kind === 'regression') rows.push(row(YHAT + mo('=') + mover('y') + mo('+') + msub('s', 'y') + ssym('a', 2) + mo('=') + mn(T.ymean) + mo('+') + mn(T.ystd) + mo('×') + paren(fw.a2) + mo('=') + mn(T.ymean + T.ystd * fw.a2) + sp('0.25em') + mt('%') + NL + mt('（T = 1400 °C での値．真の値') + sp('0.25em') + mn(M.trueA(0.5)) + sp('0.25em') + mt('%）')));
+      else rows.push(row(YHAT + mo('=') + mi('σ') + mo('(') + mn(fw.a2) + mo(')') + mo('=') + mn(fw.yhat) + sp('0.5em') + mt(fw.yhat >= 0.5 ? '→ y = 1 と判定' : '→ y = 0 と判定')));
+      q('eqTrain').innerHTML = table(rows);
+    }
+    function mover(s) { return '<mover><mi>' + s + '</mi><mo>¯</mo></mover>'; }
+    function msub(a, b) { return '<msub><mi>' + a + '</mi><mi>' + b + '</mi></msub>'; }
+
+    lgFit();
+    var lastKind = S.kind;
+    var self = {
+      update: function () {
+        if (lastKind !== S.kind) { lgFit(); lastKind = S.kind; }
+        if (S.diverged) U.status(msg, '学習を止めました：' + S.diverged + '（エポック ' + S.divEpoch + '）．学習率を小さくするかミニバッチを大きくして「やり直す」を押してください．', 'warn');
+        else if (S.init === 'zero' && S.act !== 'sigmoid') U.status(msg, '初期値が全部 0 です．' + ACTNAME[S.act] + ' では z⁽¹⁾ = h(0) = 0 なので ∂L/∂W⁽²⁾ = δ⁽²⁾z⁽¹⁾ = 0，W⁽²⁾ = 0 なので δ⁽¹⁾ = 0 となり，重みはどれも 0 のまま動きません．学習されるのは出力のバイアス b⁽²⁾ だけで，予測は定数です．', 'warn');
+        else if (S.init === 'zero') U.status(msg, '初期値が全部 0 です．sigmoid では隠れ層の重みも動きますが，どの隠れユニットも同じ値のままです．', 'warn');
+        else U.status(msg, '');
+        if (!M.netFinite(S.net)) { U.status(msg, '計算を止めました：重みに NaN または無限大が出ました．学習率を小さくして「やり直す」を押してください．', 'warn'); return; }
+        drawFit(); drawLoss(); drawBasis(); capFit();
+        var info = readout(); eq(info);
+        if (S.diverged) U.status(run.status, '発散したので止めました．', 'warn');
+      },
+      hide: function () { run.stop(); }
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ③ gradcheck：勾配確認
+     ================================================================= */
+  function GradSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var cv = q('cvV'), ctl = q('ctlGC');
+    var S = { src: 'trace', logEps: -5, pick: 0 }, sweep = null, sweepKey = '', G = null;
+    var redraw = function () { self.update(); };
+    function target() {
+      if (S.src === 'trace') return { net: SH.trace.net, X: [SH.trace.x.slice()], Y: [SH.trace.y], wd: 0, label: '① の 2–2–1（いまの重み，データ 1 個）' };
+      var t = trainState();
+      return { net: t.net, X: t.task.train.X, Y: t.task.train.Y, wd: t.wd(), label: '② のネットワーク（' + TASKS.filter(function (k) { return k.value === t.kind; })[0].label + '，<i>H</i> = ' + t.H + '，' + ACTNAME[t.act] + '，エポック ' + t.epoch + '，訓練データ ' + t.task.train.X.length + ' 個，<i>λ</i> = ' + (t.wd() ? fmt(t.wd(), 1) : '0') + '）' };
+    }
+    var pSrc = U.pills({ label: '確かめるネットワーク', options: [{ value: 'trace', label: '① の 2–2–1' }, { value: 'train', label: '② のネットワーク' }], value: S.src, onChange: function (v) { S.src = v; S.pick = 0; sweepKey = ''; redraw(); } });
+    var rEps = U.range({ label: '差分の刻み <i>ε</i>（対数）', min: 1e-12, max: 1e-1, step: 0.25, log: true, value: 1e-5, fmt: function (v) { return fmt(v, 2); }, onInput: function (v) { S.logEps = Math.log10(v); redraw(); } });
+    var sel = U.select({ label: '式に入れるパラメーター', options: [{ value: 0, label: '—' }], value: 0, onChange: function (v) { S.pick = +v; redraw(); } });
+    var bRe = U.button('いまの重みで確かめ直す', function () { sweepKey = ''; redraw(); }, { primary: true, title: '①・②で重みが変わったあとに押します' });
+    ctl.appendChild(pSrc.el); ctl.appendChild(rEps.el); ctl.appendChild(sel.el); ctl.appendChild(U.buttonRow([bRe]));
+    ctl.appendChild(U.el('span', 'hint', '①・②で重みを変えたあと，このタブを開き直すか「確かめ直す」を押すと，そのときの重みで計算し直します．'));
+    U.legendHTML(q('lgV'), [
+      { label: '中心差分との最大の絶対誤差', color: col.accent, width: 2.4, shape: 'circle', kind: 'linemarker' },
+      { label: '前進差分との最大の絶対誤差', color: col.orange, dash: dash.dashed, width: 2.2, shape: 'square', kind: 'linemarker' },
+      { label: 'いまの <i>ε</i>', color: col.purple, dash: dash.dashdot, width: 1.6 }]);
+    function pname(p) {
+      if (p.kind === 'W1') return '<i>W</i><sup>(1)</sup><sub>' + p.j + p.i + '</sub>';
+      if (p.kind === 'b1') return '<i>b</i><sup>(1)</sup><sub>' + p.j + '</sub>';
+      if (p.kind === 'W2') return '<i>W</i><sup>(2)</sup><sub>' + p.j + '</sub>';
+      return '<i>b</i><sup>(2)</sup>';
+    }
+    function ptext(p) { return p.kind === 'W1' ? 'W(1) ' + p.j + p.i : p.kind === 'b1' ? 'b(1) ' + p.j : p.kind === 'W2' ? 'W(2) ' + p.j : 'b(2)'; }
+    function pmath(p) {
+      if (p.kind === 'W1') return ssym('W', 1, '<mn>' + p.j + p.i + '</mn>');
+      if (p.kind === 'b1') return ssym('b', 1, '<mn>' + p.j + '</mn>');
+      if (p.kind === 'W2') return ssym('W', 2, '<mn>' + p.j + '</mn>');
+      return ssym('b', 2);
+    }
+    function compute() {
+      var t = target(), key = S.src + JSON.stringify(M.flatten(t.net)) + t.wd + t.X.length;
+      if (key !== sweepKey) {
+        sweep = M.epsSweep(t.net, t.X, t.Y, t.wd, M.epsGrid(34)); sweepKey = key;
+        var names = M.paramNames(t.net);
+        sel.input.innerHTML = names.map(function (p, k) { return '<option value="' + k + '">' + ptext(p) + '</option>'; }).join('');
+        if (S.pick >= names.length) S.pick = 0;
+        sel.input.value = String(S.pick);
+      }
+      G = M.gradCheck(t.net, t.X, t.Y, t.wd, Math.pow(10, S.logEps));
+      return t;
+    }
+    function drawV() {
+      var F = U.fitCanvas(cv, { aspect: 0.55, minHeight: 250, maxHeight: 400 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 54, r: 12, t: 14, b: 40 });
+      var ys = []; sweep.forEach(function (r) { ys.push(r.central, r.forward); });
+      var pos = ys.filter(function (v) { return v > 0 && isFinite(v); });
+      var lo = Math.pow(10, Math.floor(Math.log10(Math.min.apply(null, pos)) - 0.3)), hi = Math.pow(10, Math.ceil(Math.log10(Math.max.apply(null, pos)) + 0.6));
+      lo = Math.max(lo, 1e-17);
+      var ax = U.axes(c, box, [1e-12, 1e-1], [lo, hi], { xlog: true, ylog: true, xl: '差分の刻み ε', yl: '最大の絶対誤差' });
+      var es = sweep.map(function (r) { return r.eps; }), clip = function (v) { return v > 0 ? v : lo; };
+      U.line(c, ax, es, sweep.map(function (r) { return clip(r.forward); }), { color: col.orange, dash: dash.dashed, width: 2 });
+      U.line(c, ax, es, sweep.map(function (r) { return clip(r.central); }), { color: col.accent, width: 2.4 });
+      sweep.forEach(function (r, k) { if (k % 3) return; U.marker(c, ax.X(r.eps), ax.Y(clip(r.forward)), 'square', 6, col.orange, true); U.marker(c, ax.X(r.eps), ax.Y(clip(r.central)), 'circle', 6, col.accent, true); });
+      var e = Math.pow(10, S.logEps);
+      U.vline(c, ax, e, { color: col.purple, dash: dash.dashdot, width: 1.6 });
+      U.marker(c, ax.X(e), ax.Y(clip(G.maxAbs)), 'diamond', 11, col.purple, true);
+      var L = U.labeler(c, box);
+      var km = 0; sweep.forEach(function (r, k) { if (r.central < sweep[km].central) km = k; });
+      L.add('いまの ε：' + fmt(G.maxAbs, 2), ax.X(e) + 8, ax.Y(clip(G.maxAbs)) - 14, { color: col.purple, size: 10.5, bold: true, align: 'left' });
+      L.add('丸め誤差 ∝ 1/ε', ax.X(3e-12), ax.Y(clip(sweep[1].central)) + 16, { color: col.sub, size: 10, align: 'left' });
+      L.add('中心差分 ∝ ε²', ax.X(sweep[sweep.length - 4].eps) - 4, ax.Y(clip(sweep[sweep.length - 4].central)) + 14, { color: col.accent, size: 10, align: 'right', bold: true });
+      L.add('前進差分 ∝ ε', ax.X(sweep[sweep.length - 7].eps) - 4, ax.Y(clip(sweep[sweep.length - 7].forward)) - 14, { color: col.orange, size: 10, align: 'right', bold: true });
+      U.setCanvasLabel(cv, '差分の刻み ε（10⁻¹² から 10⁻¹，対数）に対する，逆伝播の勾配と差分の最大の絶対誤差．中心差分の誤差は ε = ' + fmt(sweep[km].eps, 2) + ' で最小 ' + fmt(sweep[km].central, 2) + '．いまの ε = ' + fmt(e, 2) + ' では ' + fmt(G.maxAbs, 2) + '．');
+      q('capV').innerHTML = '横軸・縦軸とも対数目盛．各 <i>ε</i> で全 ' + G.n + ' 個のパラメーターについて差 |<i>g</i><sub>逆伝播</sub> − <i>g</i><sub>差分</sub>| の最大を描いています（' + sweep.length + ' 点，● と ■ は 3 点おき）．中心差分の誤差の最小は <i>ε</i> = ' + fmt(sweep[km].eps, 2) + ' で ' + fmt(sweep[km].central, 2) + '．対象：' + target().label + '．';
+    }
+    function tbl() {
+      var h = '<table class="grid"><thead><tr><th class="l">パラメーター</th><th>逆伝播</th><th>中心差分</th><th class="absc">絶対誤差</th><th>相対誤差</th></tr></thead><tbody>';
+      G.rows.forEach(function (r, k) { h += '<tr' + (k === S.pick ? ' class="hi"' : '') + '><td class="l">' + pname(r.name) + '</td><td>' + f6(r.bp) + '</td><td>' + f6(r.fd) + '</td><td class="absc">' + fmt(r.abs, 2) + '</td><td>' + fmt(r.rel, 2) + '</td></tr>'; });
+      q('tblGC').innerHTML = h + '</tbody></table>';
+    }
+    function eq() {
+      var r = G.rows[S.pick] || G.rows[0], e = Math.pow(10, S.logEps), p = r.name;
+      var t = target(), w = M.flatten(t.net), wp = w.slice(), wm = w.slice(); wp[S.pick] += e; wm[S.pick] -= e;
+      var Lp = M.lossOnly(M.unflatten(t.net, wp), t.X, t.Y, null, t.wd).L, Lm = M.lossOnly(M.unflatten(t.net, wm), t.X, t.Y, null, t.wd).L;
+      var rows = [];
+      rows.push(row(frac(mi('L') + mo('(') + pmath(p) + mo('+') + mi('ε') + mo(')') + mo('−') + mi('L') + mo('(') + pmath(p) + mo('−') + mi('ε') + mo(')'), mn(2) + mi('ε')) + BRK + mo('=') + frac(mn(fmt(Lp, 12)) + mo('−') + mn(fmt(Lm, 12)), mn(2) + mo('×') + mn(fmt(e, 2))) + BRK + mo('=') + mn(f6(r.fd))));
+      rows.push(row(mt('逆伝播') + sp('0.3em') + frac(mo('∂') + mi('L'), mo('∂') + pmath(p)) + mo('=') + mn(f6(r.bp)) + NL + mt('差') + sp('0.3em') + mn(fmt(r.abs, 2)) + mo(',') + sp('0.4em') + mt('相対誤差') + sp('0.3em') + mn(fmt(r.rel, 2))));
+      rows.push(row(mt('分子の差') + sp('0.3em') + mn(fmt(Lp - Lm, 3)) + sp('0.3em') + mt('に対し，') + NL + mi('L') + sp('0.2em') + mt('の丸め誤差は約') + sp('0.3em') + mn(fmt(2.2e-16 * Math.abs(G.L), 2)) + sp('0.2em') + mt('です．')));
+      q('eqGC').innerHTML = table(rows);
+    }
+    function readout() {
+      var ok = G.vecRel <= 1e-6;
+      q('readGC').innerHTML = kv([
+        ['パラメーター数', String(G.n)], ['損失 <i>L</i>', f6(G.L)], ['いまの <i>ε</i>', fmt(Math.pow(10, S.logEps), 2)],
+        ['最大の絶対誤差', fmt(G.maxAbs, 2)], ['成分ごとの相対誤差の最大', fmt(G.maxRel, 2)], ['ベクトルとしての相対誤差', fmt(G.vecRel, 2)]]) +
+        '<p class="msg ' + (ok ? 'ok' : 'warn') + '">' + (ok ? 'ベクトルとしての相対誤差が 10⁻⁶ 以下です．逆伝播の勾配は差分の近似と一致しています．' : 'ベクトルとしての相対誤差が 10⁻⁶ を超えています．ε が小さすぎる（丸め誤差）か大きすぎる（打ち切り誤差）可能性があります．ε ≈ 10⁻⁵ で確かめてください．') + '</p>';
+    }
+    var self = {
+      update: function () {
+        var t = compute();
+        if (!M.netFinite(t.net)) { q('readGC').innerHTML = '<p class="msg warn">重みに NaN または無限大があるので計算できません．②で「やり直す」を押してください．</p>'; return; }
+        drawV(); tbl(); eq(); readout(); U.postHeightLater();
+      },
+      show: function () { sweepKey = ''; }
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { trace: TraceSim, train: TrainSim, gradcheck: GradSim }, initial: 'trace' });
+})();
+</script>
+</body>
+</html>

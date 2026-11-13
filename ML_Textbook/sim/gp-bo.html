@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ガウス過程とベイズ最適化シミュレーター — 予測の帯と次に測る点</title>
+<meta name="description" content="教育用の合成データ（添加量とイオン伝導度）で，ガウス過程回帰の予測平均と 2 種類の帯，対数周辺尤度，獲得関数による次の観測点の選び方，ランダム探索との比較を確かめるシミュレーターです．">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第12章・第13章のシミュレーター S06．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim .histwrap { max-height: 300px; overflow: auto; }
+#qsim .histwrap table.grid th, #qsim .histwrap table.grid td { white-space: nowrap; overflow-wrap: normal; padding: 2px 6px; }
+#qsim .histwrap .hint { white-space: normal; }
+#qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+#qsim table.grid tr.best td { background: #eef4fa; font-weight: 700; }
+#qsim table.signs { border-collapse: collapse; font-size: .82rem; margin: 6px 0; }
+#qsim table.signs th, #qsim table.signs td { border: 1px solid rgba(31,35,40,.15); padding: 4px 8px; vertical-align: middle; }
+#qsim table.signs th { background: #f4f6f9; }
+#qsim .xrow { display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; }
+#qsim .xrow .ctl { margin: 0; }
+#qsim .xrow input.num { width: 6.5em; }
+#qsim .eqrows { text-align: left; }
+#qsim .eqrow { margin: 0 0 .5em; }
+#qsim .eqrows math { math-style: normal; }
+#qsim .progress { font-size: .78rem; color: #5c6670; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>ガウス過程とベイズ最適化 — 予測の帯と次に測る点</h1>
+  <p class="lead">測った点から，測っていない条件での値とその不確かさをガウス過程で予測し，その予測を使って「次にどこを測るか」を決めるベイズ最適化を試します．教育用の合成データ（添加量とイオン伝導度）で，潜在関数の帯と観測値の帯の違い，長さスケール <i>ℓ</i> と対数周辺尤度の関係，獲得関数（EI，UCB，PI）が選ぶ点，ランダム探索との比べ方を，式と数値を見比べながら確かめてください．</p>
+
+  <div class="tabs" role="tablist" aria-label="シミュレーターの切り替え">
+    <button class="tab is-active" data-tab="gp" role="tab" type="button">① ガウス過程回帰</button>
+    <button class="tab" data-tab="bo" role="tab" type="button">② ベイズ最適化</button>
+    <button class="tab" data-tab="compare" role="tab" type="button">③ ランダム探索との比較</button>
+  </div>
+
+  <!-- ① ガウス過程回帰 -->
+  <section class="panel" data-panel="gp">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">予測平均と 2 種類の帯</p>
+        <p class="psub">図をクリック（タップ）すると，その添加量 <i>x</i> で観測値（真の値＋ノイズ）を 1 個足します．操作欄の「観測する添加量」から数値で足すこともできます．</p>
+        <div class="stage">
+          <canvas data-role="cvGp"></canvas>
+          <div data-role="lgGp"></div>
+          <p class="cap" data-role="capGp"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvLml"></canvas>
+          <div data-role="lgLml"></div>
+          <p class="cap">横軸は長さスケール <i>ℓ</i>（対数目盛），<i>σ</i><sub>f</sub>，<i>σ</i>，平均関数 <i>m</i> はいまの値のまま．対数周辺尤度 ln <i>p</i>(<b>y</b> | <i>θ</i>) は「当てはまり」「複雑さの罰」「定数」の 3 項の和です（定数 −(<i>N</i>/2) ln 2π は <i>ℓ</i> によらないので曲線にしていません）．縦の実線がいまの <i>ℓ</i>，◆ が曲線の最大です．</p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqGp" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlGp"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readGp" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② ベイズ最適化 -->
+  <section class="panel" data-panel="bo" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">代理モデル（ガウス過程）と獲得関数</p>
+        <p class="psub">「次の 1 点を観測」を押すたびに，下の獲得関数が最大（LCB は最小）になる <i>x</i> を観測し，代理モデルを更新します．</p>
+        <div class="stage">
+          <canvas data-role="cvBo"></canvas>
+          <div data-role="lgBo"></div>
+          <p class="cap" data-role="capBo"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvAcq"></canvas>
+          <div data-role="lgAcq"></div>
+          <p class="cap" data-role="capAcq"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると（次の候補で）</h3>
+          <div class="eq left" data-role="eqBo" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlBo"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readBo" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>観測の履歴</h3>
+          <div class="tablewrap histwrap" data-role="histBo"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ ランダム探索との比較 -->
+  <section class="panel" data-panel="compare" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">単純後悔の中央値と四分位範囲</p>
+        <p class="psub">同じ評価回数の予算で，ベイズ最適化・ランダム探索・等間隔の格子を多数の seed で繰り返し，1 回ごとの勝ち負けではなく分布で比べます．</p>
+        <div class="stage">
+          <canvas data-role="cvCmp"></canvas>
+          <div data-role="lgCmp"></div>
+          <p class="cap" data-role="capCmp"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqCmp" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlCmp"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readCmp" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">このページの操作部分は JavaScript で動きます．JavaScript が無効なので，図と操作は表示されません．下の説明（操作手順・式・条件・問い）は読めます．本文は<a href="../ch12_gaussian_process.html#sec12-6" target="_top">第12章 12.6 節</a>と<a href="../ch13_bayesian_optimization.html#sec13-4" target="_top">第13章 13.4 節</a>から読めます．</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>このシミュレーターの説明（操作手順・式・条件・問い）</summary>
+
+      <h2>操作手順と観察する点</h2>
+      <ol>
+        <li>①で「例の 8 点を置く」を押します．<span class="look">見る点：観測点の近くでは潜在関数の帯 ±2<i>σ</i><sub>*</sub>（塗り）が細くなり，観測点のない 6.4〜8.2 mol% の間で広がること．観測値の帯 ±2√(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>)（破線）は，観測点の上でも ±2<i>σ</i> = ±0.1 より細くなりません．</span></li>
+        <li>「調べる点 <i>x</i><sub>*</sub>」を観測点の上の 6.4 から，観測点のない 7.0 へ動かします（例の 8 点のまま）．<span class="look">見る点：「いまの数値を式に入れると」の <i>σ</i><sub>*</sub><sup>2</sup> = <i>σ</i><sub>f</sub><sup>2</sup> − <b>v</b><sup>T</sup><b>v</b> で，引く項 <b>v</b><sup>T</sup><b>v</b> が 0.638 から 0.556 に減り，<i>σ</i><sub>*</sub> が 0.050 から 0.290 に増えること．次に <i>ℓ</i> を 0.2 にすると，<i>x</i><sub>*</sub> = 7.0 では <b>v</b><sup>T</sup><b>v</b> ≈ 0 となり，<i>σ</i><sub>*</sub><sup>2</sup> は事前分散 <i>σ</i><sub>f</sub><sup>2</sup> = 0.64 に，<i>μ</i><sub>*</sub> は平均関数 <i>m</i> = −4.469 の近く（−4.459）に戻ること（データから離れた所では平均関数へ戻るだけ）．</span></li>
+        <li>長さスケール <i>ℓ</i> を 0.2 と 5 にします．<span class="look">見る点：<i>ℓ</i> が小さいと平均が観測点の間で <i>m</i> へ落ち込み帯が膨らむこと，大きいと 2 つの山を表せず当てはまりが悪くなること．下の図で，当てはまりの項は <i>ℓ</i> を大きくすると下がり，複雑さの罰の項は上がる（罰が軽くなる）こと．</span></li>
+        <li>「格子探索で ℓ を最大化」と「格子探索で ℓ・σ<sub>f</sub>・σ を最大化」を押します．<span class="look">見る点：対数周辺尤度が最大になる <i>ℓ</i> と，そのときの 3 項の値．データが少ないと最大が平らで，選ばれた値が当てにならないこと．</span></li>
+        <li>「事前分布からの標本」「事後分布からの標本」を表示し，<i>ℓ</i> を動かします．<span class="look">見る点：事前分布の標本の波の細かさが <i>ℓ</i> で決まること．事後分布の標本は観測点の近くでは観測値の近くを通り，離れると事前分布の標本のようにばらつくこと．</span></li>
+        <li>②で「次の 1 点を観測」を繰り返します（既定は EI，<i>ξ</i> = 0，初期点 3 個）．<span class="look">見る点：獲得関数（下の図）が「予測平均が高い所」と「帯が広い所」の両方で大きくなり，局所的な極大（約 2.2 mol%）ではなく大域的な最大（約 7.0 mol%）の近くへ観測が集まること．履歴の表と単純後悔．</span></li>
+        <li>②で「最小化（−<i>y</i> を最小に）」に切り替えて「やり直す」から同じ回数だけ進めます．<span class="look">見る点：最小化では LCB と符号を変えた EI を使いますが，目的関数の符号を反転しただけなので，同じ seed なら観測する点の列が最大化と完全に一致すること．</span></li>
+        <li>③で「実行」を押します（既定は 200 回の繰り返し，予算 20 回）．次に「BO が負ける例」を押して実行します．<span class="look">見る点：単純後悔の中央値と四分位範囲（帯）．既定ではベイズ最適化の中央値がランダム探索より 1 桁近く小さいこと．長さスケールを 10 mol% に決め打ちすると，ランダム探索より中央値が大きくなる（負ける）こと．</span></li>
+      </ol>
+      <p>キーボードでは Tab でボタンとスライダーへ移り，Enter（または Space）で押し，矢印キーでスライダーを動かせます．タブは ←→ で切り替えられます．①の図のクリックは，右の欄の「観測する添加量 <i>x</i>」と「この <i>x</i> で観測」でも同じことができます．</p>
+
+      <h2>計算している式とアルゴリズム</h2>
+      <p>ガウス過程 <i>f</i> ~ 𝒢𝒫(<i>m</i>, <i>k</i>) の共分散関数は RBF（Gauss）カーネルです．長さスケール <i>ℓ</i>，信号分散 <i>σ</i><sub>f</sub><sup>2</sup>．平均関数 <i>m</i> は定数です．</p>
+      <div class="eq"><math display="block"><mrow><mi>k</mi><mo stretchy="false">(</mo><mi>x</mi><mo>,</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo><mo>=</mo><msubsup><mi>σ</mi><mi mathvariant="normal">f</mi><mn>2</mn></msubsup><mi>exp</mi><mrow><mo>(</mo><mo>−</mo><mfrac><msup><mrow><mo stretchy="false">(</mo><mi>x</mi><mo>−</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mrow><mn>2</mn><msup><mi>ℓ</mi><mn>2</mn></msup></mrow></mfrac><mo>)</mo></mrow><mo>,</mo><mspace width="1em"/><msub><mi>y</mi><mi>n</mi></msub><mo>=</mo><mi>f</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>n</mi></msub><mo stretchy="false">)</mo><mo>+</mo><msub><mi>ε</mi><mi>n</mi></msub><mo>,</mo><mspace width="0.5em"/><msub><mi>ε</mi><mi>n</mi></msub><mo>∼</mo><mi>𝒩</mi><mo stretchy="false">(</mo><mn>0</mn><mo>,</mo><msup><mi>σ</mi><mn>2</mn></msup><mo stretchy="false">)</mo></mrow></math></div>
+      <p><i>N</i> 個の観測 <b>y</b> と <b>K</b><sub><i>y</i></sub> ≡ <b>K</b> + <i>σ</i><sup>2</sup><b>I</b>（<b>K</b> ∈ ℝ<sup><i>N</i>×<i>N</i></sup> は Gram 行列）から，テスト入力 <i>x</i><sub>*</sub> での潜在関数 <i>f</i><sub>*</sub> の予測分布 𝒩(<i>f</i><sub>*</sub> | <i>μ</i><sub>*</sub>, <i>σ</i><sub>*</sub><sup>2</sup>) と，観測値 <i>y</i><sub>*</sub> の予測分散は</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><msub><mi>μ</mi><mo>*</mo></msub><mo>=</mo><mi>m</mi><mo>+</mo><msubsup><mi mathvariant="bold-italic">k</mi><mo>*</mo><mi mathvariant="normal">T</mi></msubsup><msubsup><mi mathvariant="bold-italic">K</mi><mi>y</mi><mrow><mo>−</mo><mn>1</mn></mrow></msubsup><mo stretchy="false">(</mo><mi mathvariant="bold-italic">y</mi><mo>−</mo><mi>m</mi><mn mathvariant="bold">1</mn><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><msubsup><mi>σ</mi><mo>*</mo><mn>2</mn></msubsup><mo>=</mo><mi>k</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mo>*</mo></msub><mo>,</mo><msub><mi>x</mi><mo>*</mo></msub><mo stretchy="false">)</mo><mo>−</mo><msubsup><mi mathvariant="bold-italic">k</mi><mo>*</mo><mi mathvariant="normal">T</mi></msubsup><msubsup><mi mathvariant="bold-italic">K</mi><mi>y</mi><mrow><mo>−</mo><mn>1</mn></mrow></msubsup><msub><mi mathvariant="bold-italic">k</mi><mo>*</mo></msub></mtd></mtr><mtr><mtd><mi>Var</mi><mo stretchy="false">[</mo><msub><mi>y</mi><mo>*</mo></msub><mo stretchy="false">]</mo><mo>=</mo><msubsup><mi>σ</mi><mo>*</mo><mn>2</mn></msubsup><mo>+</mo><msup><mi>σ</mi><mn>2</mn></msup></mtd></mtr><mtr><mtd><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><mi mathvariant="bold-italic">y</mi><mo>∣</mo><mi mathvariant="bold-italic">θ</mi><mo stretchy="false">)</mo><mo>=</mo><munder><munder><mrow><mo>−</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mrow><mo stretchy="false">(</mo><mi mathvariant="bold-italic">y</mi><mo>−</mo><mi>m</mi><mn mathvariant="bold">1</mn><mo stretchy="false">)</mo></mrow><mi mathvariant="normal">T</mi></msup><msubsup><mi mathvariant="bold-italic">K</mi><mi>y</mi><mrow><mo>−</mo><mn>1</mn></mrow></msubsup><mo stretchy="false">(</mo><mi mathvariant="bold-italic">y</mi><mo>−</mo><mi>m</mi><mn mathvariant="bold">1</mn><mo stretchy="false">)</mo></mrow><mo>⏟</mo></munder><mtext>当てはまり</mtext></munder><munder><munder><mrow><mo>−</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>ln</mi><mrow><mo>|</mo><msub><mi mathvariant="bold-italic">K</mi><mi>y</mi></msub><mo>|</mo></mrow></mrow><mo>⏟</mo></munder><mtext>複雑さの罰</mtext></munder><munder><munder><mrow><mo>−</mo><mfrac><mi>N</mi><mn>2</mn></mfrac><mi>ln</mi><mn>2</mn><mi>π</mi></mrow><mo>⏟</mo></munder><mtext>定数</mtext></munder></mtd></mtr></mtable></math></div>
+      <p>ここで <b>k</b><sub>*</sub> = (<i>k</i>(<i>x</i><sub>1</sub>, <i>x</i><sub>*</sub>), …, <i>k</i>(<i>x</i><sub><i>N</i></sub>, <i>x</i><sub>*</sub>))<sup>T</sup>，<b>θ</b> = (<i>ℓ</i>, <i>σ</i><sub>f</sub>, <i>σ</i>)．<b>逆行列は作りません．</b>Cholesky 分解 <b>K</b><sub><i>y</i></sub> = <b>L</b><b>L</b><sup>T</sup> を 1 回だけ行い，前進・後退代入で <b><i>a</i></b> = <b>L</b><sup>T</sup>\(<b>L</b>\(<b>y</b> − <i>m</i><b>1</b>))，<b>v</b> = <b>L</b>\<b>k</b><sub>*</sub> を求め，<i>μ</i><sub>*</sub> = <i>m</i> + <b>k</b><sub>*</sub><sup>T</sup><b><i>a</i></b>，<i>σ</i><sub>*</sub><sup>2</sup> = <i>k</i>(<i>x</i><sub>*</sub>, <i>x</i><sub>*</sub>) − <b>v</b><sup>T</sup><b>v</b>，ln |<b>K</b><sub><i>y</i></sub>| = 2 Σ<sub><i>i</i></sub> ln <i>L</i><sub><i>ii</i></sub> とします（Rasmussen と Williams の教科書の Algorithm 2.1 と同じ手順）．分解に失敗したら対角に小さな値（ジッター）を足して再試行し，足した量を画面に書きます．丸めで <i>σ</i><sub>*</sub><sup>2</sup> が負になったら 0 に切り，切った個数を書きます．</p>
+      <p>ベイズ最適化（②③）では，観測した値の最良 <i>f</i><sub>best</sub> を基準に，獲得関数を 401 点の格子（刻み 0.025 mol%）で評価して最良の点を次に観測します．<i>z</i> = (<i>μ</i><sub>*</sub> − <i>f</i><sub>best</sub> − <i>ξ</i>)/<i>σ</i><sub>*</sub>，Φ は標準 Gauss 分布の累積分布関数です．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mi>EI</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>𝔼</mi><mo stretchy="false">[</mo><mi>max</mi><mo stretchy="false">(</mo><msub><mi>f</mi><mo>*</mo></msub><mo>−</mo><msub><mi>f</mi><mi>best</mi></msub><mo>−</mo><mi>ξ</mi><mo>,</mo><mn>0</mn><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mo>=</mo><mo stretchy="false">(</mo><msub><mi>μ</mi><mo>*</mo></msub><mo>−</mo><msub><mi>f</mi><mi>best</mi></msub><mo>−</mo><mi>ξ</mi><mo stretchy="false">)</mo><mi mathvariant="normal">Φ</mi><mo stretchy="false">(</mo><mi>z</mi><mo stretchy="false">)</mo><mo>+</mo><msub><mi>σ</mi><mo>*</mo></msub><mi>𝒩</mi><mo stretchy="false">(</mo><mi>z</mi><mo>∣</mo><mn>0</mn><mo>,</mo><mn>1</mn><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><msub><mi>σ</mi><mo>*</mo></msub><mo>→</mo><mn>0</mn><mspace width="0.4em"/><mtext>のとき</mtext><mspace width="0.4em"/><mi>EI</mi><mo>→</mo><mi>max</mi><mo stretchy="false">(</mo><msub><mi>μ</mi><mo>*</mo></msub><mo>−</mo><msub><mi>f</mi><mi>best</mi></msub><mo>−</mo><mi>ξ</mi><mo>,</mo><mn>0</mn><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mi>PI</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi mathvariant="normal">Φ</mi><mo stretchy="false">(</mo><mi>z</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1.2em"/><mi>UCB</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>μ</mi><mo>*</mo></msub><mo>+</mo><mi>κ</mi><msub><mi>σ</mi><mo>*</mo></msub></mtd></mtr></mtable></math></div>
+      <p>最大化と最小化の符号規約（②で切り替えられます．最小化の例として，同じ問題を <i>g</i>(<i>x</i>) = −<i>y</i>(<i>x</i>) の最小化として書き直したものを解きます）：</p>
+      <div class="tablewrap"><table class="signs">
+        <thead><tr><th></th><th>最大化（本文の既定）</th><th>最小化</th></tr></thead>
+        <tbody>
+          <tr><th><i>f</i><sub>best</sub></th><td>これまでの最大</td><td>これまでの最小</td></tr>
+          <tr><th>改善量</th><td><i>μ</i><sub>*</sub> − <i>f</i><sub>best</sub> − <i>ξ</i></td><td><i>f</i><sub>best</sub> − <i>μ</i><sub>*</sub> − <i>ξ</i></td></tr>
+          <tr><th>EI</th><td colspan="2">（改善量）Φ(<i>z</i>) + <i>σ</i><sub>*</sub> 𝒩(<i>z</i> | 0, 1)，<i>z</i> = 改善量 / <i>σ</i><sub>*</sub>（どちらも<b>最大</b>の点を選ぶ）</td></tr>
+          <tr><th>PI</th><td colspan="2">Φ(<i>z</i>)（<b>最大</b>の点を選ぶ）</td></tr>
+          <tr><th>信頼限界</th><td>UCB = <i>μ</i><sub>*</sub> + <i>κσ</i><sub>*</sub> を<b>最大</b>にする</td><td>LCB = <i>μ</i><sub>*</sub> − <i>κσ</i><sub>*</sub> を<b>最小</b>にする</td></tr>
+        </tbody>
+      </table></div>
+      <p><i>f</i><sub>best</sub> は「観測値の最良」と「観測した点での事後平均 <i>μ</i><sub>*</sub>(<i>x</i><sub><i>n</i></sub>) の最良」を切り替えられます．単純後悔は <i>r</i><sub><i>n</i></sub> = <i>y</i><sub>max</sub> − <i>y</i>(<i>x̂</i><sub><i>n</i></sub>) で，<i>x̂</i><sub><i>n</i></sub> は <i>n</i> 回目までに観測値が最大だった点（推奨点），<i>y</i>(<i>x̂</i><sub><i>n</i></sub>) はその点での<b>真の</b>関数値，<i>y</i><sub>max</sub> = −3.400（<i>x</i> = 7.000 mol%）は真の最大値です．</p>
+
+      <h2>データと乱数の条件</h2>
+      <ul>
+        <li>観測値はすべて<strong>教育用の合成データ</strong>（データ C「添加量とイオン伝導度」）です．実在の物質のデータではありません．添加量 <i>x</i> ∈ [0, 10] mol%，<i>y</i> = log<sub>10</sub>(<i>σ</i><sub>ion</sub> / S cm<sup>−1</sup>)（無次元），真の関数 <i>y</i>(<i>x</i>) = −5.0 + 1.0 exp[−(<i>x</i> − 2.2)<sup>2</sup>/(2·0.7<sup>2</sup>)] + 1.6 exp[−(<i>x</i> − 7.0)<sup>2</sup>/(2·1.1<sup>2</sup>)]，観測値 = 真の値 + <i>ε</i>，<i>ε</i> ~ 𝒩(0, 0.05<sup>2</sup>)（独立）．局所的な極大は <i>x</i> ≈ 2.200 mol%（<i>y</i> ≈ −4.000），大域的な最大は <i>x</i> ≈ 7.000 mol%（<i>y</i> ≈ −3.400）です．</li>
+        <li>合成データのノイズの標準偏差 0.05 は固定です．スライダーの <i>σ</i> は<strong>モデルが仮定する</strong>ノイズの標準偏差で，合成データには影響しません．</li>
+        <li>①の「例の 8 点」の添加量は 0.4，1.6，2.8，4.0，5.2，6.4，8.2，9.4 mol%（固定）で，観測ノイズだけが乱数です．</li>
+        <li>乱数は seed つきの生成器（mulberry32）です．既定の seed は ①②③ とも 20261112．①では seed を操作すると，いまある観測点の <i>x</i> はそのままで観測値を新しい乱数で引き直します．②では seed を操作すると最初からやり直します（初期点の <i>x</i> は一様乱数，観測ノイズは観測のたびに同じ乱数列から）．③の繰り返し <i>r</i>（0 から数える）には，ベイズ最適化に seed + <i>r</i>，ランダム探索に seed + 100000 + <i>r</i>，格子の観測ノイズに seed + 200000 + <i>r</i> を使います．事前・事後分布の標本は seed + 1 + （引き直した回数）の乱数で作った標準 Gauss 乱数のベクトルを固定して使うので，<i>ℓ</i> などを動かすと標本は連続的に形を変えます．</li>
+        <li>既定値：<i>ℓ</i> = 1.00 mol%，<i>σ</i><sub>f</sub> = 0.80，<i>σ</i> = 0.050，平均関数 <i>m</i> は観測値の平均 <i>ȳ</i>（観測がないときは −4.5）．②の既定：最大化，EI（<i>ξ</i> = 0），<i>f</i><sub>best</sub> は観測値の最良，初期点 3 個，予算 20 回．③の既定：予算 20 回，繰り返し 200 回，EI（<i>ξ</i> = 0），<i>ℓ</i> = 1.00 mol% に固定．</li>
+        <li>上限：①の観測点は 40 個まで，②③の予算は 40 回まで，③の繰り返しは 200 回まで．①の格子探索は <i>ℓ</i> 41 点 × <i>σ</i><sub>f</sub> 13 点 × <i>σ</i> 21 点（11193 通り）．②③で「毎回 ℓ を選ぶ」ときは <i>ℓ</i> ∈ [0.2, 5] mol% の 25 点．③の計算は 1 コマ 12 ms 以内に区切って行い，途中で止められます．</li>
+      </ul>
+
+      <h2>簡略化している点</h2>
+      <ul>
+        <li>入力は 1 次元（添加量だけ）です．実際の材料探索では組成・温度・時間など複数の入力があり，カーネルの長さスケールも入力ごとに違います．</li>
+        <li>平均関数は定数です．既定では観測値の平均 <i>ȳ</i> を使い，対数周辺尤度は <i>ȳ</i> を既知の定数とみなして計算しています（<i>ȳ</i> 自体もデータから決めているので，厳密な周辺尤度より少し楽観的です）．</li>
+        <li>獲得関数の最大化は 401 点の格子で行います（実際には連続最適化を多点から始めるのが普通です）．同じ値の点があれば <i>x</i> の小さい方を選びます．</li>
+        <li>ハイパーパラメーターは固定か，格子探索による対数周辺尤度の最大化だけです（勾配法や事前分布は使いません）．</li>
+        <li>推奨点は「観測値が最大だった点」です．観測ノイズがあるので，運の良いノイズの点が推奨されることがあり，単純後悔は評価を重ねても一時的に増えることがあります．</li>
+        <li>等間隔の格子は，評価回数 <i>n</i> ごとに「予算が <i>n</i> 回なら置く格子」<i>x</i><sub><i>k</i></sub> = 10(<i>k</i> − ½)/<i>n</i> mol%（<i>k</i> = 1, …, <i>n</i>）を測ったとして単純後悔を計算しています．</li>
+      </ul>
+
+      <h2>結果が不安定になる条件</h2>
+      <ul>
+        <li>モデルのノイズ <i>σ</i> が小さく <i>ℓ</i> が大きいと，<b>K</b><sub><i>y</i></sub> がほとんど特異になります．同じ <i>x</i> を何度も観測したときも同じです．Cholesky 分解はジッターを足して続け，足した量を読み出しに書きます．</li>
+        <li><i>σ</i> を小さくしすぎると，予測平均がノイズまで拾って観測点の間で大きく振れます（ノイズのある観測を「正確な値」とみなすため）．</li>
+        <li>観測が少ないと対数周辺尤度の最大が平らになったり，<i>ℓ</i> の端で最大になったりします．格子探索の結果はそのまま信じず，下の図の形を見てください．</li>
+        <li><i>f</i><sub>best</sub> に観測値の最良を使うと，大きなノイズの当たった点が基準になり，EI・PI が小さくなって探索が止まりがちです．</li>
+        <li><i>ℓ</i> を長くし <i>σ</i> を小さくすると，<i>σ</i><sub>*</sub> がどこでも小さくなり，EI・PI が倍精度で表せないほど小さく（0 に）なることがあります．このときは改善を期待できる点がないので，同じ値の点のうち格子の左端を選びます（図に注意を出します）．代理モデルが「もう分かった」と思い込んで探索が止まる例です．</li>
+        <li>計算に NaN や無限大が出たら，計算を止めて理由を表示します．</li>
+      </ul>
+
+      <h2>本文の対応節</h2>
+      <ul>
+        <li><a href="../ch12_gaussian_process.html#sec12-2" target="_top">第12章 12.2 平均関数と共分散関数</a>（事前分布の標本，<i>ℓ</i> と <i>σ</i><sub>f</sub>）</li>
+        <li><a href="../ch12_gaussian_process.html#sec12-4" target="_top">第12章 12.4 予測分布の導出</a>，<a href="../ch12_gaussian_process.html#sec12-5" target="_top">12.5 手計算</a></li>
+        <li><a href="../ch12_gaussian_process.html#sec12-6" target="_top">第12章 12.6 観測ノイズと予測の不確かさ</a>（2 種類の帯）</li>
+        <li><a href="../ch12_gaussian_process.html#sec12-7" target="_top">第12章 12.7 ハイパーパラメーターと周辺尤度</a>，<a href="../ch12_gaussian_process.html#sec12-8" target="_top">12.8 数値計算</a></li>
+        <li><a href="../ch13_bayesian_optimization.html#sec13-2" target="_top">第13章 13.2 手順</a>，<a href="../ch13_bayesian_optimization.html#sec13-3" target="_top">13.3 探索と活用</a></li>
+        <li><a href="../ch13_bayesian_optimization.html#sec13-4" target="_top">第13章 13.4 獲得関数</a>，<a href="../ch13_bayesian_optimization.html#sec13-5" target="_top">13.5 手計算</a>，<a href="../ch13_bayesian_optimization.html#sec13-6" target="_top">13.6 最大化と最小化の符号規約</a></li>
+        <li><a href="../ch13_bayesian_optimization.html#sec13-7" target="_top">第13章 13.7 観測ノイズがある場合</a>，<a href="../ch13_bayesian_optimization.html#sec13-8" target="_top">13.8 ランダム探索・格子探索との比較</a>，<a href="../ch13_bayesian_optimization.html#sec13-9" target="_top">13.9 能動学習との目的の違い</a></li>
+      </ul>
+
+      <h2>操作後に答える短い問い</h2>
+      <ol>
+        <li>①で「例の 8 点を置く」（seed は既定）としたとき，<i>x</i><sub>*</sub> = 7.0 mol% での <i>σ</i><sub>*</sub> と √(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>) はいくつですか．観測点のちょうど上（<i>x</i><sub>*</sub> = 6.4）ではどうですか．観測値の帯が ±2<i>σ</i> より細くならないのはなぜですか．
+          <details class="ans"><summary>答えの例</summary><p data-ans="1">既定（<i>ℓ</i> = 1.00 mol%，<i>σ</i><sub>f</sub> = 0.80，<i>σ</i> = 0.050，<i>m</i> = <i>ȳ</i> = −4.469）で，<i>x</i><sub>*</sub> = 7.0 では <i>σ</i><sub>*</sub> = 0.290，√(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>) = 0.294 で，2 つの帯はほとんど同じ幅です（観測点から離れていて <i>σ</i><sub>*</sub> ≫ <i>σ</i>）．観測点の上の <i>x</i><sub>*</sub> = 6.4 では <i>σ</i><sub>*</sub> = 0.0499 まで細くなりますが，√(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>) = 0.0706 です．次の観測値の分散は <i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup> ≥ <i>σ</i><sup>2</sup> なので，<i>f</i> をいくら正確に知っても，観測ノイズの分だけは予測できません．</p></details></li>
+        <li>EI の式で <i>σ</i><sub>*</sub> → 0 とすると何になりますか．観測点の上では EI がほぼ 0 になるのはなぜですか．
+          <details class="ans"><summary>答えの例</summary><p data-ans="2"><i>z</i> = (<i>μ</i><sub>*</sub> − <i>f</i><sub>best</sub> − <i>ξ</i>)/<i>σ</i><sub>*</sub> は改善量が正なら +∞，負なら −∞ へ行くので，Φ(<i>z</i>) → 1 または 0，𝒩(<i>z</i> | 0, 1) → 0 となり，EI → max(<i>μ</i><sub>*</sub> − <i>f</i><sub>best</sub> − <i>ξ</i>, 0) です（確実に分かっている値の改善量）．観測点の上では <i>σ</i><sub>*</sub> が小さく，<i>μ</i><sub>*</sub> はその点の観測値の近くで <i>f</i><sub>best</sub> 以下なので，期待できる改善がほとんど残りません．</p></details></li>
+        <li>②で最大化と最小化（−<i>y</i> を最小に）を同じ seed・同じ回数で実行すると，観測点の列はどうなりますか．それはなぜですか．
+          <details class="ans"><summary>答えの例</summary><p data-ans="3">完全に一致します．目的関数の符号を反転すると，事後平均の符号が反転し（<i>μ</i><sub>*</sub> は <b>y</b> について線形），事後分散は変わりません．<i>f</i><sub>best</sub> も符号が反転するので，最小化の改善量 <i>f</i><sub>best</sub> − <i>μ</i><sub>*</sub> − <i>ξ</i> は最大化の改善量と同じ値になり，EI・PI は同じ値，LCB は UCB の符号を変えた値になります．</p></details></li>
+        <li>③の既定（予算 20 回，200 回の繰り返し）で，20 回目の単純後悔の中央値はベイズ最適化とランダム探索でそれぞれいくつですか．「BO が負ける例」ではどうなりますか．なぜ負けるのですか．
+          <details class="ans"><summary>答えの例</summary><p data-ans="4">seed 20261112 の 200 回で，20 回目の単純後悔の中央値 [四分位範囲] はベイズ最適化 0.0037 [0.00041, 0.010]，ランダム探索 0.031 [0.0053, 0.088]（等間隔の格子は 0.041）です．同じ繰り返しどうしで比べると，ベイズ最適化の方が小さかったのは 81.5 % で，いつも勝つわけではありません．「BO が負ける例」（<i>ℓ</i> = 10 mol% に決め打ち，予算 30 回）では中央値がベイズ最適化 0.049 [0.012, 0.13]，ランダム探索 0.019 [0.0032, 0.054] となり，ベイズ最適化が負けます（ベイズ最適化の方が小さかった割合は 36.5 %）．山の幅（0.7 mol% と 1.1 mol%）に比べて <i>ℓ</i> が長すぎると，代理モデルは滑らかすぎて山の位置を正しく表せず，しかも <i>σ</i><sub>*</sub> を小さく見積もるので，誤った場所の近くばかりを測り，探索をやめてしまいます．代理モデルが外れれば探索も外れます（①で例の 8 点に <i>ℓ</i> = 5 を当てると，対数周辺尤度は −230 で，<i>ℓ</i> = 1 の −6.5 よりはるかに小さく，データがこの <i>ℓ</i> を支持しないことが分かります）．</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">機械学習 — 確率から GPT まで（目次）へ戻る</a>　｜　本文：<a href="../ch12_gaussian_process.html#sec12-6" target="_top">第12章 12.6 節</a>，<a href="../ch13_bayesian_optimization.html#sec13-4" target="_top">第13章 13.4 節</a>　｜　数式はブラウザ標準の MathML で組んでいます（外部ライブラリ不使用）．</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="gp-bo.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.GpBo;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var LIM = M.LIMITS;
+  var X8 = [0.4, 1.6, 2.8, 4.0, 5.2, 6.4, 8.2, 9.4];
+  var YL = 'log₁₀(伝導度 / S cm⁻¹)';
+  var PLOTX = C.linspace(0, 10, LIM.nPlot), SAMPX = C.linspace(0, 10, LIM.nSample);
+  var TRUEY = PLOTX.map(M.trueC);
+
+  /* ---- MathML の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function mnS(s) { return '<mn>' + U.mn(s) + '</mn>'; }
+  /* 数（負なら括弧で囲む） */
+  function mv(s, isNeg) { return isNeg ? mo('(') + mnS(s) + mo(')') : mnS(s); }
+  function vF(v, d) { return mv(fx(v, d), v < 0 && fx(v, d) !== fx(0, d)); }
+  function vG(v, d) { return mv(fmt(v, d || 4), v < 0); }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  /* 1 行ずつ別の <math display="block"> にして左寄せにする（Chrome の MathML は display="block" を中央に寄せ，mtable の columnalign も使わないため） */
+  function row(s) { return '<div class="eqrow"><math><mrow>' + s + '</mrow></math></div>'; }
+  function table(rows) { return '<div class="eqrows">' + rows.join('') + '</div>'; }
+  function sub(a, b) { return '<msub>' + a + b + '</msub>'; }
+  function sup(a, b) { return '<msup>' + a + b + '</msup>'; }
+  var SIGS = '<msub><mi>σ</mi><mo>*</mo></msub>', SIGS2 = '<msubsup><mi>σ</mi><mo>*</mo><mn>2</mn></msubsup>', MUS = '<msub><mi>μ</mi><mo>*</mo></msub>';
+  var SIGF2 = '<msubsup><mi>σ</mi><mi mathvariant="normal">f</mi><mn>2</mn></msubsup>', S2 = '<msup><mi>σ</mi><mn>2</mn></msup>';
+  var FB = '<msub><mi>f</mi><mi>best</mi></msub>';
+  var IND = '<mspace width="1.5em"/>';
+  function mspc() { return '<mspace width="0.17em"/>'; }   /* 2 行目の字下げ（狭い画面で式を折り返すため） */
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function q2(v) { return fx(v, 2); }
+  function q3(v) { return fx(v, 3); }
+
+  /* 目盛の数（canvas では上付きの − が細く読みにくいので，指数表記を避けて小数で書く） */
+  function tickNum(v) {
+    if (v === 0) return '0';
+    var a = Math.abs(v), d = a >= 1 ? 1 : Math.min(8, Math.ceil(-Math.log10(a)) + 1);
+    var s = v.toFixed(d).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+    return U.mn(s);
+  }
+  /* 対数スライダー（log10 で 0.01 刻み）の表示 */
+  function fmtEll(v) { return fmt(v, 3); }
+
+  /* =================================================================
+     ① ガウス過程回帰
+     ================================================================= */
+  function GpSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { X: [], Y: [], ell: 1, sf: 0.8, sigma: 0.05, useBar: true, m0: -4.5, showTrue: true, prior: false, post: false, sOff: 0, xs: 7.0, seed: DEFAULT_SEED, grid: null };
+    var rng = C.rng(S.seed);
+    var ctl = q('ctlGp'), cv = q('cvGp'), cvL = q('cvLml');
+    var axMain = null, Zcache = null;
+    var redraw = function () { self.update(); };
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    function meanVal() { return (S.useBar && S.Y.length) ? M.meanOf(S.Y) : S.m0; }
+    function hp() { return { ell: S.ell, sf: S.sf, sigma: S.sigma }; }
+    function add(x, quiet) {
+      if (S.X.length >= LIM.maxObsGP) { U.status(msg, '観測点は ' + LIM.maxObsGP + ' 個までです．「1 つ戻す」か「データを消す」を使ってください．', 'warn'); return false; }
+      x = Math.round(C.clamp(x, 0, 10) * 1000) / 1000;
+      S.X.push(x); S.Y.push(M.observeC(rng, x)); S.grid = null;
+      if (!quiet) U.status(msg, ''); return true;
+    }
+    /* 観測を足す */
+    var nbX = U.number({ label: '観測する添加量 <i>x</i>（mol%）', min: 0, max: 10, step: 0.1, value: 5.0 });
+    var bAddX = U.button('この <i>x</i> で観測', function () { add(nbX.get()); redraw(); }, { ariaLabel: 'この x で観測' });
+    var xrow = U.el('div', 'xrow'); xrow.appendChild(nbX.el); xrow.appendChild(bAddX);
+    var bRand = U.button('ランダムな <i>x</i> で 1 点', function () { add(rng.uniform(0, 10)); redraw(); }, { ariaLabel: 'ランダムな x で 1 点' });
+    var b8 = U.button('例の 8 点を置く', function () { S.X = []; S.Y = []; rng = C.rng(S.seed); X8.forEach(function (x) { add(x, true); }); U.status(msg, '観測をすべて消し，seed ' + S.seed + ' の乱数で例の 8 点を観測しました．', 'ok'); redraw(); }, { title: 'x = 0.4, 1.6, 2.8, 4.0, 5.2, 6.4, 8.2, 9.4 mol%' });
+    var bUndo = U.button('1 つ戻す', function () { if (S.X.length) { S.X.pop(); S.Y.pop(); S.grid = null; U.status(msg, ''); redraw(); } });
+    var bClr = U.button('データを消す', function () { S.X = []; S.Y = []; S.grid = null; U.status(msg, ''); redraw(); });
+    ctl.appendChild(U.el('div', 'ctlhead', '観測を足す（教育用の合成データ C）'));
+    ctl.appendChild(xrow);
+    ctl.appendChild(U.buttonRow([bRand, b8])); ctl.appendChild(U.buttonRow([bUndo, bClr]));
+    ctl.appendChild(U.el('span', 'hint', '図をクリック（タップ）しても，その <i>x</i> で観測を足せます．上限 ' + LIM.maxObsGP + ' 点．'));
+    ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    /* ハイパーパラメーター */
+    var rEll = U.range({ label: '長さスケール <i>ℓ</i>', min: LIM.ell[0], max: LIM.ell[1], step: 0.01, log: true, value: S.ell, unit: 'mol%', fmt: fmtEll, onInput: function (v) { S.ell = v; redraw(); } });
+    var rSf = U.range({ label: '信号の標準偏差 <i>σ</i><sub>f</sub>（事前分布の幅）', min: LIM.sf[0], max: LIM.sf[1], step: 0.05, value: S.sf, fmt: q2, onInput: function (v) { S.sf = v; redraw(); } });
+    var rSg = U.range({ label: 'モデルのノイズの標準偏差 <i>σ</i>', min: LIM.sigma[0], max: LIM.sigma[1], step: 0.01, log: true, value: S.sigma, fmt: function (v) { return fmt(v, 3); }, hint: '合成データのノイズ（0.05，固定）とは別に，モデルが仮定する値です．', onInput: function (v) { S.sigma = v; redraw(); } });
+    var ckBar = U.check({ label: '平均関数 <i>m</i> に観測値の平均 <i>ȳ</i> を使う', checked: true, onChange: function (v) { S.useBar = v; rM.input.disabled = v; redraw(); } });
+    var rM = U.range({ label: '平均関数 <i>m</i>（定数．上を外したとき）', min: -6, max: -3, step: 0.1, value: S.m0, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.m0 = v; redraw(); } });
+    rM.input.disabled = true;
+    [rEll, rSf, rSg].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(ckBar.el); ctl.appendChild(rM.el);
+    var gmsg = U.el('p', 'msg empty'); gmsg.setAttribute('aria-live', 'polite');
+    function gridSearch(all) {
+      if (S.X.length < 2) { U.status(gmsg, '観測点が 2 個以上必要です．', 'warn'); return; }
+      U.status(gmsg, '格子探索の計算中です…', '');
+      setTimeout(function () {
+        var t0 = performance.now(), g = M.defaultGrids();
+        var grids = all ? g : { ells: g.ells, sfs: [S.sf], sigmas: [S.sigma] };
+        var r = M.gridSearchHyper(S.X, S.Y, grids, meanVal());
+        var ms = performance.now() - t0;
+        if (!r.best) { U.status(gmsg, 'どの組でも計算できませんでした．', 'warn'); return; }
+        rEll.set(r.best.hp.ell, true); S.ell = rEll.get();
+        if (all) { rSf.set(r.best.hp.sf, true); S.sf = rSf.get(); rSg.set(r.best.hp.sigma, true); S.sigma = rSg.get(); }
+        S.grid = { all: all, best: r.best, n: r.evaluated, ms: ms };
+        U.status(gmsg, (all ? 'ℓ・σ_f・σ の ' : 'ℓ の ') + U.fmtInt(r.evaluated) + ' 通りを調べ，対数周辺尤度が最大の ' + (all ? '組' : 'ℓ') + 'にしました（' + fx(ms, 0) + ' ms）．', 'ok');
+        redraw();
+      }, 20);
+    }
+    ctl.appendChild(U.buttonRow([U.button('格子探索で ℓ を最大化', function () { gridSearch(false); }, { title: 'σ_f と σ はいまの値のまま，ℓ を 41 点で調べます' }),
+      U.button('格子探索で ℓ・σ<sub>f</sub>・σ を最大化', function () { gridSearch(true); }, { ariaLabel: '格子探索で ℓ・σf・σ を最大化', title: 'ℓ 41 点 × σ_f 13 点 × σ 21 点' })]));
+    ctl.appendChild(gmsg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var rXs = U.range({ label: '調べる点 <i>x</i><sub>*</sub>（「いまの数値を式に入れると」に代入する点）', min: 0, max: 10, step: 0.05, value: S.xs, unit: 'mol%', fmt: q2, onInput: function (v) { S.xs = v; redraw(); } });
+    ctl.appendChild(rXs.el);
+    var ckT = U.check({ label: '真の関数を表示', checked: true, onChange: function (v) { S.showTrue = v; redraw(); } });
+    var ckP = U.check({ label: '事前分布からの標本（3 本）', checked: false, onChange: function (v) { S.prior = v; redraw(); } });
+    var ckQ = U.check({ label: '事後分布からの標本（3 本）', checked: false, onChange: function (v) { S.post = v; redraw(); } });
+    ctl.appendChild(ckT.el); ctl.appendChild(ckP.el); ctl.appendChild(ckQ.el);
+    ctl.appendChild(U.buttonRow([U.button('標本を引き直す', function () { S.sOff++; Zcache = null; redraw(); })]));
+    ctl.appendChild(U.el('hr', 'sep'));
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) {
+      S.seed = s; rng = C.rng(s); S.sOff = 0; Zcache = null;
+      S.Y = S.X.map(function (x) { return M.observeC(rng, x); }); S.grid = null;
+      U.status(msg, 'seed ' + s + ' で，いまある ' + S.X.length + ' 点の観測値を引き直しました．', ''); redraw(); } });
+    ctl.appendChild(seed.el);
+    ctl.appendChild(U.el('span', 'hint', 'seed は観測ノイズ（とランダムな <i>x</i>）と標本に使います．'));
+
+    cv.addEventListener('click', function (e) {
+      if (!axMain) return;
+      var r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top, b = axMain.box;
+      if (px < b[0] - 4 || px > b[2] + 4 || py < b[1] || py > b[3] + 4) return;
+      if (add(axMain.invX(px))) redraw();
+    });
+    cv.style.cursor = 'crosshair';
+
+    U.legendHTML(q('lgGp'), [
+      { label: '予測平均 <i>μ</i><sub>*</sub>(<i>x</i>)', color: col.accent, width: 2.6 },
+      { label: '潜在関数の帯 <i>μ</i><sub>*</sub> ± 2<i>σ</i><sub>*</sub>（塗り）', color: col.accent, kind: 'band', alpha: 0.25 },
+      { label: '観測値の帯 <i>μ</i><sub>*</sub> ± 2√(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>)（破線で囲む）', color: col.orange, dash: dash.dashed, width: 1.6 },
+      { label: '真の関数（教育用の合成データ C）', color: col.gray, dash: dash.long, width: 2 },
+      { label: '観測値', color: col.ink, shape: 'circle' },
+      { label: '事前分布の標本', color: col.purple, dash: dash.dotted, width: 1.6 },
+      { label: '事後分布の標本', color: col.green, dash: dash.dashdot, width: 1.6 },
+      { label: '調べる点 <i>x</i><sub>*</sub>', color: col.ink, dash: dash.dotted, width: 1.2 }]);
+    U.legendHTML(q('lgLml'), [
+      { label: '対数周辺尤度 ln <i>p</i>(<b>y</b> | <i>θ</i>)', color: col.accent, width: 2.6 },
+      { label: '当てはまり −½(<b>y</b> − <i>m</i><b>1</b>)<sup>T</sup><b>K</b><sub><i>y</i></sub><sup>−1</sup>(<b>y</b> − <i>m</i><b>1</b>)', color: col.orange, dash: dash.dashed, width: 2 },
+      { label: '複雑さの罰 −½ ln |<b>K</b><sub><i>y</i></sub>|', color: col.green, dash: dash.dotted, width: 2.2 }]);
+
+    function getZ() {
+      if (!Zcache) { var r = C.rng((S.seed + 1 + S.sOff) >>> 0); Zcache = M.normalVectors(r, 6, LIM.nSample); }
+      return Zcache;
+    }
+    function drawMain(fit, pr, sp, pq) {
+      var F = U.fitCanvas(cv, { aspect: 0.6, minHeight: 270, maxHeight: 450 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 54, r: 10, t: 12, b: 42 });
+      var sdY = pr.varY.map(Math.sqrt), sdF = pr.var.map(Math.sqrt);
+      var loY = pr.mu.map(function (m, i) { return m - 2 * sdY[i]; }), hiY = pr.mu.map(function (m, i) { return m + 2 * sdY[i]; });
+      var loF = pr.mu.map(function (m, i) { return m - 2 * sdF[i]; }), hiF = pr.mu.map(function (m, i) { return m + 2 * sdF[i]; });
+      var lo = -5.4, hi = -3.0;
+      loY.forEach(function (v) { lo = Math.min(lo, v); }); hiY.forEach(function (v) { hi = Math.max(hi, v); });
+      S.Y.forEach(function (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); });
+      lo = Math.max(lo, -12); hi = Math.min(hi, 2);
+      var pad = 0.06 * (hi - lo); lo -= pad; hi += pad * 2.2;
+      var ax = U.axes(c, box, [0, 10], [lo, hi], { xl: '添加量 x (mol%)', yl: YL });
+      axMain = ax;
+      U.band(c, ax, PLOTX, loY, hiY, { color: col.orange, alpha: 0.08 });
+      U.line(c, ax, PLOTX, hiY, { color: col.orange, dash: dash.dashed, width: 1.4 });
+      U.line(c, ax, PLOTX, loY, { color: col.orange, dash: dash.dashed, width: 1.4 });
+      U.band(c, ax, PLOTX, loF, hiF, { color: col.accent, alpha: 0.24 });
+      if (S.showTrue) U.line(c, ax, PLOTX, TRUEY, { color: col.gray, dash: dash.long, width: 2 });
+      if (sp) sp.forEach(function (p) { U.line(c, ax, SAMPX, p, { color: col.purple, dash: dash.dotted, width: 1.6 }); });
+      if (pq) pq.forEach(function (p) { U.line(c, ax, SAMPX, p, { color: col.green, dash: dash.dashdot, width: 1.5 }); });
+      U.line(c, ax, PLOTX, pr.mu, { color: col.accent, width: 2.6 });
+      U.points(c, ax, S.X, S.Y, { shape: 'circle', color: col.ink, size: 7 });
+      /* 調べる点 */
+      var p = M.gpPredictOne(fit, S.xs);
+      U.vline(c, ax, S.xs, { color: col.ink, dash: dash.dotted, width: 1.2 });
+      var L = U.labeler(c, box);
+      /* 観測 0 点の案内文の場所を先に登録し，曲線の脇の文字がそこを避けるようにする */
+      if (!S.X.length) { var mw0 = U.textWidth(c, '観測がありません（帯は事前分布）', 11) / 2 + 4, my0 = ax.Y(lo + 0.12 * (hi - lo)); L.block(ax.X(5) - mw0, my0 - 9, ax.X(5) + mw0, my0 + 9); }
+      L.add('x* = ' + q2(S.xs), ax.X(S.xs) + 4, box[1] + 9, { size: 10, color: col.ink, align: 'left', dy: [0, 14] });
+      /* 曲線の脇の文字：右端付近 */
+      /* 帯の名前は，内側（x の 15〜85 %）で帯が最も広い所に置く */
+      var iR = Math.round((LIM.nPlot - 1) * 0.5), wR = -1;
+      for (var ii = Math.round(LIM.nPlot * 0.15); ii < Math.round(LIM.nPlot * 0.85); ii++) if (hiY[ii] - loY[ii] > wR) { wR = hiY[ii] - loY[ii]; iR = ii; }
+      L.add('観測値の帯', ax.X(PLOTX[iR]), ax.Y(hiY[iR]) - 9, { size: 10.5, color: col.orange, bold: true });
+      L.add('潜在関数の帯', ax.X(PLOTX[iR]), ax.Y(loF[iR]) - 10, { size: 10.5, color: col.accent, bold: true });
+      var iM = Math.round((LIM.nPlot - 1) * 0.47);
+      L.add('予測平均', ax.X(PLOTX[iM]), ax.Y(pr.mu[iM]) - 12, { size: 11, color: col.accent, bold: true });
+      if (S.showTrue) { var iT = Math.round((LIM.nPlot - 1) * 0.70); L.add('真の関数', ax.X(PLOTX[iT]), ax.Y(TRUEY[iT]) - 12, { size: 10.5, color: col.gray }); }
+      if (!S.X.length) U.text(c, ax, 5, lo + 0.12 * (hi - lo), '観測がありません（帯は事前分布）', { color: col.sub, size: 11 });
+      U.marker(c, ax.X(S.xs), ax.Y(p.mu), 'diamond', 10, col.accent, false);
+      U.setCanvasLabel(cv, 'データ C の観測 ' + S.X.length + ' 点へのガウス過程の当てはめ．ℓ ' + fmtEll(S.ell) + '，σ_f ' + q2(S.sf) + '，σ ' + fmt(S.sigma, 3) + '．x* = ' + q2(S.xs) + ' で予測平均 ' + fx(p.mu, 3) + '，σ* ' + fmt(Math.sqrt(p.var), 3) + '，観測値の予測標準偏差 ' + fmt(Math.sqrt(p.varY), 3) + '．');
+      q('capGp').innerHTML = '教育用の合成データ C（<i>y</i> = log<sub>10</sub>(<i>σ</i><sub>ion</sub> / S cm<sup>−1</sup>)，ノイズの標準偏差 0.05，seed ' + S.seed + '）．観測 <i>N</i> = ' + S.X.length + '，<i>ℓ</i> = ' + fmtEll(S.ell) + ' mol%，<i>σ</i><sub>f</sub> = ' + q2(S.sf) + '，<i>σ</i> = ' + fmt(S.sigma, 3) + '，<i>m</i> = ' + fx(fit.m, 3) + (S.useBar && S.X.length ? '（<i>ȳ</i>）' : '') + '．<b>塗り</b>は潜在関数 <i>f</i> の帯 ±2<i>σ</i><sub>*</sub>，<b>破線で囲んだ帯</b>は次の観測値 <i>y</i> の帯 ±2√(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>) です．';
+    }
+    function drawLml() {
+      var F = U.fitCanvas(cvL, { aspect: 0.42, minHeight: 210, maxHeight: 320 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 54, r: 10, t: 12, b: 42 });
+      if (S.X.length === 0) {
+        var ax0 = U.axes(c, box, [LIM.ell[0], LIM.ell[1]], [-1, 1], { xlog: true, xl: '長さスケール ℓ (mol%)', yl: '対数周辺尤度' });
+        U.text(c, ax0, 1, 0, '観測がないと周辺尤度は 0（定数）です', { color: col.sub, size: 11 });
+        U.setCanvasLabel(cvL, '観測がないので対数周辺尤度の曲線はありません．'); return null;
+      }
+      var ells = M.logspace(LIM.ell[0], LIM.ell[1], 81), m = meanVal();
+      var cur = M.lmlCurve(S.X, S.Y, ells, S.sf, S.sigma, m);
+      var ok = cur.filter(function (r) { return r.lml !== null; });
+      var top = -Infinity, kb = 0, lo = Infinity;
+      ok.forEach(function (r, i) { top = Math.max(top, r.lml, r.fit, r.complexity); if (r.lml > ok[kb].lml) kb = i; lo = Math.min(lo, r.lml, r.fit, r.complexity); });
+      var best = ok[kb];
+      lo = Math.max(lo, best.lml - 80);
+      var span = Math.max(1, top - lo); top += 0.12 * span; lo -= 0.05 * span;
+      var ax = U.axes(c, box, [LIM.ell[0], LIM.ell[1]], [lo, top], { xlog: true, xl: '長さスケール ℓ (mol%)', yl: '値（nat）' });
+      var xs = ok.map(function (r) { return r.ell; });
+      U.line(c, ax, xs, ok.map(function (r) { return r.fit; }), { color: col.orange, dash: dash.dashed, width: 2 });
+      U.line(c, ax, xs, ok.map(function (r) { return r.complexity; }), { color: col.green, dash: dash.dotted, width: 2.2 });
+      U.line(c, ax, xs, ok.map(function (r) { return r.lml; }), { color: col.accent, width: 2.6 });
+      U.vline(c, ax, S.ell, { color: col.ink, width: 1.2 });
+      U.marker(c, ax.X(best.ell), ax.Y(best.lml), 'diamond', 11, col.accent, true);
+      var L = U.labeler(c, box);
+      L.add('最大 ℓ ≈ ' + fmt(best.ell, 2), ax.X(best.ell) + 6, ax.Y(best.lml) - 12, { size: 10.5, color: col.accent, bold: true });
+      var i1 = Math.round(ok.length * 0.88), i2 = Math.round(ok.length * 0.12);
+      L.add('当てはまり', ax.X(ok[i2].ell), ax.Y(ok[i2].fit) + 12, { size: 10.5, color: col.orange, bold: true, align: 'left' });
+      L.add('複雑さの罰', ax.X(ok[i1].ell), ax.Y(ok[i1].complexity) - 12, { size: 10.5, color: col.green, bold: true });
+      U.setCanvasLabel(cvL, '長さスケールに対する対数周辺尤度．曲線の最大は ℓ ≈ ' + fmt(best.ell, 3) + ' で ' + fx(best.lml, 2) + '．いまの ℓ は ' + fmtEll(S.ell) + '．');
+      return best;
+    }
+    function readout(fit, best, jitS) {
+      var p = M.gpPredictOne(fit, S.xs);
+      var rows = [
+        ['観測の数 <i>N</i>', String(fit.N) + ' / ' + LIM.maxObsGP],
+        ['平均関数 <i>m</i>', fx(fit.m, 4) + (S.useBar && fit.N ? '（<i>ȳ</i>）' : '')],
+        ['対数周辺尤度 ln <i>p</i>(<b>y</b> | <i>θ</i>)', fx(fit.lml, 3)],
+        ['　当てはまりの項', fx(fit.terms.fit, 3)],
+        ['　複雑さの罰の項', fx(fit.terms.complexity, 3)],
+        ['　定数の項', fx(fit.terms.constant, 3)],
+        ['ℓ だけ動かしたときの最大', best ? 'ℓ ≈ ' + fmt(best.ell, 3) + '，' + fx(best.lml, 3) : '—'],
+        ['<i>x</i><sub>*</sub> = ' + q2(S.xs) + ' の <i>μ</i><sub>*</sub>', fx(p.mu, 4)],
+        ['<i>σ</i><sub>*</sub>（潜在関数）', U.fmtHTML(Math.sqrt(p.var), 4)],
+        ['√(<i>σ</i><sub>*</sub><sup>2</sup> + <i>σ</i><sup>2</sup>)（観測値）', fmt(Math.sqrt(p.varY), 4)],
+        ['真の値 <i>y</i>(<i>x</i><sub>*</sub>)', fx(M.trueC(S.xs), 4)],
+        ['ジッター（対角に足した量）', fit.jitter > 0 ? U.fmtHTML(fit.jitter, 2) : '0（不要）']];
+      if (S.grid) rows.push(['格子探索（' + (S.grid.all ? 'ℓ, σ<sub>f</sub>, σ' : 'ℓ') + '）の最大', fx(S.grid.best.lml, 3) + '（' + U.fmtInt(S.grid.n) + ' 通り）']);
+      q('readGp').innerHTML = kv(rows) + (jitS ? '<p class="hint">標本の共分散行列には ' + jitS + ' のジッターを足しました（事前分布の標本は <i>ℓ</i> が大きいとほぼ特異になるため）．</p>' : '');
+    }
+    function eq(fit) {
+      var p = M.gpPredictOne(fit, S.xs, true), N = fit.N, rows = [], kss = S.sf * S.sf, s2 = S.sigma * S.sigma;
+      var xsM = sub(mi('x'), mo('*'));
+      if (N === 0) {
+        rows.push(row(mt('観測がないので事前分布のまま：') + MUS + mo('=') + mi('m') + mo('=') + vF(fit.m, 3) + mo(',') + '<mspace width="0.6em"/>' + SIGS2 + mo('=') + SIGF2 + mo('=') + vG(kss, 4)));
+      } else {
+        if (N <= 4) {
+          rows.push(row('<msubsup><mi mathvariant="bold-italic">k</mi><mo>*</mo><mi mathvariant="normal">T</mi></msubsup>' + mo('=') + mo('(') + p.kstar.map(function (v) { return vG(v, 4); }).join(mo(',')) + mo(')')));
+          rows.push(row('<mi mathvariant="bold-italic">a</mi>' + mo('=') + '<msubsup><mi mathvariant="bold-italic">K</mi><mi>y</mi><mrow><mo>−</mo><mn>1</mn></mrow></msubsup>' + mo('(') + '<mi mathvariant="bold-italic">y</mi>' + mo('−') + mi('m') + '<mn mathvariant="bold">1</mn>' + mo(')') + mo('=') + mo('(') + fit.alpha.map(function (v) { return vG(v, 4); }).join(mo(',')) + mo(')') + '<msup><mrow/><mi mathvariant="normal">T</mi></msup>'));
+        }
+        var kal = C.dot(p.kstar, fit.alpha);
+        rows.push(row(MUS + mo('(') + vF(S.xs, 2) + mo(')') + mo('=') + mi('m') + mo('+') + '<msubsup><mi mathvariant="bold-italic">k</mi><mo>*</mo><mi mathvariant="normal">T</mi></msubsup><mi mathvariant="bold-italic">a</mi>'));
+        rows.push(row(IND + mo('=') + vF(fit.m, 4) + mo('+') + vF(kal, 4) + mo('=') + mnS(fx(p.mu, 4))));
+        rows.push(row(SIGS2 + mo('=') + SIGF2 + mo('−') + '<msup><mi mathvariant="bold-italic">v</mi><mi mathvariant="normal">T</mi></msup><mi mathvariant="bold-italic">v</mi>' + mo('=') + vG(kss, 4) + mo('−') + vG(p.vv, 4)));
+        rows.push(row(IND + mo('=') + vG(kss - p.vv, 4) + (p.clipped ? mt('（負なので 0 に切る）') : '') + mo(',') + '<mspace width="0.5em"/>' + SIGS + mo('=') + vG(Math.sqrt(p.var), 4)));
+      }
+      rows.push(row(SIGS2 + mo('+') + S2 + mo('=') + vG(p.var, 4) + mo('+') + vG(s2, 4) + mo('=') + vG(p.varY, 4)));
+      rows.push(row('<msqrt>' + SIGS2 + mo('+') + S2 + '</msqrt>' + mo('=') + vG(Math.sqrt(p.varY), 4)));
+      rows.push(row(mt('潜在関数の帯') + '<mspace width="0.4em"/>' + MUS + mo('±') + '<mn>2</mn>' + SIGS + mo(':') + '<mspace width="0.3em"/>' + mo('[') + mnS(fx(p.mu - 2 * Math.sqrt(p.var), 3)) + mo(',') + mnS(fx(p.mu + 2 * Math.sqrt(p.var), 3)) + mo(']')));
+      rows.push(row(mt('観測値の帯') + '<mspace width="0.4em"/>' + MUS + mo('±') + '<mn>2</mn><msqrt>' + SIGS2 + mo('+') + S2 + '</msqrt>' + mo(':') + '<mspace width="0.3em"/>' + mo('[') + mnS(fx(p.mu - 2 * Math.sqrt(p.varY), 3)) + mo(',') + mnS(fx(p.mu + 2 * Math.sqrt(p.varY), 3)) + mo(']')));
+      if (N > 0) {
+        rows.push(row(mi('ln') + mi('p') + mo('(') + '<mi mathvariant="bold-italic">y</mi>' + mo('∣') + '<mi mathvariant="bold-italic">θ</mi>' + mo(')') + mo('=') + mt('当てはまり') + mo('+') + mt('罰') + mo('+') + mt('定数')));
+        rows.push(row(IND + mo('=') + vF(fit.terms.fit, 3) + mo('+') + vF(fit.terms.complexity, 3) + mo('+') + vF(fit.terms.constant, 3) + mo('=') + mnS(fx(fit.lml, 3))));
+      }
+      q('eqGp').innerHTML = table(rows) + (N > 4 ? '<p class="hint" style="margin:4px 0 0">観測が 4 点以下のときは <b>k</b><sub>*</sub> と <b><i>a</i></b> の成分も表示します．</p>' : '');
+    }
+    var self = {
+      update: function () {
+        var fit = M.gpFit(S.X, S.Y, hp(), meanVal());
+        if (!fit.ok) { U.status(msg, '計算を止めました：' + fit.reason, 'warn'); return; }
+        var pr = M.gpPredict(fit, PLOTX);
+        if (!C.allFinite(pr.mu) || !C.allFinite(pr.var)) { U.status(msg, '計算を止めました：予測に NaN または無限大が出ました．', 'warn'); return; }
+        var sp = null, pq = null, jit = 0;
+        if (S.prior || S.post) {
+          var Z = getZ();
+          if (S.prior) { var pf = M.gpFit([], [], hp(), meanVal()), r1 = M.sampleFunctions(pf, SAMPX, Z.slice(0, 3)); if (r1.ok) { sp = r1.paths; jit = Math.max(jit, r1.jitter); } }
+          if (S.post) { var r2 = M.sampleFunctions(fit, SAMPX, Z.slice(3, 6)); if (r2.ok) { pq = r2.paths; jit = Math.max(jit, r2.jitter); } }
+        }
+        drawMain(fit, pr, sp, pq);
+        var best = drawLml();
+        readout(fit, best, jit > 0 ? U.fmtHTML(jit, 2) : '');
+        eq(fit);
+        if (pr.nClipped) U.status(msg, '丸めで負になった σ*² を 0 に切った点が ' + pr.nClipped + ' 個あります（観測点の真上などで σ*² が 0 に近いとき）．', '');
+        bUndo.disabled = !S.X.length; bClr.disabled = !S.X.length;
+      },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② ベイズ最適化
+     ================================================================= */
+  var ACQ_OPTS = [{ value: 'ei', label: 'EI（期待改善量）' }, { value: 'ucb', label: 'UCB／LCB' }, { value: 'pi', label: 'PI（改善確率）' }];
+  function acqName(kind, mode) { return kind === 'ei' ? 'EI' : kind === 'pi' ? 'PI' : (mode === 'min' ? 'LCB' : 'UCB'); }
+
+  function BoSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var O = { mode: 'max', kind: 'ei', xi: 0, kappa: 2, fbestDef: 'obs', n0: 3, budget: 20, ell: 1, sf: 0.8, sigma: 0.05, fitEll: false };
+    var S = { seed: DEFAULT_SEED, showTrue: true, timer: 0 };
+    var st = null, md = null;
+    var ctl = q('ctlBo'), cvB = q('cvBo'), cvA = q('cvAcq');
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var redraw = function () { self.update(); };
+    function reset() { stopAuto(); st = M.boCreate(Object.assign({}, O), C.rng(S.seed)); U.status(msg, ''); }
+    function applyOpt() {
+      var o = Object.assign({}, O); o.budget = Math.max(1, Math.min(LIM.maxBudget, o.budget)); o.n0 = Math.max(1, Math.min(o.budget, o.n0));
+      st.opt = o; st.sign = o.mode === 'min' ? -1 : 1; st.T = st.Y.map(function (y) { return st.sign * y; });
+      st.done = st.X.length >= o.budget; st.error = null;
+    }
+    function next() {
+      if (st.done) { U.status(msg, '予算 ' + st.opt.budget + ' 回を使い切りました．「やり直す」か，予算を増やしてください．', 'warn'); stopAuto(); return false; }
+      M.boStep(st);
+      if (st.error) { U.status(msg, '計算を止めました：' + st.error, 'warn'); stopAuto(); return false; }
+      U.status(msg, ''); redraw();
+      if (st.done) { U.status(msg, '予算 ' + st.opt.budget + ' 回に達しました．', 'ok'); stopAuto(); }
+      return !st.done;
+    }
+    function stopAuto() { if (S.timer) { clearTimeout(S.timer); S.timer = 0; } if (bAuto) { bAuto.textContent = '自動で実行'; bAuto.classList.remove('on'); bAuto.setAttribute('aria-pressed', 'false'); } }
+    function tick() { S.timer = 0; if (panel.hidden || document.hidden) { stopAuto(); return; } if (next()) S.timer = setTimeout(tick, 450); }
+    var bNext = U.button('次の 1 点を観測', function () { stopAuto(); next(); }, { primary: true });
+    var bAuto = U.button('自動で実行', function () { if (S.timer) { stopAuto(); return; } bAuto.textContent = '停止'; bAuto.classList.add('on'); bAuto.setAttribute('aria-pressed', 'true'); tick(); }, { title: '0.45 秒ごとに 1 点ずつ，予算まで観測します' });
+    bAuto.setAttribute('aria-pressed', 'false');
+    var bReset = U.button('やり直す', function () { reset(); redraw(); }, { title: '同じ seed で最初から' });
+    var pMode = U.pills({ label: '目的', options: [{ value: 'max', label: '最大化（<i>y</i> を最大に）' }, { value: 'min', label: '最小化（−<i>y</i> を最小に）' }], value: O.mode, onChange: function (v) { O.mode = v; applyOpt(); syncAcqPills(); redraw(); } });
+    var pAcq = U.pills({ label: '獲得関数', options: ACQ_OPTS, value: O.kind, onChange: function (v) { O.kind = v; applyOpt(); syncDisable(); redraw(); } });
+    function syncAcqPills() { pAcq.buttons[1].innerHTML = O.mode === 'min' ? 'LCB（下側信頼限界）' : 'UCB（上側信頼限界）'; }
+    var rXi = U.range({ label: '探索の余裕 <i>ξ</i>（EI・PI）', min: 0, max: 0.5, step: 0.01, value: O.xi, fmt: q2, onInput: function (v) { O.xi = v; applyOpt(); redraw(); } });
+    var rKa = U.range({ label: '<i>κ</i>（UCB・LCB）', min: 0, max: 5, step: 0.1, value: O.kappa, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { O.kappa = v; applyOpt(); redraw(); } });
+    function syncDisable() { rXi.input.disabled = O.kind === 'ucb'; rKa.input.disabled = O.kind !== 'ucb'; }
+    var pFb = U.pills({ label: '<i>f</i><sub>best</sub> の定義', options: [{ value: 'obs', label: '観測値の最良' }, { value: 'mean', label: '観測点での事後平均の最良' }], value: O.fbestDef, onChange: function (v) { O.fbestDef = v; applyOpt(); redraw(); } });
+    var rN0 = U.range({ label: '初期点の数（一様乱数）', min: 1, max: 10, step: 1, value: O.n0, fmt: String, onInput: function (v) { O.n0 = v; applyOpt(); redraw(); } });
+    var rB = U.range({ label: '予算（評価回数．初期点を含む）', min: 2, max: LIM.maxBudget, step: 1, value: O.budget, fmt: String, onInput: function (v) { O.budget = v; applyOpt(); redraw(); } });
+    var rEll = U.range({ label: '長さスケール <i>ℓ</i>', min: LIM.ell[0], max: LIM.ell[1], step: 0.01, log: true, value: O.ell, unit: 'mol%', fmt: fmtEll, onInput: function (v) { O.ell = v; applyOpt(); redraw(); } });
+    var ckFit = U.check({ label: '毎回 <i>ℓ</i> を周辺尤度で選ぶ', checked: false, onChange: function (v) { O.fitEll = v; rEll.input.disabled = v; applyOpt(); redraw(); } });
+    var rSf = U.range({ label: '信号の標準偏差 <i>σ</i><sub>f</sub>', min: LIM.sf[0], max: LIM.sf[1], step: 0.05, value: O.sf, fmt: q2, onInput: function (v) { O.sf = v; applyOpt(); redraw(); } });
+    var rSg = U.range({ label: 'モデルのノイズ <i>σ</i>', min: LIM.sigma[0], max: LIM.sigma[1], step: 0.01, log: true, value: O.sigma, fmt: function (v) { return fmt(v, 3); }, onInput: function (v) { O.sigma = v; applyOpt(); redraw(); } });
+    var ckT = U.check({ label: '真の関数を表示', checked: true, onChange: function (v) { S.showTrue = v; redraw(); } });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; reset(); U.status(msg, 'seed ' + s + ' で最初からやり直しました．', ''); redraw(); } });
+    ctl.appendChild(U.buttonRow([bNext, bAuto, bReset])); ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    [pMode, pAcq, rXi, rKa, pFb].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(U.el('hr', 'sep'));
+    [rN0, rB].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(U.el('div', 'ctlhead', '代理モデル（ガウス過程）'));
+    [rEll].forEach(function (r) { ctl.appendChild(r.el); }); ctl.appendChild(ckFit.el);
+    [rSf, rSg].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(ckT.el);
+    ctl.appendChild(U.el('span', 'hint', '「周辺尤度で選ぶ」は，観測が 2 点以上のとき，<i>ℓ</i> ∈ [0.2, 5] mol% の 25 点の格子で対数周辺尤度が最大の値を毎回使います．'));
+    ctl.appendChild(U.el('span', 'hint', '設定を変えても観測はそのまま残り，次の候補だけが新しい設定で計算し直されます．初期点の数・seed を変えて最初から比べるときは「やり直す」を押してください．'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(seed.el);
+    syncAcqPills(); syncDisable();
+
+    function legend() {
+      var tl = O.mode === 'min' ? '目的関数 <i>g</i>(<i>x</i>) = −<i>y</i>(<i>x</i>)（真）' : '真の関数 <i>y</i>(<i>x</i>)';
+      U.legendHTML(q('lgBo'), [
+        { label: '予測平均 <i>μ</i><sub>*</sub>', color: col.accent, width: 2.6 },
+        { label: '潜在関数の帯 ±2<i>σ</i><sub>*</sub>', color: col.accent, kind: 'band', alpha: 0.25 },
+        { label: tl, color: col.gray, dash: dash.long, width: 2 },
+        { label: '初期点（一様乱数）', color: col.ink, shape: 'square' },
+        { label: 'ベイズ最適化で選んだ点', color: col.orange, shape: 'circle' },
+        { label: '観測値が最良の点', color: col.green, shape: 'diamond', fill: false },
+        { label: '次の候補', color: col.purple, shape: 'triangleDown' }]);
+      U.legendHTML(q('lgAcq'), [
+        { label: '獲得関数 ' + acqName(O.kind, O.mode), color: col.purple, width: 2.4 },
+        { label: (O.kind === 'ucb' && O.mode === 'min') ? '最小の点（次の候補）' : '最大の点（次の候補）', color: col.purple, shape: 'triangleDown' }]);
+    }
+    function yRange(arrs) { var lo = Infinity, hi = -Infinity; arrs.forEach(function (a) { a.forEach(function (v) { if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }); }); return [lo, hi]; }
+    function drawTop() {
+      var F = U.fitCanvas(cvB, { aspect: 0.56, minHeight: 260, maxHeight: 420 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 54, r: 10, t: 12, b: 42 }), sg = st.sign;
+      var tru = TRUEY.map(function (v) { return sg * v; }), pr = null;
+      var arrs = [tru, st.T];
+      if (md) { pr = M.gpPredict(md.fit, PLOTX); var sd = pr.var.map(Math.sqrt); pr.lo = pr.mu.map(function (m, i) { return m - 2 * sd[i]; }); pr.hi = pr.mu.map(function (m, i) { return m + 2 * sd[i]; }); arrs.push(pr.lo, pr.hi); }
+      var yr = yRange(arrs), pad = 0.06 * (yr[1] - yr[0] || 1);
+      yr = [Math.max(yr[0] - pad, sg > 0 ? -9 : -2), Math.min(yr[1] + pad * 3, sg > 0 ? 2 : 9)];
+      var ax = U.axes(c, box, [0, 10], yr, { xl: '添加量 x (mol%)', yl: sg > 0 ? YL : '−' + YL });
+      if (pr) U.band(c, ax, PLOTX, pr.lo, pr.hi, { color: col.accent, alpha: 0.24 });
+      if (S.showTrue) U.line(c, ax, PLOTX, tru, { color: col.gray, dash: dash.long, width: 2 });
+      if (pr) U.line(c, ax, PLOTX, pr.mu, { color: col.accent, width: 2.6 });
+      var L = U.labeler(c, box);
+      /* 観測 0 点の案内文の場所を先に登録し，「真の関数」の文字がそこを避けるようにする */
+      if (!st.X.length) { var mw0 = U.textWidth(c, '「次の 1 点を観測」で初期点から始めます', 11) / 2 + 4, my0 = ax.Y(yr[0] + 0.5 * (yr[1] - yr[0])); L.block(ax.X(5) - mw0, my0 - 9, ax.X(5) + mw0, my0 + 9); }
+      if (md && st.X.length >= st.opt.n0 && !st.done) {
+        var xn = md.acq.xNext;
+        U.vline(c, ax, xn, { color: col.purple, dash: dash.dashed, width: 1.5 });
+        U.marker(c, ax.X(xn), box[1] + 8, 'triangleDown', 12, col.purple, true);
+        L.block(ax.X(xn) - 7, box[1], ax.X(xn) + 7, box[1] + 16);
+        L.add('次の候補 x = ' + fx(xn, 3), ax.X(xn) + 9, box[1] + 9, { size: 10.5, color: col.purple, bold: true, align: 'left', dy: [0, 15, 30] });
+      }
+      var rec = M.recommend(st.X, st.Y);
+      st.X.forEach(function (x, i) { U.marker(c, ax.X(x), ax.Y(st.T[i]), st.kind[i] === 'init' ? 'square' : 'circle', 8, st.kind[i] === 'init' ? col.ink : col.orange, true); });
+      var nl = st.X.length - 1;
+      if (rec) {
+        var Yb = ax.Y(st.T[rec.k]);
+        U.marker(c, ax.X(rec.x), Yb, 'diamond', 17, col.green, false, { width: 2.2 });
+        L.block(ax.X(rec.x) - 8, Yb - 11, ax.X(rec.x) + 8, Yb + 11);
+        L.add('最良 ' + fx(st.T[rec.k], 3) + (rec.k === nl ? '（' + (nl + 1) + ' 回目）' : ''), ax.X(rec.x), Yb + (sg > 0 ? 20 : -20), { size: 10.5, color: col.green, bold: true, dy: sg > 0 ? [0, 14, 28, -40] : [0, -14, -28, 40] });
+      }
+      if (nl >= 0 && (!rec || rec.k !== nl)) L.add(String(nl + 1) + ' 回目', ax.X(st.X[nl]), ax.Y(st.T[nl]) - 13, { size: 10, color: st.kind[nl] === 'init' ? col.ink : col.orange });
+      if (S.showTrue) { var iT = 116; L.add(sg > 0 ? '真の関数' : '真の −y', ax.X(PLOTX[iT]), ax.Y(tru[iT]) + (sg > 0 ? -12 : 12), { size: 10.5, color: col.gray }); }
+      if (!st.X.length) U.text(c, ax, 5, yr[0] + 0.5 * (yr[1] - yr[0]), '「次の 1 点を観測」で初期点から始めます', { color: col.sub, size: 11 });
+      U.setCanvasLabel(cvB, (O.mode === 'min' ? '最小化（−y）' : '最大化（y）') + '．観測 ' + st.X.length + ' / ' + st.opt.budget + ' 回．' + (rec ? 'これまでの最良の観測値 y = ' + fx(rec.yObs, 3) + '（x = ' + fx(rec.x, 3) + '）．' : '') + (md && st.X.length >= st.opt.n0 && !st.done ? '次の候補 x = ' + fx(md.acq.xNext, 3) + '．' : ''));
+      q('capBo').innerHTML = '教育用の合成データ C（ノイズの標準偏差 0.05，seed ' + S.seed + '）．' + (O.mode === 'min' ? '最小化では目的関数 <i>g</i> = −<i>y</i> を描きます（縦軸は −log<sub>10</sub>(<i>σ</i><sub>ion</sub> / S cm<sup>−1</sup>)）．' : '') + '帯は潜在関数 <i>f</i> の ±2<i>σ</i><sub>*</sub>（獲得関数はこの <i>σ</i><sub>*</sub> を使います）．平均関数は観測値の平均．<i>ℓ</i> = ' + (md ? fmtEll(md.hp.ell) : fmtEll(O.ell)) + ' mol%' + (O.fitEll ? '（周辺尤度で選んだ値）' : '') + '，<i>σ</i><sub>f</sub> = ' + q2(O.sf) + '，<i>σ</i> = ' + fmt(O.sigma, 3) + '．';
+    }
+    function drawAcq() {
+      var F = U.fitCanvas(cvA, { aspect: 0.34, minHeight: 190, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 60, r: 10, t: 12, b: 42 }), name = acqName(O.kind, O.mode);
+      if (!md) {
+        var a0 = U.axes(c, box, [0, 10], [0, 1], { xl: '添加量 x (mol%)', yl: name });
+        U.text(c, a0, 5, 0.5, '観測が 1 点以上になると表示します', { color: col.sub, size: 11 });
+        U.setCanvasLabel(cvA, '獲得関数はまだありません．'); q('capAcq').innerHTML = ''; return;
+      }
+      var A = md.acq, yr = yRange([A.acq]), sc = 1, pw = 0;
+      /* 値がとても小さいときは目盛を 10^pw 倍して書く（canvas の上付きの − が読みにくいため，指数は正にする） */
+      if (O.kind !== 'ucb' && yr[1] > 0 && yr[1] < 0.01) { pw = Math.ceil(-Math.log10(yr[1])); sc = Math.pow(10, pw); }
+      var av = A.acq.map(function (v) { return v * sc; });
+      if (O.kind === 'ucb') { var p = 0.08 * (yr[1] - yr[0] || 1); yr = [yr[0] - p, yr[1] + p * 2.5]; }
+      else yr = [0, yr[1] > 0 ? yr[1] * sc * 1.3 : 1];
+      var allZero = O.kind !== 'ucb' && !(A.acq[A.k] > 0);
+      var ax = U.axes(c, box, [0, 10], yr, { xl: '添加量 x (mol%)', yl: pw ? name + ' × 10' + U.sup(pw) : name, ylOff: 46, yf: function (v) { return tickNum(v); } });
+      U.line(c, ax, A.xs, av, { color: col.purple, width: 2.4 });
+      var initPhase = st.X.length < st.opt.n0;
+      var L = U.labeler(c, box);
+      if (!initPhase && !st.done) {
+        U.vline(c, ax, A.xNext, { color: col.purple, dash: dash.dashed, width: 1.3 });
+        U.marker(c, ax.X(A.xNext), ax.Y(av[A.k]), 'triangleDown', 12, col.purple, true);
+        L.add((O.kind === 'ucb' && O.mode === 'min' ? '最小 ' : '最大 ') + fmt(av[A.k], 3), ax.X(A.xNext) + 8, ax.Y(av[A.k]) - 12, { size: 10.5, color: col.purple, bold: true, align: 'left' });
+      }
+      st.X.forEach(function (x) { U.marker(c, ax.X(x), box[3] - 6, 'plus', 7, col.ink, true); });
+      if (initPhase) U.text(c, ax, 5, yr[0] + 0.85 * (yr[1] - yr[0]), '初期点の段階です（次も一様乱数．獲得関数は参考）', { color: col.sub, size: 10.5 });
+      if (allZero && !initPhase) { U.text(c, ax, 5, yr[0] + 0.6 * (yr[1] - yr[0]), name + ' がどこでも 0 です（表せないほど小さい）', { color: col.red, size: 10.5 }); U.text(c, ax, 5, yr[0] + 0.42 * (yr[1] - yr[0]), '同じ値なので格子の左端を選びます', { color: col.red, size: 10.5 }); }
+      if (st.done) U.text(c, ax, 5, yr[0] + 0.85 * (yr[1] - yr[0]), '予算を使い切りました', { color: col.sub, size: 10.5 });
+      U.setCanvasLabel(cvA, '獲得関数 ' + name + ' の曲線．' + (!initPhase && !st.done ? '次の候補 x = ' + fx(A.xNext, 3) + '，値 ' + fmt(A.acq[A.k], 3) + '．' : ''));
+      q('capAcq').innerHTML = '獲得関数 ' + name + '（' + (O.kind === 'ucb' ? '<i>κ</i> = ' + fx(O.kappa, 1) : '<i>ξ</i> = ' + q2(O.xi) + '，<i>f</i><sub>best</sub> = ' + fx(A.fbest, 3) + '（' + (O.fbestDef === 'obs' ? '観測値の' : '観測点での事後平均の') + (O.mode === 'min' ? '最小' : '最大') + '）') + '）．401 点の格子（刻み 0.025 mol%）で評価し，' + ((O.kind === 'ucb' && O.mode === 'min') ? '最小' : '最大') + 'の点を次に観測します．下端の + は観測済みの <i>x</i>．' + (pw ? '値が小さいので，縦軸は ' + name + ' を 10<sup>' + pw + '</sup> 倍して描いています．' : '');
+    }
+    function readout() {
+      var rec = M.recommend(st.X, st.Y), n = st.X.length;
+      var rows = [['評価回数', n + ' / ' + st.opt.budget + '（初期点 ' + Math.min(n, st.opt.n0) + '）']];
+      if (rec) {
+        rows.push(['これまでの最良の観測値 <i>y</i>', fx(rec.yObs, 4) + '（<i>x</i> = ' + fx(rec.x, 3) + '）']);
+        rows.push(['その点の真の値', fx(M.trueC(rec.x), 4)]);
+        rows.push(['真の最大', fx(M.TRUE_MAX.y, 4) + '（<i>x</i> = ' + fx(M.TRUE_MAX.x, 3) + '）']);
+        rows.push(['単純後悔 <i>r</i><sub><i>n</i></sub>', U.fmtHTML(M.TRUE_MAX.y - M.trueC(rec.x), 3)]);
+      }
+      if (md) {
+        rows.push(['<i>f</i><sub>best</sub>（' + (O.fbestDef === 'obs' ? '観測値' : '事後平均') + '，目的関数の値）', fx(md.acq.fbest, 4)]);
+        rows.push(['使った <i>ℓ</i>', fmtEll(md.hp.ell) + ' mol%' + (O.fitEll && n >= 2 ? '（周辺尤度で選択）' : '')]);
+        rows.push(['ジッター', md.fit.jitter > 0 ? U.fmtHTML(md.fit.jitter, 2) : '0（不要）']);
+        if (md.acq.nClipped) rows.push(['0 に切った <i>σ</i><sub>*</sub><sup>2</sup>', md.acq.nClipped + ' 点']);
+      }
+      q('readBo').innerHTML = kv(rows);
+      /* 履歴 */
+      var h = '<table class="grid"><thead><tr><th><i>n</i></th><th>種類</th><th><i>x</i></th><th><i>y</i></th><th>' + acqName(O.kind, O.mode) + '</th><th>最良 <i>y</i></th></tr></thead><tbody>';
+      var best = -Infinity;
+      for (var i = 0; i < n; i++) {
+        best = Math.max(best, st.Y[i]);
+        h += '<tr' + (rec && rec.k === i ? ' class="best"' : '') + '><td>' + (i + 1) + '</td><td class="l">' + (st.kind[i] === 'init' ? '初期' : 'BO') + '</td><td>' + fx(st.X[i], 3) + '</td><td>' + fx(st.Y[i], 3) + '</td><td>' + (st.acqAt[i] === null ? '—' : U.fmtHTML(st.acqAt[i], 3)) + '</td><td>' + fx(best, 3) + '</td></tr>';
+      }
+      if (!n) h += '<tr><td colspan="6" class="l">まだ観測がありません．</td></tr>';
+      h += '</tbody></table>';
+      q('histBo').innerHTML = h + '<p class="hint">x は添加量（mol%），y は観測値（log<sub>10</sub>(<i>σ</i><sub>ion</sub> / S cm<sup>−1</sup>)），' + acqName(O.kind, O.mode) + ' はその点を選んだときの獲得関数の値（選んだときの設定），最良 y はそこまでの観測値の最大．色の付いた行が推奨点．</p>';
+    }
+    function eq() {
+      var el = q('eqBo');
+      if (!md) { el.innerHTML = '<p class="hint" style="margin:0">観測が 1 点以上になると，次の候補での獲得関数の計算をここに表示します．</p>'; return; }
+      var A = md.acq, k = A.k, mu = A.mu[k], s = A.s[k], rows = [], mode = O.mode, xiS = q2(O.xi);
+      rows.push(row(mt('次の候補') + '<mspace width="0.4em"/>' + sub(mi('x'), mo('*')) + mo('=') + mnS(fx(A.xNext, 3)) + '<mspace width="0.25em"/>' + mt('mol%')));
+      rows.push(row(MUS + mo('=') + mnS(fx(mu, 4)) + mo(',') + '<mspace width="0.4em"/>' + SIGS + mo('=') + mnS(fmt(s, 4)) + mo(',') + '<mspace width="0.4em"/>' + FB + mo('=') + mnS(fx(A.fbest, 4))));
+      if (O.kind === 'ucb') {
+        var v = M.confBound(mu, s, O.kappa, mode);
+        rows.push(row((mode === 'min' ? mi('LCB') : mi('UCB')) + mo('=') + MUS + mo(mode === 'min' ? '−' : '+') + mi('κ') + SIGS));
+        rows.push(row(IND + mo('=') + vF(mu, 4) + mo(mode === 'min' ? '−' : '+') + mnS(fx(O.kappa, 1)) + mo('×') + vG(s, 4) + mo('=') + mnS(fx(v, 4)) + mt(mode === 'min' ? '（格子の上で最小）' : '（格子の上で最大）')));
+      } else {
+        var P = M.eiParts(mu, s, A.fbest, O.xi, mode);
+        var dExpr = mode === 'min' ? FB + mo('−') + MUS + mo('−') + mi('ξ') : MUS + mo('−') + FB + mo('−') + mi('ξ');
+        var dNum = mode === 'min' ? vF(A.fbest, 4) + mo('−') + vF(mu, 4) + mo('−') + mnS(xiS) : vF(mu, 4) + mo('−') + vF(A.fbest, 4) + mo('−') + mnS(xiS);
+        rows.push(row(mt('改善量') + '<mspace width="0.4em"/>' + mi('d') + mo('=') + dExpr));
+        rows.push(row(IND + mo('=') + dNum + mo('=') + mnS(fmt(P.d, 4))));
+        if (P.degenerate) rows.push(row(SIGS + mo('=') + '<mn>0</mn>' + mt(' なので ') + (O.kind === 'ei' ? mi('EI') + mo('=') + mi('max') + mo('(') + vG(P.d, 4) + mo(',') + '<mn>0</mn>' + mo(')') + mo('=') + vG(P.ei, 4) : mi('PI') + mo('=') + mnS(P.d > 0 ? '1' : '0'))));
+        else {
+          rows.push(row(mi('z') + mo('=') + frac(mi('d'), SIGS) + mo('=') + frac(vG(P.d, 4), vG(s, 4)) + mo('=') + mnS(fmt(P.z, 4))));
+          rows.push(row(mi('Φ') + mo('(') + mi('z') + mo(')') + mo('=') + vG(P.Phi, 4) + mo(',') + '<mspace width="0.4em"/>' + '<mi>𝒩</mi>' + mo('(') + mi('z') + mo('∣') + '<mn>0</mn>' + mo(',') + '<mn>1</mn>' + mo(')') + mo('=') + vG(P.phi, 4)));
+          if (O.kind === 'ei') {
+            rows.push(row(mi('EI') + mo('=') + mi('d') + mspc() + mi('Φ') + mo('(') + mi('z') + mo(')') + mo('+') + SIGS + mspc() + '<mi>𝒩</mi>' + mo('(') + mi('z') + mo('∣') + '<mn>0</mn>' + mo(',') + '<mn>1</mn>' + mo(')')));
+            rows.push(row(IND + mo('=') + vG(P.d, 4) + mo('×') + vG(P.Phi, 4) + mo('+') + vG(s, 4) + mo('×') + vG(P.phi, 4) + mo('=') + mnS(fmt(P.ei, 4))));
+          }
+          else rows.push(row(mi('PI') + mo('=') + mi('Φ') + mo('(') + mi('z') + mo(')') + mo('=') + vG(P.Phi, 4)));
+        }
+      }
+      el.innerHTML = table(rows) + '<p class="hint" style="margin:4px 0 0">' + (mode === 'min' ? '最小化：<i>f</i><sub>best</sub> はこれまでの<b>最小</b>，改善量は <i>f</i><sub>best</sub> − <i>μ</i><sub>*</sub> − <i>ξ</i>，信頼限界は LCB を<b>最小</b>にします．' : '最大化：<i>f</i><sub>best</sub> はこれまでの<b>最大</b>，改善量は <i>μ</i><sub>*</sub> − <i>f</i><sub>best</sub> − <i>ξ</i>，信頼限界は UCB を<b>最大</b>にします．') + '</p>';
+    }
+    reset();
+    var self = {
+      update: function () {
+        md = null;
+        if (st.X.length) { var r = M.boModel(st); if (!r.ok) { U.status(msg, '計算を止めました：' + r.reason, 'warn'); } else if (!C.allFinite(r.acq.acq) || !C.allFinite(r.acq.mu)) { U.status(msg, '計算を止めました：獲得関数に NaN または無限大が出ました．', 'warn'); } else md = r; }
+        legend(); drawTop(); drawAcq(); readout(); eq();
+        bNext.disabled = st.done;
+      },
+      hide: function () { stopAuto(); },
+      state: function () { return st; }
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ③ ランダム探索との比較
+     ================================================================= */
+  function CmpSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var DEF = { budget: 20, R: 200, kind: 'ei', xi: 0, kappa: 2, n0: 3, ell: 1, sf: 0.8, sigma: 0.05, fitEll: false, fbestDef: 'obs', mode: 'max' };
+    var O = Object.assign({}, DEF), S = { seed: DEFAULT_SEED };
+    var res;
+    var ctl = q('ctlCmp'), cv = q('cvCmp');
+    var redraw = function () { self.update(); };
+    function clear() { res = { bo: [], rd: [], gr: [], r: 0, cur: null, ms: 0, err: null }; }
+    clear();
+    var run = U.runner({
+      labels: { run: '実行', stop: '停止', step: '1 評価だけ進める', reset: '結果を消す' },
+      isVisible: function () { return !panel.hidden; },
+      step: function () {
+        if (res.r >= O.R) return false;
+        var t = performance.now();
+        if (!res.cur) { var sd = M.compareSeeds(S.seed, res.r); res.sd = sd; res.cur = M.boCreate(Object.assign({}, O), C.rng(sd.bo)); }
+        var more = M.boStep(res.cur);
+        if (res.cur.error) { res.err = res.cur.error; return false; }
+        if (!more) {
+          res.bo.push(M.regretCurve(res.cur.X, res.cur.Y));
+          var rr = M.randomRun(O.budget, res.sd.random); res.rd.push(M.regretCurve(rr.X, rr.Y));
+          res.gr.push(M.gridRegretCurve(O.budget, res.sd.grid));
+          res.r++; res.cur = null;
+        }
+        res.ms += performance.now() - t;
+        return res.r < O.R;
+      },
+      draw: function () { redraw(); },
+      reset: function () { clear(); }
+    });
+    function changed() { run.reset(); }
+    var rB = U.range({ label: '予算（評価回数）<i>B</i>', min: 5, max: LIM.maxBudget, step: 1, value: O.budget, fmt: String, onInput: function (v) { O.budget = v; changed(); } });
+    var rR = U.range({ label: '繰り返し数（seed の数）', min: 10, max: LIM.maxRepeats, step: 10, value: O.R, fmt: String, onInput: function (v) { O.R = v; changed(); } });
+    var pAcq = U.pills({ label: 'ベイズ最適化の獲得関数', options: [{ value: 'ei', label: 'EI' }, { value: 'ucb', label: 'UCB' }, { value: 'pi', label: 'PI' }], value: O.kind, onChange: function (v) { O.kind = v; syncDis(); changed(); } });
+    var rXi = U.range({ label: '<i>ξ</i>（EI・PI）', min: 0, max: 0.5, step: 0.01, value: O.xi, fmt: q2, onInput: function (v) { O.xi = v; changed(); } });
+    var rKa = U.range({ label: '<i>κ</i>（UCB）', min: 0, max: 5, step: 0.1, value: O.kappa, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { O.kappa = v; changed(); } });
+    function syncDis() { rXi.input.disabled = O.kind === 'ucb'; rKa.input.disabled = O.kind !== 'ucb'; }
+    var rN0 = U.range({ label: '初期点の数', min: 1, max: 10, step: 1, value: O.n0, fmt: String, onInput: function (v) { O.n0 = v; changed(); } });
+    var rEll = U.range({ label: '長さスケール <i>ℓ</i>（決め打ち）', min: LIM.ell[0], max: LIM.ell[1], step: 0.01, log: true, value: O.ell, unit: 'mol%', fmt: fmtEll, onInput: function (v) { O.ell = v; changed(); } });
+    var ckFit = U.check({ label: '毎回 <i>ℓ</i> を周辺尤度の格子で選ぶ', checked: false, onChange: function (v) { O.fitEll = v; rEll.input.disabled = v; changed(); } });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; changed(); } });
+    function preset(p) {
+      O = Object.assign({}, DEF, p);
+      rB.set(O.budget, true); rR.set(O.R, true); pAcq.set(O.kind, true); rXi.set(O.xi, true); rKa.set(O.kappa, true); rN0.set(O.n0, true); rEll.set(O.ell, true); O.ell = rEll.get();
+      ckFit.set(O.fitEll, true); rEll.input.disabled = O.fitEll; syncDis(); changed();
+    }
+    var bDef = U.button('既定（EI，ℓ = 1 固定）', function () { preset({}); });
+    var bLose = U.button('BO が負ける例（ℓ = 10 固定，B = 30）', function () { preset({ ell: 10, budget: 30 }); }, { title: '長さスケールを長すぎる値に決め打ちした例' });
+    var bFit = U.button('毎回 ℓ を選ぶ', function () { preset({ fitEll: true }); });
+    ctl.appendChild(run.el);
+    var prog = U.el('p', 'progress'); prog.setAttribute('aria-live', 'polite'); ctl.appendChild(prog);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', '設定の例'));
+    ctl.appendChild(U.buttonRow([bDef, bLose])); ctl.appendChild(U.buttonRow([bFit]));
+    ctl.appendChild(U.el('hr', 'sep'));
+    [rB, rR, pAcq, rXi, rKa, rN0, rEll].forEach(function (r) { ctl.appendChild(r.el); }); ctl.appendChild(ckFit.el);
+    ctl.appendChild(U.el('span', 'hint', '<i>σ</i><sub>f</sub> = 0.80，モデルのノイズ <i>σ</i> = 0.050，<i>f</i><sub>best</sub> は観測値の最大に固定．設定を変えると結果を消します．'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(seed.el);
+    syncDis();
+    U.legendHTML(q('lgCmp'), [
+      { label: 'ベイズ最適化 中央値', color: col.accent, width: 2.6, shape: 'circle', kind: 'linemarker' },
+      { label: 'ランダム探索 中央値', color: col.orange, width: 2.2, dash: dash.dashed, shape: 'square', kind: 'linemarker' },
+      { label: '等間隔の格子 中央値（予算 <i>n</i> の格子．点だけ）', color: col.green, shape: 'triangle' },
+      { label: '四分位範囲（25〜75 %．BO は塗り，ランダムは斜線）', color: col.accent, kind: 'band', alpha: 0.22 }]);
+
+    function drawCmp(sb, sr, sg) {
+      var F = U.fitCanvas(cv, { aspect: 0.62, minHeight: 270, maxHeight: 460 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 54, r: 10, t: 12, b: 42 });
+      var B = O.budget, FLOOR = 1e-5;
+      var lo = 1e-3; [sb, sr, sg].forEach(function (s) { s.forEach(function (p) { if (p.q1 > 0) lo = Math.min(lo, p.q1); }); });
+      lo = Math.max(FLOOR, Math.pow(10, Math.floor(Math.log10(lo))));
+      var ax = U.axes(c, box, [0.5, B + 0.5], [lo, 3], { ylog: true, xl: '評価回数 n', yl: '単純後悔（log₁₀ の差）', nx: Math.min(8, B), yf: tickNum, ylOff: 46 });
+      function cl(v) { return Math.max(lo, v); }
+      function drawSet(s, color, dsh, shape, hatch, alpha) {
+        if (!s.length) return;
+        var n = s.map(function (p) { return p.n; });
+        U.band(c, ax, n, s.map(function (p) { return cl(p.q1); }), s.map(function (p) { return cl(p.q3); }), { color: color, alpha: alpha, hatch: hatch });
+        U.line(c, ax, n, s.map(function (p) { return cl(p.med); }), { color: color, dash: dsh, width: 2.4 });
+        var step = Math.max(1, Math.round(B / 10));
+        s.forEach(function (p, i) { if (i % step === step - 1 || i === s.length - 1) U.marker(c, ax.X(p.n), ax.Y(cl(p.med)), shape, 8, color, true); });
+      }
+      /* 格子は n ごとに別の配置なので，線で結ばず点だけ描く */
+      sg.forEach(function (p) { U.marker(c, ax.X(p.n), ax.Y(cl(p.med)), 'triangle', 8, col.green, true); });
+      drawSet(sr, col.orange, dash.dashed, 'square', true, 0.10);
+      drawSet(sb, col.accent, [], 'circle', false, 0.22);
+      var L = U.labeler(c, box);
+      if (sb.length) {
+        var e = sb[sb.length - 1], f = sr[sr.length - 1], g = sg[sg.length - 1];
+        L.add('ベイズ最適化', ax.X(e.n) - 4, ax.Y(cl(e.med)) + 13, { size: 10.5, color: col.accent, bold: true, align: 'right' });
+        L.add('ランダム探索', ax.X(f.n) - 4, ax.Y(cl(f.med)) - 13, { size: 10.5, color: col.orange, bold: true, align: 'right' });
+        L.add('格子', ax.X(g.n) - 4, ax.Y(cl(g.med)) - 13, { size: 10.5, color: col.green, bold: true, align: 'right' });
+      } else U.text(c, ax, (B + 1) / 2, Math.sqrt(lo * 3), '「実行」を押すと計算します', { color: col.sub, size: 11 });
+      U.setCanvasLabel(cv, '評価回数に対する単純後悔の中央値と四分位範囲．完了した繰り返し ' + res.r + ' / ' + O.R + ' 回．' + (sb.length ? '評価 ' + B + ' 回目の中央値：ベイズ最適化 ' + fmt(sb[B - 1].med, 3) + '，ランダム探索 ' + fmt(sr[B - 1].med, 3) + '，格子 ' + fmt(sg[B - 1].med, 3) + '．' : ''));
+      q('capCmp').innerHTML = '教育用の合成データ C（最大化，観測ノイズの標準偏差 0.05）．単純後悔 <i>r</i><sub><i>n</i></sub> = <i>y</i><sub>max</sub> − <i>y</i>(<i>x̂</i><sub><i>n</i></sub>)（<i>x̂</i><sub><i>n</i></sub> は <i>n</i> 回目までに観測値が最大だった点，縦軸は対数）．繰り返し ' + res.r + ' / ' + O.R + ' 回，予算 ' + B + ' 回，seed ' + S.seed + '．ベイズ最適化：' + acqName(O.kind, 'max') + (O.kind === 'ucb' ? '（<i>κ</i> = ' + fx(O.kappa, 1) + '）' : '（<i>ξ</i> = ' + q2(O.xi) + '）') + '，初期点 ' + O.n0 + ' 個，' + (O.fitEll ? '<i>ℓ</i> は毎回選択' : '<i>ℓ</i> = ' + fmtEll(O.ell) + ' mol% に固定') + '．10<sup>' + U.mn(String(Math.round(Math.log10(lo)))) + '</sup> 未満は下端に描きます．';
+    }
+    function readout(sb, sr, sg) {
+      var B = O.budget, rows = [['完了した繰り返し', res.r + ' / ' + O.R + ' 回']];
+      if (sb.length) {
+        var n10 = Math.min(10, B);
+        var f = function (s, n) { var p = s[n - 1]; return U.fmtHTML(p.med, 3) + '<br><span style="font-weight:400">[' + U.fmtHTML(p.q1, 2) + ', ' + U.fmtHTML(p.q3, 2) + ']</span>'; };
+        rows.push(['BO（<i>n</i> = ' + B + '）', f(sb, B)]);
+        rows.push(['ランダム（<i>n</i> = ' + B + '）', f(sr, B)]);
+        rows.push(['格子（<i>n</i> = ' + B + '）', f(sg, B)]);
+        if (n10 < B) { rows.push(['BO（<i>n</i> = ' + n10 + '）', f(sb, n10)]); rows.push(['ランダム（<i>n</i> = ' + n10 + '）', f(sr, n10)]); }
+        var win = 0; for (var i = 0; i < res.bo.length; i++) if (res.bo[i][B - 1] < res.rd[i][B - 1]) win++;
+        rows.push(['BO の方が小さかった割合（同じ <i>r</i> どうし）', U.fmtPct(win / res.bo.length, 1)]);
+        rows.push(['計算時間', fx(res.ms / 1000, 2) + ' s']);
+      }
+      q('readCmp').innerHTML = kv(rows) + '<p class="hint">単純後悔（log<sub>10</sub> の差）の中央値と，その下の [第 1 四分位，第 3 四分位]．BO はベイズ最適化．</p>';
+      prog.textContent = res.err ? '計算を止めました：' + res.err : '繰り返し ' + res.r + ' / ' + O.R + ' 回' + (res.cur ? '（いまの回の評価 ' + res.cur.X.length + ' / ' + O.budget + '）' : '') + '．';
+    }
+    function eq(sb, sr) {
+      var el = q('eqCmp'), B = O.budget;
+      var r0 = row('<msub><mi>r</mi><mi>n</mi></msub>' + mo('=') + '<msub><mi>y</mi><mi>max</mi></msub>' + mo('−') + mi('y') + mo('(') + '<msub><mover><mi>x</mi><mo>^</mo></mover><mi>n</mi></msub>' + mo(')') + mo(',') + '<mspace width="0.5em"/>' + '<msub><mi>y</mi><mi>max</mi></msub>' + mo('=') + vF(M.TRUE_MAX.y, 3));
+      var r0b = row(mt('（真の最大の位置 ') + mi('x') + mo('=') + mnS(fx(M.TRUE_MAX.x, 3)) + '<mspace width="0.25em"/>' + mt('mol%）'));
+      var rows = [r0, r0b];
+      if (sb.length) {
+        var pb = sb[B - 1], pr = sr[B - 1];
+        rows.push(row(mt('BO の中央値：') + '<msub><mi>r</mi><mn>' + B + '</mn></msub>' + mo('=') + vG(pb.med, 3) + mo(',') + '<mspace width="0.4em"/>' + mi('y') + mo('(') + '<msub><mover><mi>x</mi><mo>^</mo></mover><mn>' + B + '</mn></msub>' + mo(')') + mo('=') + vF(M.TRUE_MAX.y - pb.med, 4)));
+        rows.push(row(mt('ランダム探索の中央値：') + '<msub><mi>r</mi><mn>' + B + '</mn></msub>' + mo('=') + vG(pr.med, 3)));
+        rows.push(row(mt('中央値の比') + '<mspace width="0.4em"/>' + frac(mt('ランダム'), mt('BO')) + mo('=') + frac(vG(pr.med, 3), vG(pb.med, 3)) + mo('=') + vG(pr.med / Math.max(pb.med, 1e-300), 3)));
+      }
+      el.innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        var sb = M.summarize(res.bo), sr = M.summarize(res.rd), sg = M.summarize(res.gr);
+        drawCmp(sb, sr, sg); readout(sb, sr, sg); eq(sb, sr);
+        if (res.err) U.status(run.status, '計算を止めました：' + res.err, 'warn');
+      },
+      hide: function () { run.stop(); },
+      state: function () { return res; }
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { gp: GpSim, bo: BoSim, compare: CmpSim }, initial: 'gp' });
+})();
+</script>
+</body>
+</html>

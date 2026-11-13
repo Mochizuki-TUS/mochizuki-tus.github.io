@@ -1,0 +1,1269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>第15章 誤差逆伝播と学習 — 連鎖律で勾配を配る — 機械学習</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => '15.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">機械学習 — 目次</a>
+  <span class="series">第IV部 ニューラルネットワーク / 第15章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第15章</span>誤差逆伝播と学習 — 連鎖律で勾配を配る</h1>
+
+<div class="lead">
+<div class="question">
+<strong>この章で答える問い</strong>
+<ul>
+  <li>ニューラルネットワークには何千・何万もの重みがある．そのそれぞれが損失にどれだけ効くか（偏微分）を，どうやって一度に計算するのか．</li>
+  <li>計算した勾配が正しいことを，どうやって確かめるのか．</li>
+  <li>勾配が計算できても学習がうまくいかないのはどんなときか．初期値・層の深さ・学習の止めどきは，結果をどう変えるのか．</li>
+</ul>
+</div>
+<p>重みが 2 個しかないなら，損失 $L$ を重みの式として書き下し，手で偏微分すればよい．しかし，入力 10 個・隠れ層 50 個を 2 段・出力 1 個のネットワークでも重みとバイアスは 3151 個ある．一つの重みを少しだけ動かして損失の変化を測る「数値微分」で勾配を作ると，順方向の計算を 6000 回以上繰り返すことになる．ところが，<strong>連鎖律</strong>（合成関数の微分）を出力の側から順にたどると，順方向の計算の 3 倍程度の手間で，全部の偏微分がそろう．これが<strong>誤差逆伝播</strong>（backpropagation）である．</p>
+<p>本章では，まず小さなスカラーの式で連鎖律を「計算グラフ」の上でたどり（15.1 節），層を持つネットワークの 4 本の式を成分で導く（15.2 節）．次に，シミュレーターと同じ 2–2–1 のネットワークで順伝播・逆伝播・重みの更新を全部の数値で追い（15.3 節），勾配を差分で確かめる方法（15.4 節）と，ミニバッチで学習を回す手順（15.5 節）を述べる．詳しいルートでは，初期化（15.6 節），勾配消失と爆発（15.7 節），過学習と正則化（15.8 節），自動微分（15.9 節）へ進み，材料データと原子間ポテンシャルの学習に結びつける（15.10 節）．</p>
+<div class="goals">
+  <strong>この章で学ぶこと</strong>
+  <ul>
+    <li>計算グラフの上で連鎖律を逆向きにたどり，枝分かれのある式の偏微分を「経路の和」として求められる．</li>
+    <li>誤差 $\bm{\delta}^{(l)}=\partial\ell/\partial\bm{a}^{(l)}$ の定義から，誤差逆伝播の 4 本の式を成分で導ける．逆伝播の計算量が順伝播と同じ程度である理由を説明できる．</li>
+    <li>2–2–1 のネットワークで，順伝播・逆伝播・1 回の更新を手で計算し，損失が減ることを確かめられる．</li>
+    <li>中心差分による勾配確認を行い，誤差が $O(\epsilon^{2})$ になる理由と，刻みを小さくしすぎると丸め誤差で悪くなる理由を説明できる．</li>
+    <li>エポック・ミニバッチ・学習曲線の意味を説明し，早期終了・重み減衰の働きを学習曲線で読める．</li>
+    <li>（詳しいルート）初期値の大きさを分散の条件から決め（Xavier，He），勾配消失・爆発の仕組みと，逆モードの自動微分との関係を説明できる．</li>
+  </ul>
+</div>
+<div class="prereq"><strong>前提：</strong>本書の<a href="ch14_neural_networks.html">第14章</a>（ニューロン，層と行列の形，出力層と損失．とくに 14.3 節と 14.6 節），<a href="ch07_optimization.html#sec7-2">第7章 7.2 節</a>（勾配降下法）と<a href="ch07_optimization.html#sec7-5">7.5 節</a>（確率的勾配降下法とミニバッチ），<a href="ch05_information.html#sec5-5">第5章 5.5 節</a>（交差エントロピー損失），<a href="ch06_generalization.html#sec6-3">第6章 6.3 節</a>（訓練・検証・テストデータ）．合成関数の偏微分（<a href="../UnivMath_Textbook/ch06_partial_derivatives.html#sec6-4">大学数学 第6章 6.4</a>），Taylor 展開（<a href="../UnivMath_Textbook/ch04_taylor_expansion.html#sec4-2">大学数学 第4章 4.2</a>），行列の積と転置（<a href="../UnivMath_Textbook/ch08_matrices_determinants.html#sec8-1">大学数学 第8章 8.1</a>）．</div>
+<p class="route"><strong>入門ルートで読む節：</strong><a href="#sec15-1">15.1</a>，<a href="#sec15-2">15.2</a>，<a href="#sec15-3">15.3</a>，<a href="#sec15-4">15.4</a>，<a href="#sec15-5">15.5</a>，<a href="#sec15-12">15.12</a>．「詳しいルート」の印が付いた節は，初めて読むときは飛ばしてよい．</p>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec15-1">15.1 計算グラフと連鎖律</a></li>
+    <li><a href="#sec15-2">15.2 誤差逆伝播の導出 — 4 本の式</a></li>
+    <li><a href="#sec15-3">15.3 数値で追う — 2–2–1 のネットワークの 1 ステップ</a></li>
+    <li><a href="#sec15-4">15.4 勾配確認 — 差分で答え合わせをする</a></li>
+    <li><a href="#sec15-5">15.5 ミニバッチ学習の手順と学習曲線</a></li>
+    <li><a href="#sec15-6">15.6 初期化 — 対称性を破り，分散を保つ</a></li>
+    <li><a href="#sec15-7">15.7 勾配消失・爆発の入口</a></li>
+    <li><a href="#sec15-8">15.8 過学習と正則化 — 重み減衰と早期終了</a></li>
+    <li><a href="#sec15-9">15.9 自動微分 — 逆伝播は逆モード</a></li>
+    <li><a href="#sec15-10">15.10 材料工学・物性物理学との接点 — 小さな材料データと原子に働く力</a></li>
+    <li><a href="#sec15-11">15.11 誤解しやすい点と適用限界</a></li>
+    <li><a href="#sec15-12">15.12 まとめ・次章への接続・演習・参考文献</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="sec15-1">15.1 計算グラフと連鎖律</h2>
+
+<h3>15.1.1 何をしたいのか</h3>
+
+<p>学習とは，損失 $L$ が小さくなる向きに重みを少しずつ動かすことである（<a href="ch07_optimization.html#sec7-2">第7章 7.2 節</a>）．そのためには，すべての重み $w$ について偏微分 $\partial L/\partial w$ が要る．ニューラルネットワークの損失は，「重み付き和 → 活性化関数 → 次の重み付き和 → … → 損失」という<strong>関数の合成</strong>でできている．合成関数の微分は連鎖律で求められる．問題は，それを<strong>無駄なく</strong>行う順番である．</p>
+
+<p>計算の手順を，値を表す丸（ノード）と，演算を表す矢印で描いたものを<strong>計算グラフ</strong>（computational graph）という．<a href="#fig15-1">図15.1</a> は，入力 $x$ に重み $w$ を掛けてバイアス $b$ を足し，tanh を通して，目標値 $y$ との二乗誤差の半分を損失とする「1 個のニューロン」の計算グラフである．左から右へ値を計算するのが<strong>順伝播</strong>（forward propagation），右から左へ偏微分を計算するのが<strong>逆伝播</strong>（backward propagation）である．</p>
+
+<figure id="fig15-1">
+<svg role="img" aria-label="1 個のニューロンの計算グラフ．入力 x と重み w を掛け，バイアス b を足して a，tanh を通して z，目標値 y との二乗誤差の半分が損失 L．上の行に順伝播の値，下の行に逆伝播で求めた偏微分を書く．" viewBox="0 0 620 300" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図15.1　1 個のニューロンの計算グラフ</title>
+<defs>
+<marker id="arr-fig15-1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker>
+<marker id="arrb-fig15-1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d55e00"></path></marker>
+</defs>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="17" text-anchor="middle" fill="#1a1a1a">
+<circle cx="45" cy="70" r="24" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle><text x="45" y="76" font-style="italic">x</text>
+<circle cx="45" cy="160" r="24" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle><text x="45" y="166" font-style="italic">w</text>
+<circle cx="165" cy="115" r="24" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></circle><text x="165" y="121">×</text>
+<circle cx="165" cy="215" r="24" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle><text x="165" y="221" font-style="italic">b</text>
+<circle cx="285" cy="115" r="24" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></circle><text x="285" y="121">+</text>
+<rect x="370" y="91" width="70" height="48" rx="8" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect><text x="405" y="121">tanh</text>
+<circle cx="555" cy="115" r="30" fill="#5b2a5e" stroke="#5b2a5e" stroke-width="1.6"></circle><text x="555" y="121" fill="#fff" font-style="italic">L</text>
+<circle cx="555" cy="230" r="22" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle><text x="555" y="236" font-style="italic">y</text>
+</g>
+<g stroke="#1a1a1a" stroke-width="1.5" fill="none">
+<line x1="68" y1="79" x2="142" y2="106" marker-end="url(#arr-fig15-1)"></line>
+<line x1="68" y1="151" x2="142" y2="124" marker-end="url(#arr-fig15-1)"></line>
+<line x1="189" y1="115" x2="259" y2="115" marker-end="url(#arr-fig15-1)"></line>
+<line x1="180" y1="196" x2="268" y2="134" marker-end="url(#arr-fig15-1)"></line>
+<line x1="309" y1="115" x2="366" y2="115" marker-end="url(#arr-fig15-1)"></line>
+<line x1="440" y1="115" x2="521" y2="115" marker-end="url(#arr-fig15-1)"></line>
+<line x1="555" y1="207" x2="555" y2="149" marker-end="url(#arr-fig15-1)"></line>
+</g>
+<g font-size="14" fill="#5b2a5e" text-anchor="middle">
+<text x="105" y="52">2.0</text>
+<text x="20" y="200">0.3</text>
+<text x="225" y="104">0.6</text>
+<text x="200" y="250">−0.1</text>
+<text x="338" y="104"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">a</tspan> = 0.5</text>
+<text x="480" y="104"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">z</tspan> = 0.4621</text>
+<text x="555" y="70"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">L</tspan> = 0.1447</text>
+<text x="590" y="270">1.0</text>
+</g>
+<g stroke="#d55e00" stroke-width="1.4" stroke-dasharray="6 4" fill="none">
+<line x1="522" y1="150" x2="446" y2="150" marker-end="url(#arrb-fig15-1)"></line>
+<line x1="366" y1="150" x2="312" y2="150" marker-end="url(#arrb-fig15-1)"></line>
+<line x1="260" y1="150" x2="192" y2="150" marker-end="url(#arrb-fig15-1)"></line>
+</g>
+<g font-size="14" fill="#b34d00" text-anchor="middle">
+<text x="480" y="172">∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">L</tspan>/∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">z</tspan> = −0.5379</text>
+<text x="335" y="172">∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">L</tspan>/∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">a</tspan> = −0.4230</text>
+<text x="80" y="290">∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">L</tspan>/∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">w</tspan> = −0.8460</text>
+<text x="290" y="290">∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">L</tspan>/∂<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">b</tspan> = −0.4230</text>
+</g>
+<text x="440" y="290" font-size="13" fill="#4a5568">（例題15.1 の数値）</text>
+</svg>
+<figcaption>図15.1　1 個のニューロン $L=\tfrac12(\tanh(wx+b)-y)^{2}$ の計算グラフ．丸と四角は値と演算，黒の実線の矢印が順伝播の向き．茄子紺の数字は順伝播で求めた値，朱の破線の矢印と朱の数字は逆伝播で求めた偏微分（例題15.1 の数値．4 桁に丸めた）．</figcaption>
+</figure>
+
+<h3>15.1.2 連鎖律 — 1 本の経路では掛け算</h3>
+
+<p>$L$ が $z$ を通して $a$ に依存し，$z$ が $a$ の関数 $z=h(a)$ であるとき，$a$ を少し $\Delta a$ だけ動かすと $z$ は約 $h'(a)\,\Delta a$ 動き，$L$ はさらにその $\partial L/\partial z$ 倍動く．したがって</p>
+\begin{equation}
+\pdiff{L}{a}=\pdiff{L}{z}\,\pdiff{z}{a} \label{eq:15-chain1}
+\end{equation}
+<p>である（<a href="../UnivMath_Textbook/ch06_partial_derivatives.html#sec6-4">大学数学 第6章 6.4</a>）．経路が何段あっても，<strong>経路に沿った局所的な微分の積</strong>になる．</p>
+
+<p>逆伝播の要点は，積を<strong>右（損失の側）から</strong>まとめることである．<a href="#fig15-1">図15.1</a> では，</p>
+<ol>
+  <li>$\partial L/\partial z$ を求める（損失の局所的な微分）．</li>
+  <li>それに $\partial z/\partial a$ を掛けて $\partial L/\partial a$ を作る．</li>
+  <li>$\partial L/\partial a$ に $\partial a/\partial w=x$ を掛けて $\partial L/\partial w$，$\partial a/\partial b=1$ を掛けて $\partial L/\partial b$ を作る．</li>
+</ol>
+<p>3 の段で $\partial L/\partial a$ を<strong>使い回している</strong>ことに注意する．$w$ と $b$ の偏微分を別々に左から計算すると，$\partial L/\partial z\cdot\partial z/\partial a$ の部分を 2 回計算することになる．パラメーターが何万個あっても，共通の部分を 1 回だけ計算して配るのが逆伝播である．</p>
+
+<h3>15.1.3 枝分かれ — 複数の経路では足し算</h3>
+
+<p>ある値が後の計算で 2 回以上使われると，計算グラフは枝分かれする．このとき，その値が損失に効く経路が複数あり，偏微分は<strong>経路ごとの積の和</strong>になる．</p>
+
+<div class="box thm">
+<p class="box-title">定理15.1　多変数の連鎖律（経路の和）</p>
+<p>損失 $L$ が中間の値 $u_1,\dots,u_K$ を通してだけ $w$ に依存し，各 $u_k$ が $w$ の微分可能な関数であるとき，</p>
+\begin{equation}
+\pdiff{L}{w}=\sum_{k=1}^{K}\pdiff{L}{u_k}\,\pdiff{u_k}{w} \label{eq:15-chain-sum}
+\end{equation}
+<p>が成り立つ．ここで $\partial L/\partial u_k$ は，他の $u_{k'}$（$k'\ne k$）を固定して $u_k$ だけを動かしたときの偏微分である．</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">導出</p>
+<p>$L=G(u_1,\dots,u_K)$ と書く．$w$ を $\Delta w$ だけ動かすと，各 $u_k$ は $\Delta u_k=\pdiff{u_k}{w}\Delta w+o(\Delta w)$ だけ動く．$G$ が微分可能なら，その全微分（1 次の Taylor 展開）より</p>
+$$
+\begin{aligned}
+\Delta L&=\sum_{k=1}^{K}\pdiff{G}{u_k}\,\Delta u_k+o(\Delta w)\\
+&=\Bigl(\sum_{k=1}^{K}\pdiff{G}{u_k}\pdiff{u_k}{w}\Bigr)\Delta w+o(\Delta w).
+\end{aligned}
+$$
+<p>両辺を $\Delta w$ で割り $\Delta w\to0$ とすると式 \eqref{eq:15-chain-sum} を得る．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例15.1　同じ値を 2 回使う式</p>
+<p>$u=w+1$，$v=2w$，$L=uv$ とし，$w=3$ とする．順伝播では $u=4$，$v=6$，$L=24$．逆伝播では $\partial L/\partial u=v=6$，$\partial L/\partial v=u=4$ なので，式 \eqref{eq:15-chain-sum} より</p>
+$$
+\pdiff{L}{w}=\pdiff{L}{u}\cdot1+\pdiff{L}{v}\cdot2=6+8=14 .
+$$
+<p>直接展開すると $L=(w+1)\cdot2w=2w^{2}+2w$ で，$\diff{L}{w}=4w+2=14$ と一致する．経路の一方だけを数えると 6 または 8 になり，誤りである．</p>
+</div>
+
+<p>ニューラルネットワークでは，隠れユニットの出力 $z_j$ が次の層の<strong>すべての</strong>ユニットへ配られるので，必ず枝分かれが起こる．15.2 節の式 $\bm{W}^{\tp}\bm{\delta}$ に現れる「和」は，この経路の和である．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.1　1 個のニューロンの順伝播と逆伝播</p>
+<p><a href="#fig15-1">図15.1</a> の計算グラフで $x=2.0$，$w=0.3$，$b=-0.1$，$y=1.0$ とする（無次元の数値例）．$a=wx+b$，$z=\tanh a$，$L=\tfrac12(z-y)^{2}$ である．(1) 順伝播で $a,z,L$ を求めよ．(2) 逆伝播で $\partial L/\partial z$，$\partial L/\partial a$，$\partial L/\partial w$，$\partial L/\partial b$ を求めよ．(3) 入力についての偏微分 $\partial L/\partial x$ も求めよ．</p>
+<p><strong>解答</strong>　(1) $a=0.3\times2.0+(-0.1)=0.5$，$z=\tanh0.5=0.462117$，$L=\tfrac12(0.462117-1)^{2}$ $=\tfrac12\times0.289318=0.144659$．</p>
+<p>(2) 損失の局所的な微分は $\partial L/\partial z=z-y=-0.537883$．tanh の導関数は $\diff{}{a}\tanh a=1-\tanh^{2}a$ なので $\partial z/\partial a=1-0.462117^{2}=0.786448$．式 \eqref{eq:15-chain1} より</p>
+$$
+\begin{aligned}
+\pdiff{L}{a}&=(-0.537883)\times0.786448\\
+&=-0.423017 .
+\end{aligned}
+$$
+<p>$a=wx+b$ なので $\partial a/\partial w=x=2.0$，$\partial a/\partial b=1$．よって $\partial L/\partial w=-0.423017\times2.0=-0.846033$，$\partial L/\partial b=-0.423017$．</p>
+<p>(3) $\partial a/\partial x=w=0.3$ なので $\partial L/\partial x=-0.423017\times0.3=-0.126905$．入力についての偏微分も同じ逆伝播で「ついでに」得られる．15.10 節の原子に働く力は，この量を使う．</p>
+<p>$\partial L/\partial w\lt0$ なので，$w$ を少し増やすと損失は減る．実際 $w$ を $0.3\pm10^{-6}$ にして中心差分を作ると $-0.846033$ が得られる（15.4 節）．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-2">15.2 誤差逆伝播の導出 — 4 本の式</h2>
+
+<h3>15.2.1 記号と次元</h3>
+
+<p>第14章（<a href="ch14_neural_networks.html#sec14-3">14.3 節</a>）と同じ記号を使う．ここで必要なものを再掲する．</p>
+
+<div class="box def">
+<p class="box-title">定義15.1　全結合のネットワークと 1 個のデータの損失</p>
+<p>層を $l=1,\dots,n_{\mathrm{layer}}$（$n_{\mathrm{layer}}$ は層の数．$L$ は損失に使う），第 $l$ 層のユニット数を $D_l$ とし，入力を $\bm{z}^{(0)}=\bm{x}\in\R^{D_0}$ とする．各層で</p>
+\begin{equation}
+\begin{aligned}
+\bm{a}^{(l)}&=\bm{W}^{(l)}\bm{z}^{(l-1)}+\bm{b}^{(l)},\\
+\bm{z}^{(l)}&=h\bigl(\bm{a}^{(l)}\bigr)
+\end{aligned} \label{eq:15-forward}
+\end{equation}
+<p>を計算する．$\bm{W}^{(l)}\in\R^{D_l\times D_{l-1}}$（成分 $W^{(l)}_{ji}$ は第 $l-1$ 層のユニット $i$ から第 $l$ 層のユニット $j$ への重み），$\bm{b}^{(l)}\in\R^{D_l}$，$\bm{a}^{(l)},\bm{z}^{(l)}\in\R^{D_l}$ である．活性化関数 $h$ は成分ごとに働く．出力層 $l=n_{\mathrm{layer}}$ だけは出力の種類に合わせた関数 $f_{\mathrm{out}}$ を使い，予測値を $\hat{\bm{y}}=f_{\mathrm{out}}(\bm{a}^{(n_{\mathrm{layer}})})$ とする．</p>
+<p>1 個のデータ $(\bm{x}_n,\bm{y}_n)$ の損失を $\ell_n=\ell(\hat{\bm{y}}_n,\bm{y}_n)$ と書く．第 $l$ 層の<strong>誤差</strong>（error）を</p>
+\begin{equation}
+\begin{aligned}
+\bm{\delta}^{(l)}&\equiv\pdiff{\ell}{\bm{a}^{(l)}}\in\R^{D_l},\\
+\delta^{(l)}_j&=\pdiff{\ell}{a^{(l)}_j}
+\end{aligned} \label{eq:15-delta-def}
+\end{equation}
+<p>と定義する．「誤差」という名前だが，出力と目標値の差そのものではなく，<strong>重み付き和 $a^{(l)}_j$ を少し動かしたときの損失の変化率</strong>である．</p>
+</div>
+
+<div class="box note">
+<p class="box-title">記号：損失は平均で書く</p>
+<p>本章と第14章では，ミニバッチ $\mathcal{B}$（データの番号の集合，大きさ $\abs{\mathcal{B}}=B$）の損失を<strong>平均</strong> $L=\frac1B\sum_{n\in\mathcal{B}}\ell_n$ で書く．第7章と同じ規約で，第8・9章の「和」の規約とは $B$ 倍違う．勾配も 1 個ずつの勾配の平均になるので，以下ではまず 1 個のデータの $\ell$ について導き，最後に平均をとる．sigmoid は $\sigma(a)=1/(1+e^{-a})$ と引数付きで書き，標準偏差の $\sigma$ と区別する．</p>
+</div>
+
+<h3>15.2.2 出力層の誤差</h3>
+
+<p>出力層と損失の組を第14章（<a href="ch14_neural_networks.html#sec14-6">14.6 節</a>）のように選ぶと，出力層の誤差は次のように簡単になる．ここでは本章で使う 2 つの組を確かめる．</p>
+<ul>
+  <li><strong>恒等出力＋二乗誤差の半分</strong>（回帰）：$\hat{y}=a^{(n_{\mathrm{layer}})}$，$\ell=\tfrac12(\hat{y}-y)^{2}$．$\partial\ell/\partial a^{(n_{\mathrm{layer}})}=(\hat{y}-y)\cdot1=\hat{y}-y$．</li>
+  <li><strong>sigmoid 出力＋交差エントロピー</strong>（二値分類）：$\hat{y}=\sigma(a)$，$\ell=-[y\ln\hat{y}+(1-y)\ln(1-\hat{y})]$．$\sigma'(a)=\sigma(a)(1-\sigma(a))=\hat{y}(1-\hat{y})$ を使うと</li>
+</ul>
+$$
+\begin{aligned}
+\pdiff{\ell}{a}&=\Bigl(-\frac{y}{\hat{y}}+\frac{1-y}{1-\hat{y}}\Bigr)\hat{y}(1-\hat{y})\\
+&=-y(1-\hat{y})+(1-y)\hat{y}=\hat{y}-y .
+\end{aligned}
+$$
+<p>softmax 出力＋交差エントロピー（多クラス）でも同じ形 $\hat{\bm{y}}-\bm{y}$ になる（第14章 14.6 節）．まとめて</p>
+\begin{equation}
+\bm{\delta}^{(n_{\mathrm{layer}})}=\hat{\bm{y}}-\bm{y} \label{eq:15-bp1}
+\end{equation}
+<p>と書ける．</p>
+
+<h3>15.2.3 隠れ層の誤差 — 逆向きの漸化式</h3>
+
+<p>第 $l$ 層のユニット $j$ の $a^{(l)}_j$ は，$z^{(l)}_j=h(a^{(l)}_j)$ を通して，第 $l+1$ 層の<strong>すべての</strong>ユニット $k=1,\dots,D_{l+1}$ の重み付き和 $a^{(l+1)}_k$ に入る．損失はこれらの $a^{(l+1)}_k$ を通してだけ $a^{(l)}_j$ に依存するので，定理15.1 の経路の和が使える．</p>
+
+<div class="box derive">
+<p class="box-title">導出：隠れ層の誤差</p>
+<p>式 \eqref{eq:15-chain-sum} で $u_k=a^{(l+1)}_k$ とおくと</p>
+$$
+\begin{aligned}
+\delta^{(l)}_j=\pdiff{\ell}{a^{(l)}_j}&=\sum_{k=1}^{D_{l+1}}\pdiff{\ell}{a^{(l+1)}_k}\,\pdiff{a^{(l+1)}_k}{a^{(l)}_j}\\
+&=\sum_{k=1}^{D_{l+1}}\delta^{(l+1)}_k\,\pdiff{a^{(l+1)}_k}{a^{(l)}_j}.
+\end{aligned}
+$$
+<p>式 \eqref{eq:15-forward} を成分で書くと $a^{(l+1)}_k=\sum_{i=1}^{D_l}W^{(l+1)}_{ki}\,h(a^{(l)}_i)+b^{(l+1)}_k$ である．これを $a^{(l)}_j$ で偏微分すると，和の中で $i=j$ の項だけが残る．</p>
+$$
+\pdiff{a^{(l+1)}_k}{a^{(l)}_j}=W^{(l+1)}_{kj}\,h'\bigl(a^{(l)}_j\bigr).
+$$
+<p>代入して，$k$ によらない $h'(a^{(l)}_j)$ を和の外に出す．</p>
+$$
+\delta^{(l)}_j=h'\bigl(a^{(l)}_j\bigr)\sum_{k=1}^{D_{l+1}}W^{(l+1)}_{kj}\,\delta^{(l+1)}_k .
+$$
+<p>和 $\sum_k W^{(l+1)}_{kj}\delta^{(l+1)}_k$ は，行列 $\bm{W}^{(l+1)\tp}$ の第 $j$ 行とベクトル $\bm{\delta}^{(l+1)}$ の積，すなわち $\bigl(\bm{W}^{(l+1)\tp}\bm{\delta}^{(l+1)}\bigr)_j$ である．成分ごとの積を $\odot$（Hadamard 積）で表すと，ベクトルの形の式 \eqref{eq:15-bp2} を得る．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+\begin{equation}
+\bm{\delta}^{(l)}=h'\bigl(\bm{a}^{(l)}\bigr)\odot\bigl(\bm{W}^{(l+1)\tp}\bm{\delta}^{(l+1)}\bigr) \label{eq:15-bp2}
+\end{equation}
+<p>を $l=n_{\mathrm{layer}}-1,\dots,1$ の順に使う．</p>
+
+<p>大きさを確かめておく．$\bm{W}^{(l+1)\tp}\in\R^{D_l\times D_{l+1}}$，$\bm{\delta}^{(l+1)}\in\R^{D_{l+1}}$ なので積は $\R^{D_l}$ で，$h'(\bm{a}^{(l)})\in\R^{D_l}$ と成分ごとに掛けられる．順伝播では $\bm{W}^{(l+1)}$ が第 $l$ 層から第 $l+1$ 層へ値を運び，逆伝播では<strong>同じ重みの転置</strong>が第 $l+1$ 層から第 $l$ 層へ誤差を運ぶ（<a href="#fig15-2">図15.2</a>）．</p>
+
+<figure id="fig15-2">
+<svg role="img" aria-label="第 l 層と第 l+1 層の模式図．順伝播では z_j が重み W_kj を通して全ユニット k に配られる．逆伝播では全ユニット k の delta_k が同じ重みで集められ，h prime を掛けて delta_j になる．" viewBox="0 0 620 300" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図15.2　順伝播で配った経路を，逆伝播で集め直す</title>
+<defs>
+<marker id="arr-fig15-2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5b2a5e"></path></marker>
+<marker id="arrb-fig15-2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d55e00"></path></marker>
+</defs>
+<text x="155" y="26" font-size="15" text-anchor="middle" fill="#1a1a1a">(a) 順伝播：配る</text>
+<text x="465" y="26" font-size="15" text-anchor="middle" fill="#1a1a1a">(b) 逆伝播：集める</text>
+<g fill="#fff" stroke="#1a1a1a" stroke-width="1.5">
+<circle cx="60" cy="150" r="26"></circle>
+<circle cx="250" cy="70" r="22"></circle><circle cx="250" cy="150" r="22"></circle><circle cx="250" cy="230" r="22"></circle>
+<circle cx="560" cy="150" r="26"></circle>
+<circle cx="370" cy="70" r="22"></circle><circle cx="370" cy="150" r="22"></circle><circle cx="370" cy="230" r="22"></circle>
+</g>
+<g stroke="#5b2a5e" stroke-width="1.6">
+<line x1="85" y1="143" x2="226" y2="77" marker-end="url(#arr-fig15-2)"></line>
+<line x1="86" y1="150" x2="226" y2="150" marker-end="url(#arr-fig15-2)"></line>
+<line x1="85" y1="157" x2="226" y2="223" marker-end="url(#arr-fig15-2)"></line>
+</g>
+<g stroke="#d55e00" stroke-width="1.6" stroke-dasharray="6 4">
+<line x1="392" y1="77" x2="532" y2="143" marker-end="url(#arrb-fig15-2)"></line>
+<line x1="392" y1="150" x2="532" y2="150" marker-end="url(#arrb-fig15-2)"></line>
+<line x1="392" y1="223" x2="532" y2="157" marker-end="url(#arrb-fig15-2)"></line>
+</g>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="16" text-anchor="middle" fill="#1a1a1a">
+<text x="60" y="155"><tspan font-style="italic">z</tspan><tspan baseline-shift="sub" font-size="11" font-style="italic">j</tspan></text>
+<text x="250" y="75"><tspan font-style="italic">a</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<text x="250" y="155"><tspan font-style="italic">a</tspan><tspan baseline-shift="sub" font-size="11" font-style="italic">k</tspan></text>
+<text x="250" y="235"><tspan font-style="italic">a</tspan><tspan baseline-shift="sub" font-size="11">3</tspan></text>
+<text x="370" y="75"><tspan font-style="italic">δ</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<text x="370" y="155"><tspan font-style="italic">δ</tspan><tspan baseline-shift="sub" font-size="11" font-style="italic">k</tspan></text>
+<text x="370" y="235"><tspan font-style="italic">δ</tspan><tspan baseline-shift="sub" font-size="11">3</tspan></text>
+<text x="560" y="155"><tspan font-style="italic">δ</tspan><tspan baseline-shift="sub" font-size="11" font-style="italic">j</tspan></text>
+</g>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="15" fill="#5b2a5e" text-anchor="middle">
+<text x="150" y="138"><tspan font-style="italic">W</tspan><tspan baseline-shift="sub" font-size="11" font-style="italic">kj</tspan></text>
+</g>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="15" fill="#b34d00" text-anchor="middle">
+<text x="460" y="138"><tspan font-style="italic">W</tspan><tspan baseline-shift="sub" font-size="11" font-style="italic">kj</tspan></text>
+</g>
+<text x="60" y="200" font-size="13" text-anchor="middle" fill="#4a5568">第 <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">l</tspan> 層</text>
+<text x="250" y="280" font-size="13" text-anchor="middle" fill="#4a5568">第 <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">l</tspan>+1 層</text>
+<text x="370" y="280" font-size="13" text-anchor="middle" fill="#4a5568">第 <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">l</tspan>+1 層</text>
+<text x="560" y="200" font-size="13" text-anchor="middle" fill="#4a5568">第 <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">l</tspan> 層</text>
+<text x="560" y="225" font-size="13" text-anchor="middle" fill="#b34d00">和に <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">h</tspan>′(<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">a</tspan><tspan baseline-shift="sub" font-size="10" font-family="Times New Roman, STIXGeneral, serif" font-style="italic">j</tspan>) を掛ける</text>
+</svg>
+<figcaption>図15.2　(a) 順伝播では，ユニット $j$ の出力 $z^{(l)}_j$ が重み $W^{(l+1)}_{kj}$（茄子紺の実線）を通して次の層の全ユニットへ配られる．(b) 逆伝播では，次の層の誤差 $\delta^{(l+1)}_k$ が<strong>同じ重み</strong> $W^{(l+1)}_{kj}$（朱の破線）で集められ，$h'(a^{(l)}_j)$ を掛けて $\delta^{(l)}_j$ になる（式 \eqref{eq:15-bp2}）．層の上付き添字は図では省いた．</figcaption>
+</figure>
+
+<h3>15.2.4 重みとバイアスの勾配</h3>
+
+<p>重み $W^{(l)}_{ji}$ は $a^{(l)}_j$ にだけ入る（他のユニット $j'\ne j$ の重み付き和には現れない）．したがって経路は 1 本で，式 \eqref{eq:15-chain1} の形になる．</p>
+$$
+\begin{aligned}
+\pdiff{\ell}{W^{(l)}_{ji}}&=\pdiff{\ell}{a^{(l)}_j}\,\pdiff{a^{(l)}_j}{W^{(l)}_{ji}}=\delta^{(l)}_j\,z^{(l-1)}_i ,\\
+\pdiff{\ell}{b^{(l)}_j}&=\delta^{(l)}_j\cdot1 .
+\end{aligned}
+$$
+<p>ここで $a^{(l)}_j=\sum_i W^{(l)}_{ji}z^{(l-1)}_i+b^{(l)}_j$ から $\partial a^{(l)}_j/\partial W^{(l)}_{ji}=z^{(l-1)}_i$ を使った．$(j,i)$ 成分が $\delta_j z_i$ の行列は，列ベクトル $\bm{\delta}$ と行ベクトル $\bm{z}^{\tp}$ の積（外積）である．</p>
+
+<div class="box thm">
+<p class="box-title">定理15.2　誤差逆伝播の 4 本の式</p>
+<p>定義15.1 のネットワークと，出力層の誤差が $\hat{\bm{y}}-\bm{y}$ になる損失について，1 個のデータの損失 $\ell$ の勾配は次の 4 本で求まる．</p>
+<ol>
+  <li>出力層：$\bm{\delta}^{(n_{\mathrm{layer}})}=\hat{\bm{y}}-\bm{y}$（式 \eqref{eq:15-bp1}）</li>
+  <li>隠れ層（出力側から順に）：$\bm{\delta}^{(l)}=h'(\bm{a}^{(l)})\odot(\bm{W}^{(l+1)\tp}\bm{\delta}^{(l+1)})$（式 \eqref{eq:15-bp2}）</li>
+  <li>重み：$\partial\ell/\partial\bm{W}^{(l)}=\bm{\delta}^{(l)}\bm{z}^{(l-1)\tp}\in\R^{D_l\times D_{l-1}}$（式 \eqref{eq:15-bp3}）</li>
+  <li>バイアス：$\partial\ell/\partial\bm{b}^{(l)}=\bm{\delta}^{(l)}\in\R^{D_l}$（式 \eqref{eq:15-bp4}）</li>
+</ol>
+</div>
+
+\begin{equation}
+\pdiff{\ell}{\bm{W}^{(l)}}=\bm{\delta}^{(l)}\,\bm{z}^{(l-1)\tp} \label{eq:15-bp3}
+\end{equation}
+\begin{equation}
+\pdiff{\ell}{\bm{b}^{(l)}}=\bm{\delta}^{(l)} \label{eq:15-bp4}
+\end{equation}
+
+<p>式 \eqref{eq:15-bp3} は「重みの勾配＝（受け手の誤差）×（送り手の出力）」と読める．送り手の出力 $z^{(l-1)}_i$ が 0 なら，その重みの勾配も 0 である（15.6 節の「全部 0 の初期値」で効いてくる）．</p>
+
+<p><strong>ミニバッチへの拡張</strong>．ミニバッチの損失 $L=\frac1B\sum_{n\in\mathcal{B}}\ell_n$ の勾配は，微分の線形性から 1 個ずつの勾配の平均である．</p>
+\begin{equation}
+\begin{aligned}
+\pdiff{L}{\bm{W}^{(l)}}&=\frac1B\sum_{n\in\mathcal{B}}\bm{\delta}^{(l)}_n\bm{z}^{(l-1)\tp}_n\\
+&=\frac1B\,\bm{\Delta}^{(l)}\bm{Z}^{(l-1)\tp}
+\end{aligned} \label{eq:15-batch}
+\end{equation}
+<p>ここで $\bm{\Delta}^{(l)}\in\R^{D_l\times B}$ は各データの $\bm{\delta}^{(l)}_n$ を列に並べた行列，$\bm{Z}^{(l-1)}\in\R^{D_{l-1}\times B}$ は $\bm{z}^{(l-1)}_n$ を列に並べた行列である．外積の和が 1 回の行列積になるので，ミニバッチの計算は行列演算の装置（GPU など）で効率よく行える．</p>
+
+<h3>15.2.5 手順と計算量</h3>
+
+<ol>
+  <li><strong>順伝播</strong>：$l=1,\dots,n_{\mathrm{layer}}$ の順に式 \eqref{eq:15-forward} で $\bm{a}^{(l)}$，$\bm{z}^{(l)}$ を計算し，<strong>すべて保存する</strong>．最後に $\ell$ を計算する．</li>
+  <li><strong>逆伝播</strong>：$\bm{\delta}^{(n_{\mathrm{layer}})}$ から始め，$l=n_{\mathrm{layer}},\dots,1$ の順に式 \eqref{eq:15-bp3}・\eqref{eq:15-bp4} で勾配を作り，式 \eqref{eq:15-bp2} で $\bm{\delta}^{(l-1)}$ へ進む．保存した $\bm{a}^{(l)}$，$\bm{z}^{(l-1)}$ をここで使う．</li>
+</ol>
+
+<pre><code>import numpy as np
+
+def backprop(Ws, bs, x, y, h, dh):
+    """1 個のデータ (x, y) について，全層の dl/dW と dl/db を返す．
+    隠れ層の活性化は h（導関数 dh），出力は sigmoid＋交差エントロピー．"""
+    n_layer = len(Ws)
+    zs, acts = [x], []                      # z^(0)=x, ..., z^(n_layer)
+    for l in range(n_layer):                # 順伝播（a と z を保存）
+        a = Ws[l] @ zs[-1] + bs[l]
+        acts.append(a)
+        zs.append(h(a) if l &lt; n_layer - 1 else 1 / (1 + np.exp(-a)))
+    delta = zs[-1] - y                      # 出力層の誤差 δ^(n_layer)
+    gW, gb = [None] * n_layer, [None] * n_layer
+    for l in reversed(range(n_layer)):      # 逆伝播
+        gW[l] = np.outer(delta, zs[l])      # δ^(l) z^(l-1)ᵀ
+        gb[l] = delta
+        if l &gt; 0:
+            delta = dh(acts[l - 1]) * (Ws[l].T @ delta)
+    return gW, gb</code></pre>
+<p class="codecap">コード15.1　誤差逆伝播の最小の実装（numpy）．Python のリストは 0 始まりなので，<code>Ws[l]</code> が本文の $\bm{W}^{(l+1)}$，<code>zs[l]</code> が $\bm{z}^{(l)}$ に当たる．15.3 節の重みを入れると，表15.2 の勾配が得られる．</p>
+
+<p>計算量を数える．掛け算と足し算の組（積和）の回数で測ると，順伝播の主な手間は行列とベクトルの積で $\sum_{l=1}^{n_{\mathrm{layer}}}D_lD_{l-1}$ 回である．逆伝播では，式 \eqref{eq:15-bp2} の $\bm{W}^{\tp}\bm{\delta}$ が $\sum_{l=2}^{n_{\mathrm{layer}}}D_lD_{l-1}$ 回，式 \eqref{eq:15-bp3} の外積が $\sum_{l=1}^{n_{\mathrm{layer}}}D_lD_{l-1}$ 回で，合わせて<strong>順伝播の約 2 倍</strong>である．活性化関数とその導関数の計算は $\sum_lD_l$ 回の程度で，これより小さい．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.2　逆伝播と数値微分の手間を比べる</p>
+<p>入力 10 個，隠れ層 50 個を 2 段，出力 1 個のネットワーク（10–50–50–1）を考える．(1) 重みとバイアスの総数 $P$ を求めよ．(2) 1 個のデータについて，順伝播と逆伝播の積和の回数を求めよ．(3) すべてのパラメーターの偏微分を中心差分 $[\ell(w+\epsilon)-\ell(w-\epsilon)]/(2\epsilon)$ で作ると，順伝播を何回行う必要があるか．積和の回数で逆伝播の何倍か．</p>
+<p><strong>解答</strong>　(1) 第 $l$ 層のパラメーターは $D_l(D_{l-1}+1)$ 個なので，$P=50\times11+50\times51+1\times51$ $=550+2550+51=3151$．</p>
+<p>(2) 順伝播：$50\times10+50\times50+1\times50$ $=500+2500+50=3050$ 回．逆伝播：$\bm{W}^{\tp}\bm{\delta}$ が $50\times50+1\times50=2550$ 回（第 1 層より前へは戻さない），外積が $3050$ 回で，計 $5600$ 回．順伝播と逆伝播を合わせて $8650$ 回で，順伝播だけの約 $2.8$ 倍である．</p>
+<p>(3) パラメーター 1 個につき $\ell(w+\epsilon)$ と $\ell(w-\epsilon)$ の 2 回なので $2P=6302$ 回の順伝播が要る．積和は $6302\times3050=1.92\times10^{7}$ 回で，逆伝播（順伝播込みで 8650 回）の約 $2.2\times10^{3}$ 倍である．パラメーターの数 $P$ に比例して差が広がる．</p>
+</div>
+
+<div class="box why">
+<p class="box-title">なぜ逆向きなのか</p>
+<p>損失 $\ell$ は<strong>スカラー 1 個</strong>，パラメーターは<strong>多数</strong>である．出力の側から始めれば，$\partial\ell/\partial\bm{a}^{(l)}$ というベクトル 1 本を層ごとに 1 回更新するだけで，その層の全パラメーターの偏微分が外積で得られる．入力の側から始めると，「どのパラメーターを動かしたか」ごとに別の計算が要る．この非対称は 15.9 節の自動微分の「逆モード」と「順モード」の違いそのものである．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-3">15.3 数値で追う — 2–2–1 のネットワークの 1 ステップ</h2>
+
+<h3>15.3.1 設定</h3>
+
+<p>シミュレーター15.1 の既定値と同じ，入力 2 個・隠れユニット 2 個・出力 1 個（2–2–1）のネットワークで，1 個のデータについて順伝播・逆伝播・重みの更新を全部の数値で追う．隠れ層の活性化は tanh，出力は sigmoid，損失は交差エントロピーである．</p>
+<ul>
+  <li>データ：$\bm{x}=(1.0,\ 0.5)^{\tp}$，$y=1$（無次元の数値例）．</li>
+  <li>重み：$\bm{W}^{(1)}=\begin{pmatrix}0.5&amp;-0.3\\0.8&amp;0.2\end{pmatrix}$（1 行目が隠れユニット 1 への重み），$\bm{b}^{(1)}=(0.1,\ -0.1)^{\tp}$，$\bm{W}^{(2)}=(1.0,\ -1.0)\in\R^{1\times2}$，$b^{(2)}=0.2$．</li>
+  <li>学習率 $\eta=0.5$．パラメーターは全部で $2\times2+2+2+1=9$ 個．</li>
+</ul>
+<p>数値は 6 桁に丸めて書くが，次の段の計算には丸める前の値を使う（最後の桁が 1 ずれることがある）．</p>
+
+<h3>15.3.2 順伝播</h3>
+
+$$
+\begin{aligned}
+a^{(1)}_1&=0.5\times1.0+(-0.3)\times0.5+0.1=0.45,\\
+a^{(1)}_2&=0.8\times1.0+0.2\times0.5+(-0.1)=0.8 .
+\end{aligned}
+$$
+<p>tanh を通すと $z^{(1)}_1=\tanh0.45=0.421899$，$z^{(1)}_2=\tanh0.8=0.664037$．出力層は</p>
+$$
+\begin{aligned}
+a^{(2)}&=1.0\times0.421899+(-1.0)\times0.664037+0.2\\
+&=-0.0421378,
+\end{aligned}
+$$
+<p>$\hat{y}=\sigma(-0.0421378)=0.489467$，損失は $y=1$ なので $L=-\ln\hat{y}=0.714438$ である．$\hat{y}$ が 0.5 をわずかに下回るので，損失は「五分五分」の値 $\ln2=0.693147$ より少し大きい．</p>
+
+<div class="tablewrap">
+<table id="tab15-1">
+<caption>表15.1　順伝播の値（2–2–1，$\bm{x}=(1.0,0.5)^{\tp}$，$y=1$）</caption>
+<thead><tr><th>量</th><th>ユニット 1</th><th>ユニット 2</th><th>計算</th></tr></thead>
+<tbody>
+<tr><td>$a^{(1)}_j$</td><td>0.450000</td><td>0.800000</td><td>$\bm{W}^{(1)}\bm{x}+\bm{b}^{(1)}$</td></tr>
+<tr><td>$z^{(1)}_j$</td><td>0.421899</td><td>0.664037</td><td>$\tanh a^{(1)}_j$</td></tr>
+<tr><td>$a^{(2)}$</td><td colspan="2">−0.0421378</td><td>$\bm{W}^{(2)}\bm{z}^{(1)}+b^{(2)}$</td></tr>
+<tr><td>$\hat{y}$</td><td colspan="2">0.489467</td><td>$\sigma(a^{(2)})$</td></tr>
+<tr><td>$L$</td><td colspan="2">0.714438</td><td>$-\ln\hat{y}$</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>15.3.3 逆伝播</h3>
+
+<p>出力層の誤差は式 \eqref{eq:15-bp1} より $\delta^{(2)}=\hat{y}-y=0.489467-1=-0.510533$．出力層の重みとバイアスの勾配は式 \eqref{eq:15-bp3}・\eqref{eq:15-bp4} より</p>
+$$
+\begin{aligned}
+\pdiff{L}{W^{(2)}_1}&=\delta^{(2)}z^{(1)}_1\\
+&=-0.510533\times0.421899=-0.215393,\\
+\pdiff{L}{W^{(2)}_2}&=\delta^{(2)}z^{(1)}_2\\
+&=-0.510533\times0.664037=-0.339013,
+\end{aligned}
+$$
+<p>$\partial L/\partial b^{(2)}=-0.510533$ である．</p>
+<p>隠れ層へ戻す．tanh の導関数は $h'(a)=1-\tanh^{2}a=1-z^{2}$ なので，保存してある $z^{(1)}_j$ から $h'(a^{(1)}_1)=1-0.421899^{2}=0.822001$，$h'(a^{(1)}_2)=1-0.664037^{2}=0.559055$．$\bm{W}^{(2)\tp}\delta^{(2)}=(1.0,\,-1.0)^{\tp}\times(-0.510533)$ $=(-0.510533,\ 0.510533)^{\tp}$ と成分ごとに掛けて，式 \eqref{eq:15-bp2} より</p>
+$$
+\begin{aligned}
+\delta^{(1)}_1&=0.822001\times(-0.510533)=-0.419659,\\
+\delta^{(1)}_2&=0.559055\times0.510533=0.285416 .
+\end{aligned}
+$$
+<p>二つの隠れユニットの誤差の符号が逆なのは，$W^{(2)}_1=+1.0$ と $W^{(2)}_2=-1.0$ の符号が逆だからである．入力層側の勾配は $\partial L/\partial W^{(1)}_{ji}=\delta^{(1)}_jx_i$ で，$x_2/x_1=0.5$ なので 2 列目はちょうど 1 列目の半分になる．</p>
+
+<div class="tablewrap">
+<table id="tab15-2">
+<caption>表15.2　逆伝播で得た誤差と勾配（9 個のパラメーター）</caption>
+<thead><tr><th>量</th><th>値</th><th>式</th></tr></thead>
+<tbody>
+<tr><td>$\delta^{(2)}$</td><td>−0.510533</td><td>$\hat{y}-y$</td></tr>
+<tr><td>$h'(\bm{a}^{(1)})$</td><td>(0.822001, 0.559055)</td><td>$1-z_j^{2}$</td></tr>
+<tr><td>$\bm{\delta}^{(1)}$</td><td>(−0.419659, 0.285416)</td><td>式 \eqref{eq:15-bp2}</td></tr>
+<tr><td>$\partial L/\partial\bm{W}^{(2)}$</td><td>(−0.215393, −0.339013)</td><td>$\delta^{(2)}\bm{z}^{(1)\tp}$</td></tr>
+<tr><td>$\partial L/\partial b^{(2)}$</td><td>−0.510533</td><td>$\delta^{(2)}$</td></tr>
+<tr><td>$\partial L/\partial\bm{W}^{(1)}$</td><td>((−0.419659, −0.209829), (0.285416, 0.142708))</td><td>$\bm{\delta}^{(1)}\bm{x}^{\tp}$</td></tr>
+<tr><td>$\partial L/\partial\bm{b}^{(1)}$</td><td>(−0.419659, 0.285416)</td><td>$\bm{\delta}^{(1)}$</td></tr>
+<tr><td>$\norm{\bm{g}}^{2}$（9 個の 2 乗和）</td><td>1.00151</td><td>$\norm{\bm{g}}=1.00076$</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure id="fig15-3">
+<svg role="img" aria-label="2–2–1 のネットワークの図．入力 1.0 と 0.5，隠れユニットの a と z，出力の y hat と損失，各重みの値と勾配，各ユニットの delta を書き込んだもの．" viewBox="0 0 640 368" style="max-width:640px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図15.3　2–2–1 のネットワークの順伝播と逆伝播の値</title>
+<g stroke-width="2">
+<line x1="96" y1="90" x2="284" y2="90" stroke="#5b2a5e" stroke-width="2.2"></line>
+<line x1="94" y1="100" x2="286" y2="225" stroke="#5b2a5e" stroke-width="2.6"></line>
+<line x1="94" y1="225" x2="286" y2="100" stroke="#5b2a5e" stroke-width="1.6" stroke-dasharray="7 4"></line>
+<line x1="96" y1="235" x2="284" y2="235" stroke="#5b2a5e" stroke-width="1.4"></line>
+<line x1="336" y1="95" x2="514" y2="155" stroke="#5b2a5e" stroke-width="3"></line>
+<line x1="336" y1="230" x2="514" y2="170" stroke="#5b2a5e" stroke-width="3" stroke-dasharray="7 4"></line>
+</g>
+<g fill="#fff" stroke="#1a1a1a" stroke-width="1.6">
+<circle cx="70" cy="90" r="26"></circle><circle cx="70" cy="235" r="26"></circle>
+<circle cx="310" cy="90" r="26"></circle><circle cx="310" cy="235" r="26"></circle>
+<circle cx="540" cy="162" r="28" fill="#f5eef5" stroke="#5b2a5e"></circle>
+</g>
+<g font-size="15" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif">
+<text x="70" y="95"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<text x="70" y="240"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="11">2</tspan></text>
+<text x="310" y="95">h<tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<text x="310" y="240">h<tspan baseline-shift="sub" font-size="11">2</tspan></text>
+<text x="540" y="167"><tspan font-style="italic">ŷ</tspan></text>
+</g>
+<g font-size="14" fill="#5b2a5e" text-anchor="middle">
+<text x="22" y="95">1.0</text><text x="22" y="240">0.5</text>
+<text x="310" y="40"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">a</tspan> = 0.45，<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">z</tspan> = 0.4219</text>
+<text x="310" y="290"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">a</tspan> = 0.8，<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">z</tspan> = 0.6640</text>
+<text x="560" y="105"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">ŷ</tspan> = 0.4895</text>
+<text x="560" y="125"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">L</tspan> = 0.7144</text>
+
+</g>
+<g>
+<text x="190" y="82" transform="rotate(0 190 82)" text-anchor="middle" font-size="13.5"><tspan fill="#5b2a5e">0.5</tspan> <tspan fill="#b34d00">(−0.4197)</tspan></text>
+<text x="190" y="256" transform="rotate(0 190 256)" text-anchor="middle" font-size="13.5"><tspan fill="#5b2a5e">0.2</tspan> <tspan fill="#b34d00">(0.1427)</tspan></text>
+<text x="6" y="340" font-size="13" text-anchor="start" fill="#1a1a1a">交差する線：<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="10">1</tspan>→h<tspan baseline-shift="sub" font-size="10">2</tspan>（実線） <tspan fill="#5b2a5e">0.8</tspan> <tspan fill="#b34d00">(0.2854)</tspan></text>
+<text x="6" y="360" font-size="13" text-anchor="start" fill="#1a1a1a">　　　　　 <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="10">2</tspan>→h<tspan baseline-shift="sub" font-size="10">1</tspan>（破線） <tspan fill="#5b2a5e">−0.3</tspan> <tspan fill="#b34d00">(−0.2098)</tspan></text>
+<text x="428" y="114" transform="rotate(18.6 428 114)" text-anchor="middle" font-size="13.5"><tspan fill="#5b2a5e">1.0</tspan> <tspan fill="#b34d00">(−0.2154)</tspan></text>
+<text x="432" y="226" transform="rotate(-18.6 432 226)" text-anchor="middle" font-size="13.5"><tspan fill="#5b2a5e">−1.0</tspan> <tspan fill="#b34d00">(−0.3390)</tspan></text>
+</g>
+<g font-size="13.5" fill="#b34d00" text-anchor="middle">
+<text x="310" y="60"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">δ</tspan> = −0.4197</text>
+<text x="310" y="313"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">δ</tspan> = 0.2854</text>
+<text x="560" y="212"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">δ</tspan> = −0.5105</text>
+
+</g>
+</svg>
+<figcaption>図15.3　15.3 節の 2–2–1 のネットワーク．茄子紺の数字は順伝播の値と重み（線の太さは $\abs{w}$ に比例，正の重みは実線，負の重みは破線），朱の数字は逆伝播の値：ユニットの脇の $\delta$ と，線の脇の括弧内の $\partial L/\partial w$（交差する 2 本の線の値は左下に書いた）．4 桁に丸めた．シミュレーター15.1 の図と同じ描き方である．</figcaption>
+</figure>
+
+<h3>15.3.4 1 回の更新と，損失が減ったことの確認</h3>
+
+<p>勾配降下法 $w\leftarrow w-\eta\,\partial L/\partial w$（$\eta=0.5$）で 9 個のパラメーターを一斉に更新する．たとえば $W^{(1)}_{11}$ は $0.5-0.5\times(-0.419659)$ $=0.709829$ に，$W^{(2)}_2$ は $-1.0-0.5\times(-0.339013)$ $=-0.830494$ になる．</p>
+
+<div class="tablewrap">
+<table id="tab15-3">
+<caption>表15.3　更新後のパラメーターと，同じデータでの順伝播</caption>
+<thead><tr><th>量</th><th>更新前</th><th>更新後</th></tr></thead>
+<tbody>
+<tr><td>$\bm{W}^{(1)}$</td><td>((0.5, −0.3), (0.8, 0.2))</td><td>((0.709829, −0.195085), (0.657292, 0.128646))</td></tr>
+<tr><td>$\bm{b}^{(1)}$</td><td>(0.1, −0.1)</td><td>(0.309829, −0.242708)</td></tr>
+<tr><td>$\bm{W}^{(2)}$</td><td>(1.0, −1.0)</td><td>(1.10770, −0.830494)</td></tr>
+<tr><td>$b^{(2)}$</td><td>0.2</td><td>0.455266</td></tr>
+<tr><td>$\bm{a}^{(1)}$</td><td>(0.45, 0.8)</td><td>(0.922116, 0.478907)</td></tr>
+<tr><td>$\bm{z}^{(1)}$</td><td>(0.421899, 0.664037)</td><td>(0.726897, 0.445368)</td></tr>
+<tr><td>$a^{(2)}$</td><td>−0.0421378</td><td>0.890573</td></tr>
+<tr><td>$\hat{y}$</td><td>0.489467</td><td>0.709008</td></tr>
+<tr><td>$L$</td><td>0.714438</td><td>0.343888</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>損失は $0.714438$ から $0.343888$ へ，$0.370550$ だけ減った．1 次の Taylor 展開で予想される減少量は</p>
+\begin{equation}
+\begin{aligned}
+L(\bm{w}-\eta\bm{g})&\approx L(\bm{w})-\eta\,\bm{g}^{\tp}\bm{g}\\
+&=L(\bm{w})-\eta\norm{\bm{g}}^{2}
+\end{aligned} \label{eq:15-firstorder}
+\end{equation}
+<p>から $0.5\times1.00151=0.500756$ である（$\bm{g}$ は 9 個の偏微分を並べた勾配ベクトル）．実際の減少はこれより小さい．$\eta=0.5$ は 1 次の近似が成り立つほど小さくはなく，損失の曲がり（2 次の項）が効いているためである．<a href="#fig15-4">図15.4</a>(b) のように，$\eta\to0$ では実際の値が 1 次の近似に近づく．</p>
+
+<figure id="fig15-4">
+<img src="figs/ch15_fig15-4.svg" alt="左の図は横軸に更新の回数，縦軸に損失をとり，同じデータで学習率 0.5 の更新を 10 回繰り返したときの損失が 0.7144，0.3439，0.2257 と減っていく様子．右の図は横軸に学習率，縦軸に 1 回の更新後の損失をとった曲線と，1 次の近似の直線．学習率が小さいと両者は一致し，大きくなると離れる．" style="max-width:640px;width:100%">
+<figcaption>図15.4　15.3 節の 2–2–1 のネットワークと 1 個のデータ．(a) $\eta=0.5$ で更新を繰り返したときの損失（10 回）．(b) 1 回の更新後の損失を学習率 $\eta$（0.05〜5，0.05 刻み）の関数として描いたもの（実線）と，1 次の近似 \eqref{eq:15-firstorder}（破線）．丸は $\eta=0.05,\,0.5,\,1,\,2,\,5$．乱数は使わない．</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題15.3　目標値を $y=0$ にしたら</p>
+<p>15.3.1 項と同じ重みと入力で，目標値だけを $y=0$ にする．(1) 損失 $L$ を求めよ．(2) $\delta^{(2)}$，$\bm{\delta}^{(1)}$，$\partial L/\partial\bm{W}^{(2)}$ を求め，$y=1$ のときと比べよ．(3) $\eta=0.5$ で 1 回更新した後の $\hat{y}$ と $L$ は 0.272705，0.318423 である．$\hat{y}$ はどちらへ動いたか．</p>
+<p><strong>解答</strong>　(1) 順伝播は目標値によらないので $\hat{y}=0.489467$ のまま．$y=0$ の交差エントロピーは $L=-\ln(1-\hat{y})$ $=-\ln0.510533=0.672300$．</p>
+<p>(2) $\delta^{(2)}=\hat{y}-y=0.489467$（正）．$\delta^{(1)}_1=0.822001\times(1.0\times0.489467)$ $=0.402343$，$\delta^{(1)}_2=0.559055\times(-1.0\times0.489467)$ $=-0.273639$．$\partial L/\partial\bm{W}^{(2)}$ $=0.489467\times(0.421899,\ 0.664037)$ $=(0.206506,\ 0.325024)$．</p>
+<p>$y=1$ のときと比べると，$\delta^{(2)}$ の符号が反転したので，式 \eqref{eq:15-bp2}〜\eqref{eq:15-bp4} によって<strong>すべての勾配の符号が反転</strong>している．大きさが少し違うのは，$\abs{\hat{y}-y}$ が $0.510533$ から $0.489467$ に変わったためである（比は 0.958738）．</p>
+<p>(3) $\hat{y}$ は 0.489467 から 0.272705 へ，$y=0$ の側へ動き，損失は 0.672300 から 0.318423 へ下がった．</p>
+</div>
+
+<p>以上の計算を，ボタンを押しながら 1 段ずつ確かめられるのが次のシミュレーターである．</p>
+
+<div class="box sim" id="sim15-1">
+<p class="box-title">シミュレーター15.1　1 ステップを数値で追う</p>
+<p>2–2–1 のネットワーク（隠れ層 tanh，出力 sigmoid，交差エントロピー）について，順伝播・逆伝播・重みの更新を 1 段ずつ進め，図と表に数値を足していく装置である．既定の重み・入力・学習率は 15.3.1 項と同じである．装置は隠れ層 1 層・出力 1 個に限り，素朴な勾配降下法だけを使う（図の数値は 4 桁，表は 6 桁に丸めて表示する）．</p>
+<iframe class="qsim-embed" src="sim/neural-net.html?embed=1&amp;only=trace" title="ニューラルネットワークのシミュレーター（1 ステップを数値で追う）" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/neural-net.html#trace" target="_blank" rel="noopener noreferrer">別ウィンドウで大きく開く &rarr;</a></p>
+<p><strong>操作と観察</strong></p>
+<ol class="sim-steps">
+  <li>開いた直後の既定のまま「順伝播」を押す → 図と「数値の表」に $a^{(1)}=(0.45,\,0.8)$，$z^{(1)}=(0.421899,\,0.664037)$，$a^{(2)}=-0.0421378$，$\hat{y}=0.489467$，$L=0.714438$ が出る．表15.1 と比べる．</li>
+  <li>「逆伝播」を押す → $\delta^{(2)}=-0.510533$，$\delta^{(1)}=(-0.419659,\,0.285416)$ と各重みの $\partial L/\partial w$ が出る．表15.2 と，式 \eqref{eq:15-bp2}・\eqref{eq:15-bp3} に数値を入れた値を比べる．</li>
+  <li>「重みを更新」を押す → 図の線の脇が「旧 → 新」の形になり，更新後の損失 0.343888 と，1 次の近似の減少量 $-\eta\norm{\bm{g}}^{2}=-0.500756$ が読み出しに出る．表15.3 と式 \eqref{eq:15-firstorder} と比べる．</li>
+  <li>更新の後はボタンの名前が「順伝播（更新後の重みで）」に変わる．これを押すと，更新後の重みで次の 1 ステップが始まる．「逆伝播」「重みを更新」を繰り返す → 損失は 0.714438 → 0.343888 → 0.225670 → 0.166949 → 0.132260 → 0.109492 と減る（<a href="#fig15-4">図15.4</a>(a)）．</li>
+  <li>「最初に戻す」を押してから，目標値を「$y$ = 0」にして 3 段を進める → 例題15.3 の値になり，すべての勾配の符号が $y=1$ のときと逆になる．</li>
+  <li>「最初に戻す」を押し，学習率 $\eta$ を 0.05，1，2，5 に変えて 3 段を進める → 更新後の損失は 0.665712，0.170650，0.0607613，0.0157109 になる（<a href="#fig15-4">図15.4</a>(b)）．</li>
+</ol>
+<p><strong>操作後の問い</strong></p>
+<ol class="sim-questions">
+  <li>$\eta=5$ では 1 回の更新で損失が 0.0157 まで下がり，$\hat{y}=0.984$ になる．このとき $\bm{W}^{(1)}$ は ((2.59829, 0.749147), (−0.627080, −0.513540)) と大きく変わる．これは良い学習と言えるか．
+    <details class="ans"><summary>答えの例</summary><p>この 1 個のデータには合ったが，重みが 1 回で大きく動き，隠れユニット 2 への重みの符号まで反転した．多くのデータで学習するとき，1 個のデータに合わせて重みを大きく動かすと，他のデータで損失が増え，損失が振動したり発散したりしやすい（<a href="ch07_optimization.html#sec7-2">第7章 7.2 節</a>）．1 個のデータの損失が下がったことは，学習率が適切であることの証拠にならない．</p></details></li>
+  <li>入力を $x_2=0$ にすると，どの勾配が 0 になるか．
+    <details class="ans"><summary>答えの例</summary><p>式 \eqref{eq:15-bp3} より $\partial L/\partial W^{(1)}_{j2}=\delta^{(1)}_jx_2=0$（$j=1,2$）．入力 $x_2$ から出る 2 本の重みは，このデータでは動かない．送り手の値が 0 の重みは学習されない．</p></details></li>
+  <li>手順 4 で，同じデータで更新を続けると損失の減り方が鈍るのはなぜか．
+    <details class="ans"><summary>答えの例</summary><p>$\hat{y}$ が 1 に近づくと $\delta^{(2)}=\hat{y}-1$ が 0 に近づき，式 \eqref{eq:15-bp2}〜\eqref{eq:15-bp4} の全部の勾配が小さくなるため，1 回の更新で動く量も減る．2 回目の更新の直前で $\norm{\bm{g}}^{2}=0.282656$（1 回目は 1.00151）である．</p></details></li>
+</ol>
+<noscript><p>JavaScript が無効のため，この装置は動きません．何を確かめる装置かは上の説明と本文の式を読んでください．</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-4">15.4 勾配確認 — 差分で答え合わせをする</h2>
+
+<h3>15.4.1 なぜ確かめるのか</h3>
+
+<p>逆伝播の式は短いが，実装では添字の入れ替え，転置の付け忘れ，活性化関数の導関数の取り違えなどの誤りが起こりやすい．しかも，勾配が少し間違っていても損失はそれなりに下がることが多く，学習曲線を見ただけでは誤りに気づけない．そこで，逆伝播で求めた勾配を，損失の値だけから作った<strong>差分</strong>と比べる．これを<strong>勾配確認</strong>（gradient check）という．</p>
+
+<div class="box def">
+<p class="box-title">定義15.2　前進差分と中心差分</p>
+<p>パラメーター $w$ の 1 つだけを $\pm\epsilon$（$\epsilon\gt0$ は小さな刻み）動かし，他を固定した損失の値から</p>
+\begin{equation}
+\begin{aligned}
+\hat{g}_{\mathrm{fwd}}&=\frac{L(w{+}\epsilon)-L(w)}{\epsilon},\\
+\hat{g}_{\mathrm{c}}&=\frac{L(w{+}\epsilon)-L(w{-}\epsilon)}{2\epsilon}
+\end{aligned} \label{eq:15-diff}
+\end{equation}
+<p>を作る．前者を<strong>前進差分</strong>，後者を<strong>中心差分</strong>という．どちらも $\epsilon\to0$ で $\partial L/\partial w$ に近づく．</p>
+</div>
+
+<h3>15.4.2 打ち切り誤差 — 中心差分は $O(\epsilon^{2})$</h3>
+
+<div class="box derive">
+<p class="box-title">導出：差分の打ち切り誤差</p>
+<p>$L$ が $w$ について 3 回微分可能とし，$L'=\partial L/\partial w$，$L''$，$L'''$ を $w$ での値とする．Taylor 展開（<a href="../UnivMath_Textbook/ch04_taylor_expansion.html#sec4-2">大学数学 第4章 4.2</a>）より</p>
+$$
+\begin{aligned}
+L(w+\epsilon)&=L+\epsilon L'+\tfrac{\epsilon^{2}}{2}L''+\tfrac{\epsilon^{3}}{6}L'''+O(\epsilon^{4}),\\
+L(w-\epsilon)&=L-\epsilon L'+\tfrac{\epsilon^{2}}{2}L''-\tfrac{\epsilon^{3}}{6}L'''+O(\epsilon^{4}).
+\end{aligned}
+$$
+<p>1 行目から $L$ を引いて $\epsilon$ で割ると</p>
+$$
+\hat{g}_{\mathrm{fwd}}=L'+\tfrac{\epsilon}{2}L''+O(\epsilon^{2}).
+$$
+<p>1 行目から 2 行目を引くと，$L$ と $\epsilon^{2}$ の項が消え，$\epsilon$ と $\epsilon^{3}$ の項が 2 倍になる．$2\epsilon$ で割ると</p>
+$$
+\hat{g}_{\mathrm{c}}=L'+\tfrac{\epsilon^{2}}{6}L'''+O(\epsilon^{4}).
+$$
+<p>（$\epsilon^{4}$ の項も 2 行で同じ符号なので引き算で消え，残る次の項は $\epsilon^{5}/(2\epsilon)$ の大きさである．）</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>したがって打ち切り誤差は，前進差分が約 $\tfrac{\epsilon}{2}\abs{L''}$（$\epsilon$ の 1 乗），中心差分が約 $\tfrac{\epsilon^{2}}{6}\abs{L'''}$（$\epsilon$ の 2 乗）である．$\epsilon$ を 1/10 にすると，前進差分の誤差は 1/10，中心差分の誤差は 1/100 になる．</p>
+
+<h3>15.4.3 丸め誤差 — 刻みを小さくしすぎない</h3>
+
+<p>計算機の倍精度の浮動小数点数は，相対誤差が約 $\epsilon_{\mathrm{mach}}=2^{-53}\approx1.1\times10^{-16}$ で丸められる．$L(w+\epsilon)$ と $L(w-\epsilon)$ にはそれぞれ $\epsilon_{\mathrm{mach}}\abs{L}$ 程度の丸め誤差があり，差をとるとほぼ同じ数どうしの引き算になって，丸め誤差だけが残る．それを $2\epsilon$ で割るので，丸め誤差は約 $\epsilon_{\mathrm{mach}}\abs{L}/\epsilon$ になり，$\epsilon$ を小さくするほど<strong>増える</strong>．中心差分の全体の誤差の目安は</p>
+\begin{equation}
+E(\epsilon)\approx\frac{\epsilon^{2}}{6}\abs{L'''}+\frac{\epsilon_{\mathrm{mach}}\abs{L}}{\epsilon} \label{eq:15-err-total}
+\end{equation}
+<p>で，$\diff{E}{\epsilon}=\tfrac{\epsilon}{3}\abs{L'''}-\epsilon_{\mathrm{mach}}\abs{L}/\epsilon^{2}=0$ から，誤差が最小になる刻みは $\epsilon^{*}=(3\epsilon_{\mathrm{mach}}\abs{L}/\abs{L'''})^{1/3}$ である．$L$ と $L'''$ が 1 の程度なら $\epsilon^{*}\approx(3\times10^{-16})^{1/3}\approx7\times10^{-6}$，つまり $10^{-5}$ の付近になる．前進差分では同じ考え方で $\epsilon^{*}\approx2\sqrt{\epsilon_{\mathrm{mach}}\abs{L}/\abs{L''}}$，$10^{-8}$ の付近である（演習15.4）．</p>
+
+<figure id="fig15-5">
+<img src="figs/ch15_fig15-5.svg" alt="横軸に差分の刻み epsilon を 10 のマイナス 12 乗から 10 のマイナス 1 乗まで対数でとり，縦軸に 9 個のパラメーターでの逆伝播と差分の最大の絶対誤差を対数でとったグラフ．中心差分は epsilon が 10 のマイナス 5 乗で最小 3 かける 10 のマイナス 12 乗になる V 字，前進差分は 10 のマイナス 8 乗付近で最小になる V 字．" style="max-width:640px;width:100%">
+<figcaption>図15.5　勾配確認の誤差と刻み $\epsilon$（15.3 節の 2–2–1 と既定の重み，9 個のパラメーターでの最大の絶対誤差 $\abs{g-\hat{g}}$，34 点）．中心差分（実線・丸）は右側で傾き 2，前進差分（破線・四角）は傾き 1 で増える（打ち切り誤差）．左側ではどちらも傾き −1 で増える（丸め誤差）．灰の点線は傾きの目安．シミュレーター15.2 の図と同じ計算である．</figcaption>
+</figure>
+
+<h3>15.4.4 何と比べて「合っている」とするか</h3>
+
+<p>勾配の大きさは成分ごとに違うので，絶対誤差ではなく<strong>相対誤差</strong>で判断する．成分ごとの相対誤差 $\abs{g-\hat{g}}/\max(\abs{g},\abs{\hat{g}})$ は，勾配がもともと 0 に近い成分で大きく見えるので，全パラメーターをまとめた<strong>ベクトルとしての相対誤差</strong></p>
+\begin{equation}
+r=\frac{\norm{\bm{g}-\hat{\bm{g}}}}{\max\bigl(\norm{\bm{g}},\ \norm{\hat{\bm{g}}}\bigr)} \label{eq:15-relerr}
+\end{equation}
+<p>を使うのが安全である．倍精度・中心差分・$\epsilon\approx10^{-5}$ で $r$ が $10^{-6}$ を大きく超えたら，実装の誤りを疑う．15.3 節のネットワークでは $\epsilon=10^{-5}$ で $r=6.8\times10^{-12}$ である．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.4　$W^{(1)}_{11}$ の勾配を中心差分で確かめる</p>
+<p>15.3 節のネットワークで，$W^{(1)}_{11}=0.5$ だけを動かした損失は $L(0.5)=0.7144379956$，$L(0.501)=0.7140185984$，$L(0.499)=0.7148579157$ である．(1) $\epsilon=10^{-3}$ の中心差分と前進差分を求めよ．(2) 逆伝播の値 $-0.4196586573$ との差を求めよ．(3) この点で $L''\approx0.5230$，$L'''\approx-0.0334$ である．(2) の差を 15.4.2 項の式で説明せよ．</p>
+<p><strong>解答</strong>　(1) 中心差分：</p>
+$$
+\begin{aligned}
+\hat{g}_{\mathrm{c}}&=\frac{0.7140185984-0.7148579157}{0.002}\\
+&=\frac{-0.0008393173}{0.002}=-0.4196586629 .
+\end{aligned}
+$$
+<p>前進差分：$\hat{g}_{\mathrm{fwd}}$ $=(0.7140185984-0.7144379956)/0.001$ $=-0.4193971861$（引き算の結果 $-0.0004193972$ を 0.001 で割った）．</p>
+<p>(2) 中心差分の差は $-0.4196586629-(-0.4196586573)$ $=-5.6\times10^{-9}$，前進差分の差は $-0.4193971861-(-0.4196586573)$ $=+2.61\times10^{-4}$ である．</p>
+<p>(3) 中心差分の打ち切り誤差の予想は $\tfrac{\epsilon^{2}}{6}L'''=\tfrac{10^{-6}}{6}\times(-0.0334)=-5.6\times10^{-9}$，前進差分は $\tfrac{\epsilon}{2}L''=\tfrac{10^{-3}}{2}\times0.5230=2.61\times10^{-4}$ で，どちらも符号まで一致する．同じ $\epsilon$ で中心差分は前進差分より 4 桁以上正確である．</p>
+</div>
+
+<div class="box sim" id="sim15-2">
+<p class="box-title">シミュレーター15.2　勾配確認</p>
+<p>逆伝播の勾配と，差分による近似の差を，刻み $\epsilon$ の関数として描く装置である．既定では 15.3 節の 2–2–1 とデータ 1 個（シミュレーター15.1 のいまの重み）を確かめる．</p>
+<iframe class="qsim-embed" src="sim/neural-net.html?embed=1&amp;only=gradcheck" title="ニューラルネットワークのシミュレーター（勾配確認）" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/neural-net.html#gradcheck" target="_blank" rel="noopener noreferrer">別ウィンドウで大きく開く &rarr;</a></p>
+<p><strong>操作と観察</strong></p>
+<ol class="sim-steps">
+  <li>開いた直後（確かめるネットワーク「① の 2–2–1」，差分の刻み $\epsilon=10^{-5}$，式に入れるパラメーター「W(1) 11」）→ 中心差分との最大の絶対誤差が $3.10\times10^{-12}$ 程度で，V 字の谷の底にあることを見る．「全パラメーターの比較」の表で $W^{(1)}_{11}$ の逆伝播の値 $-0.419659$ と中心差分が一致することを確かめる．</li>
+  <li>$\epsilon$ を $10^{-1}$ にする → 中心差分の最大誤差は $2.16\times10^{-4}$，前進差分は $2.60\times10^{-2}$．$\epsilon$ を $10^{-3}$ にする → $2.13\times10^{-8}$ と $2.61\times10^{-4}$．$\epsilon$ を 1/100 にして中心差分の誤差が約 1/10000，前進差分が約 1/100 になることを，15.4.2 項の式と比べる．</li>
+  <li>$\epsilon$ を $10^{-12}$ にする → 中心差分の誤差が $6.6\times10^{-5}$ まで悪化する．式 \eqref{eq:15-err-total} の第 2 項（丸め誤差）で説明する．</li>
+  <li>シミュレーター15.1 で重みを何回か更新してから，この装置の「いまの重みで確かめ直す」を押す → 重みが変わっても，$\epsilon=10^{-5}$ でベクトルとしての相対誤差 \eqref{eq:15-relerr} が $10^{-6}$ を大きく下回ることを確かめる．</li>
+</ol>
+<p><strong>操作後の問い</strong></p>
+<ol class="sim-questions">
+  <li>手順 3 で誤差が増えたのは，逆伝播が間違っているからか，差分が間違っているからか．
+    <details class="ans"><summary>答えの例</summary><p>差分のほうである．逆伝播の値は $\epsilon$ によらない．$\epsilon=10^{-12}$ では $L(w\pm\epsilon)$ の差が $10^{-12}$ 程度しかなく，$L\approx0.7$ の丸め誤差（$10^{-16}$ の程度）が差の $10^{-4}$ 程度を占めるので，差分の値そのものが不正確になる．</p></details></li>
+  <li>隠れ層を ReLU にしたネットワークで勾配確認をすると，ある重みだけ誤差が大きく出ることがある．なぜか．
+    <details class="ans"><summary>答えの例</summary><p>ReLU は $a=0$ で折れ曲がっていて微分できない．$a$ が 0 の近くにあるユニットでは，$w\pm\epsilon$ で $a$ の符号が変わると，差分は左右の傾きの平均のような値になり，逆伝播の値（片側の傾き）と一致しない．$\epsilon$ を小さくするか，折れ目の近くにあるデータを避けて確かめる．</p></details></li>
+</ol>
+<noscript><p>JavaScript が無効のため，この装置は動きません．何を確かめる装置かは上の説明と本文の式を読んでください．</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-5">15.5 ミニバッチ学習の手順と学習曲線</h2>
+
+<h3>15.5.1 エポックとミニバッチ</h3>
+
+<p>実際の学習では，データ $N$ 個の全部で勾配を計算するのではなく，<strong>ミニバッチ</strong>と呼ぶ小さな組（大きさ $B$）ごとに勾配を作って更新する（<a href="ch07_optimization.html#sec7-5">第7章 7.5 節</a>）．ミニバッチの勾配は全データの勾配の不偏推定で，そのばらつきは $1/\sqrt{B}$ に比例して小さくなる（第7章で証明した）．</p>
+
+<div class="box def">
+<p class="box-title">定義15.3　ミニバッチ確率的勾配降下法の 1 エポック</p>
+<ol>
+  <li>訓練データの番号 $1,\dots,N$ を乱数で並べ替える（<strong>シャッフル</strong>）．</li>
+  <li>並べ替えた列を先頭から $B$ 個ずつ区切り，ミニバッチ $\mathcal{B}_1,\mathcal{B}_2,\dots$ を作る（最後の組は $B$ 個に満たないことがある）．</li>
+  <li>各ミニバッチについて，順伝播と逆伝播で $\nabla L_{\mathcal{B}}=\frac{1}{\abs{\mathcal{B}}}\sum_{n\in\mathcal{B}}\nabla\ell_n$ を求め（式 \eqref{eq:15-batch}），$\bm{w}\leftarrow\bm{w}-\eta\nabla L_{\mathcal{B}}$ と更新する．</li>
+</ol>
+<p>すべての訓練データを 1 回ずつ使い終えるまでを <strong>1 エポック</strong>（epoch）という．1 エポックの更新の回数は $\lceil N/B\rceil$ 回（$N/B$ 以上の最小の整数）である．</p>
+</div>
+
+<p>シャッフルを毎エポック行うのは，同じ順番で同じ組を使い続けると，データの並び方（たとえば測定日の順，組成の順）がミニバッチの偏りとして勾配に入り込むからである．材料データは実験の順番に並んでいることが多いので，この点はとくに大切である．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.5　更新の回数を数える</p>
+<p>(1) 訓練データ $N=20$，$B=8$ のとき，1 エポックの更新の回数と，各ミニバッチの大きさを答えよ．2000 エポックで何回更新するか．(2) $N=100$，$B=8$ ではどうか．(3) $B=N$（全部）と $B=1$ では，同じ 300 エポックで更新の回数はそれぞれいくつか（$N=100$）．</p>
+<p><strong>解答</strong>　(1) $20/8=2.5$ なので $\lceil2.5\rceil=3$ 回．ミニバッチの大きさは 8，8，4 である．2000 エポックでは $3\times2000=6000$ 回．</p>
+<p>(2) $100/8=12.5$ なので 13 回（12 個の組が 8 個，最後の組が 4 個）．2000 エポックで 26000 回．</p>
+<p>(3) $B=N$ なら 1 エポックに 1 回で 300 回，$B=1$ なら 1 エポックに 100 回で 30000 回．エポックの数が同じでも，更新の回数は 100 倍違う．学習曲線の横軸がエポックか更新の回数かで，比べ方が変わることに注意する．</p>
+</div>
+
+<h3>15.5.2 学習曲線の読み方</h3>
+
+<p>エポックごとに<strong>訓練損失</strong>（訓練データ全体での平均の損失）と<strong>検証損失</strong>（学習に使わない検証データでの平均の損失．<a href="ch06_generalization.html#sec6-3">第6章 6.3 節</a>）を記録し，エポックに対して描いたものを<strong>学習曲線</strong>（learning curve）という．<a href="#fig15-6">図15.6</a> はシミュレーター15.3 の課題「同心円」の学習曲線である．</p>
+
+<figure id="fig15-6">
+<img src="figs/ch15_fig15-6.svg" alt="横軸にエポック 0 から 2000，縦軸に損失を対数でとった学習曲線．訓練損失は 0.91 から 0.015 まで下がり続ける．検証損失はエポック 806 で最小 0.104 となり，その後 2000 エポックで 0.36 まで上がる．" style="max-width:640px;width:100%">
+<figcaption>図15.6　学習曲線（教育用の合成データ「同心円」：半径 1.0 または 0.5 の円周に標準偏差 0.1 のノイズを足した 2 次元の点，訓練データ 100 個，検証データ 200 個．隠れユニット 3 個の tanh，$\eta=0.1$，$B=8$，重み減衰なし，乱数とデータの seed 20261112）．実線が訓練損失，破線が検証損失，◆が検証損失の最小（エポック 806，0.104）．シミュレーター15.3 と同じ計算である．</figcaption>
+</figure>
+
+<p>学習曲線から読み取ることの例を挙げる．</p>
+<ul>
+  <li><strong>両方が下がっている</strong>：学習が進んでいる．まだ続けてよい．</li>
+  <li><strong>訓練損失は下がるが検証損失が上がり始めた</strong>：<strong>過学習</strong>（<a href="ch06_generalization.html#sec6-2">第6章 6.2 節</a>）が始まった．<a href="#fig15-6">図15.6</a> ではエポック 806 以降である．2000 エポックで訓練データの正解率は 100.0 % だが，検証データの正解率は 806 エポック付近の 97.5 % から 92.0 % に下がる．</li>
+  <li><strong>両方とも高いまま下がらない</strong>：学習率が小さすぎる，モデルが小さすぎる，勾配の実装の誤り，初期値の問題（15.6 節）などを疑う．</li>
+  <li><strong>損失が振動する，急に跳ね上がる</strong>：学習率が大きすぎる，またはミニバッチが小さすぎてばらつきが大きい（<a href="ch07_optimization.html#sec7-2">第7章 7.2 節</a>）．</li>
+</ul>
+
+<p>ミニバッチの大きさも学習曲線を変える．同じ「同心円」で 300 エポック学習させると，訓練損失は $B$＝全部（300 回の更新）で 0.566，$B=8$（3900 回）で 0.112，$B=1$（30000 回）で 0.0224 である．$B=1$ では更新の回数が多いので訓練損失は速く下がるが，検証損失はエポック 94 の 0.110 を最小として，300 エポックでは 0.591 まで上がる．エポックあたりの更新が多いほど，同じエポック数でも過学習が早く始まる．</p>
+
+<div class="box sim" id="sim15-3">
+<p class="box-title">シミュレーター15.3　学習を見る</p>
+<p>ミニバッチ確率的勾配降下法で，隠れ層 1 層のネットワークを学習させ，予測・学習曲線・検証損失の最小を見る装置である．データはすべて教育用の合成データで，回帰はデータ A（焼成温度と相対密度，第14章・15.10 節），分類は 2 次元の 3 種類（同心円・三日月・XOR）である．装置は素朴な確率的勾配降下法だけを使い，モーメンタム・Adam・ドロップアウトは使わない．回帰の目標値は訓練データの平均と標準偏差で標準化してから学習する（損失はその単位，RMSE は % で表示する）．</p>
+<iframe class="qsim-embed" src="sim/neural-net.html?embed=1&amp;only=train" title="ニューラルネットワークのシミュレーター（学習を見る）" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/neural-net.html#train" target="_blank" rel="noopener noreferrer">別ウィンドウで大きく開く &rarr;</a></p>
+<p><strong>操作と観察</strong></p>
+<ol class="sim-steps">
+  <li>課題を「同心円」にする（隠れユニット数 $H=3$，tanh，学習率 $\eta=0.10$，ミニバッチの大きさ $B=8$，重み減衰 0，乱数の seed とデータの seed は既定の 20261112 のまま）．「速さ」を「10 エポック／コマ」にして「実行」を押し，2000 エポックを過ぎたら「停止」を押す → 学習曲線で，訓練損失が下がり続ける一方，検証損失の最小（◆）がエポック 806 の 0.104 に付き，その後上がることを見る（<a href="#fig15-6">図15.6</a>）．</li>
+  <li>「1 エポック」を押して 1 エポックだけ進める → 読み出しの「1 エポックの更新の回数」が 13 で，「エポック（更新の回数）」の括弧の中が 13 だけ増えることを確かめる（例題15.5 (2)）．1 回の更新には，式 \eqref{eq:15-batch} のミニバッチの平均の勾配を使っている．</li>
+  <li>ミニバッチの大きさを「全部」，「1」に変えて，乱数の seed の「同じ seed でやり直す」を押してから 300 エポック付近まで学習させて「停止」を押す → 300 エポックの訓練損失は約 0.57（全部），約 0.022（1）で，$B=1$ では検証損失の最小がエポック 94 に来ることを見る．</li>
+  <li>課題を「回帰（データ A）」に戻し，ミニバッチの大きさを「8」に戻してから，学習率を最大（つまみの右端．2.5）にして「実行」を押す → 3 エポック目で損失が $10^{6}$ を超え，計算が止まって理由が表示される．学習率を 0.10 に戻して「やり直す」を押す．</li>
+</ol>
+<p><strong>操作後の問い</strong></p>
+<ol class="sim-questions">
+  <li>手順 1 で，2000 エポックの重みと 806 エポックの重みのどちらを使うべきか．その判断に使ったデータで，選んだモデルの性能を報告してよいか．
+    <details class="ans"><summary>答えの例</summary><p>未知のデータに当てたいなら，検証損失が最小の 806 エポックの重みを使う（早期終了，15.8 節）．ただし，806 という値は検証データを見て選んだので，検証損失 0.104 は選んだモデルの性能をやや楽観的に見積もる．性能の報告には，選択に使っていない別のテストデータを使う（<a href="ch06_generalization.html#sec6-3">第6章 6.3 節</a>）．</p></details></li>
+  <li>手順 3 で $B=1$ の訓練損失が最も速く下がるのに，検証損失の最小値（0.110）は $B=8$（0.104）とほとんど変わらないのはなぜか．
+    <details class="ans"><summary>答えの例</summary><p>$B=1$ はエポックあたりの更新が 100 回あるので，訓練データに合わせる速さは速いが，到達できる汎化の良さはモデル（隠れユニット 3 個）とデータで決まる部分が大きい．速く進むぶん，過学習の始まりも早い（エポック 94）．エポックの数ではなく，検証損失の最小で比べる必要がある．</p></details></li>
+</ol>
+<noscript><p>JavaScript が無効のため，この装置は動きません．何を確かめる装置かは上の説明と本文の式を読んでください．</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-6">15.6 初期化 — 対称性を破り，分散を保つ<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>15.6.1 全部 0 から始めるとどうなるか</h3>
+
+<p>重みの初期値を全部 0 にすると，隠れユニットは区別できなくなる．</p>
+
+<div class="box thm">
+<p class="box-title">定理15.3　同じ初期値の隠れユニットは同じままである</p>
+<p>ある隠れ層の 2 つのユニット $j,j'$ が，入ってくる重み（$\bm{W}^{(l)}$ の第 $j$ 行と第 $j'$ 行），バイアス，出ていく重み（$\bm{W}^{(l+1)}$ の第 $j$ 列と第 $j'$ 列）について同じ初期値を持つなら，勾配降下法で何回更新しても，これらは同じ値のままである．</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">証明</p>
+<p>更新の回数についての帰納法で示す．ある時点で 2 つのユニットのパラメーターが同じだとする．どのデータでも $a^{(l)}_j=a^{(l)}_{j'}$，したがって $z^{(l)}_j=z^{(l)}_{j'}$．逆伝播では，式 \eqref{eq:15-bp2} の成分 $\delta^{(l)}_j=h'(a^{(l)}_j)\sum_kW^{(l+1)}_{kj}\delta^{(l+1)}_k$ で $a$ も出ていく重みも同じなので $\delta^{(l)}_j=\delta^{(l)}_{j'}$．式 \eqref{eq:15-bp3} より，入ってくる重みの勾配 $\delta^{(l)}_jz^{(l-1)}_i$ も，出ていく重みの勾配 $\delta^{(l+1)}_kz^{(l)}_j$ も 2 つのユニットで同じである．ミニバッチで平均しても同じなので，更新後もパラメーターは同じである．</p>
+<p style="text-align:right">（証明終わり）</p>
+</div>
+
+<p>全部 0 は定理15.3 の特別な場合で，さらに強いことが起こる．tanh（や ReLU）では $h(0)=0$ なので，全部 0 から始めると $\bm{z}^{(1)}=\bm{0}$ となり，式 \eqref{eq:15-bp3} から $\partial\ell/\partial\bm{W}^{(2)}=\delta^{(2)}\bm{z}^{(1)\tp}=\bm{0}$．また $\bm{W}^{(2)}=\bm{0}$ なので $\bm{\delta}^{(1)}=\bm{0}$ で，$\bm{W}^{(1)}$ も動かない．動くのは出力のバイアスだけで，予測は定数（訓練データの平均）になる．シミュレーター15.3 で回帰（データ A），$H=8$，「初期値」を「全部 0」にして 300 エポック学習させると，訓練 RMSE は 7.152 % で，目標値の標準偏差 $s_y=7.152$ % と一致する．sigmoid では $h(0)=1/2\ne0$ なので重みは動くが，定理15.3 のとおり 8 個のユニットは同じ値のままで（300 エポックで訓練 RMSE 1.954 %），隠れユニット 1 個分の働きしかしない．</p>
+
+<p>そこで，初期値は<strong>乱数</strong>で与えて対称性を破る．問題は乱数の<strong>大きさ</strong>である．</p>
+
+<h3>15.6.2 分散を層の前後で保つ条件</h3>
+
+<p>第 $l$ 層の重み $W^{(l)}_{ji}$ を，平均 0・分散 $\sigma_{\mathrm{init}}^{2}$ の分布から独立に引くとする（$\sigma_{\mathrm{init}}$ は初期値の乱数の標準偏差である．<a href="ch08_linear_regression.html#sec8-7">第8章 8.7 節</a>の重みの事前分布の標準偏差 $\sigma_w$ とは別の量なので，別の記号を使う）．入力の側の値 $z^{(l-1)}_i$ も互いに独立で，重みとも独立とし，バイアスは 0 とする．</p>
+
+<div class="box derive">
+<p class="box-title">導出：順伝播で分散を保つ条件</p>
+<p>$a^{(l)}_j=\sum_{i=1}^{D_{l-1}}W^{(l)}_{ji}z^{(l-1)}_i$ の各項は，$\Ex[W]=0$ と独立性から平均 0 で，分散は</p>
+$$
+\begin{aligned}
+\Var\bigl[W_{ji}z_i\bigr]&=\Ex[W_{ji}^{2}]\,\Ex[z_i^{2}]-\bigl(\Ex[W_{ji}]\Ex[z_i]\bigr)^{2}\\
+&=\sigma_{\mathrm{init}}^{2}\,\Ex[z_i^{2}].
+\end{aligned}
+$$
+<p>独立な項の和の分散は分散の和なので（<a href="ch02_probability.html#sec2-5">第2章 2.5 節</a>）</p>
+$$
+\Var\bigl[a^{(l)}_j\bigr]=D_{l-1}\,\sigma_{\mathrm{init}}^{2}\,\Ex\bigl[(z^{(l-1)})^{2}\bigr].
+$$
+<p><strong>tanh の場合</strong>：$a$ が 0 の近くでは $\tanh a\approx a$ なので $\Ex[(z^{(l-1)})^{2}]\approx\Var[a^{(l-1)}]$．$\Var[a^{(l)}]=\Var[a^{(l-1)}]$ を保つには $D_{l-1}\sigma_{\mathrm{init}}^{2}=1$．</p>
+<p><strong>ReLU の場合</strong>：$a^{(l-1)}$ が 0 について対称な分布なら，$z=\relu(a)$ は $a\gt0$ のときだけ $a$ に等しいので</p>
+$$
+\begin{aligned}
+\Ex[z^{2}]&=\int_{0}^{\infty}a^{2}p(a)\,\dd a\\
+&=\frac12\int_{-\infty}^{\infty}a^{2}p(a)\,\dd a=\frac12\Var[a].
+\end{aligned}
+$$
+<p>$\Var[a^{(l)}]=\Var[a^{(l-1)}]$ を保つには $D_{l-1}\sigma_{\mathrm{init}}^{2}/2=1$．</p>
+<p><strong>逆伝播</strong>：式 \eqref{eq:15-bp2} の成分 $\delta^{(l-1)}_i=h'(a^{(l-1)}_i)\sum_{j=1}^{D_l}W^{(l)}_{ji}\delta^{(l)}_j$ も同じ形の和で，和は出ていく側の $D_l$ 個にわたる．同じ議論で，誤差の分散を保つには（tanh の 0 付近で $h'\approx1$ として）$D_l\sigma_{\mathrm{init}}^{2}=1$ が要る．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>順伝播の条件 $\sigma_{\mathrm{init}}^{2}=1/D_{l-1}$（入ってくる数 fan-in で決まる）と，逆伝播の条件 $\sigma_{\mathrm{init}}^{2}=1/D_l$（出ていく数 fan-out で決まる）は，$D_{l-1}\ne D_l$ なら両立しない．Glorot と Bengio（2010）は両者の折り合いとして調和平均をとった．</p>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+&\text{Xavier：}\\
+&\quad\sigma_{\mathrm{init}}^{2}=\frac{2}{D_{l-1}+D_l},\\
+&\text{He：}\\
+&\quad\sigma_{\mathrm{init}}^{2}=\frac{2}{D_{l-1}}
+\end{aligned} \label{eq:15-init}
+\end{equation}
+</div>
+
+<p>前者は tanh・sigmoid に，後者（He <em>et al.</em> 2015）は ReLU に使う．シミュレーター15.3 もこの規則で初期値を引いている（出力層は Xavier，バイアスは 0）．<a href="#fig15-7">図15.7</a> は，幅 100 の層を 10 段重ねて，標準偏差を変えた初期値で順伝播したときの $a^{(l)}$ の標準偏差である．</p>
+
+<figure id="fig15-7">
+<img src="figs/ch15_fig15-7.svg" alt="横軸に層の番号 1 から 10，縦軸に a の標準偏差を対数でとった 2 枚のグラフ．左は tanh で，初期値の標準偏差が 0.5 割るルート D では層ごとに半分に縮み 10 層で 0.0007，Xavier では 1.0 から 0.23 にゆるやかに下がり，2 割るルート D では 1.5 前後で飽和する．右は ReLU で，1 割るルート D では 0.03 まで縮み，He では 1 前後を保ち，2 割るルート D では 35 まで増える．" style="max-width:640px;width:100%">
+<figcaption>図15.7　初期値の大きさと，層を進むときの $a^{(l)}$ の標準偏差（幅 $D=100$，10 層，バイアス 0，入力は 500 個の標準正規乱数，seed 20261115）．(a) tanh，(b) ReLU．中央の実線（丸）が式 \eqref{eq:15-init} の規則（$D_{l-1}=D_l=D$ なので Xavier は $\sigma_{\mathrm{init}}=1/\sqrt{D}$，He は $\sigma_{\mathrm{init}}=\sqrt{2/D}$），破線（四角）は小さすぎる初期値，一点鎖線（三角）は大きすぎる初期値．</figcaption>
+</figure>
+
+<p>小さすぎると信号は層ごとに縮み（tanh で $\sigma_{\mathrm{init}}=0.5/\sqrt{D}$ なら 10 層で $5.0\times10^{-1}$ から $7\times10^{-4}$ へ），大きすぎると ReLU では指数関数的に増え（10 層で 35），tanh では飽和して $h'\approx0$ の領域に入る．どちらも逆伝播の誤差を縮めたり膨らませたりする（15.7 節）．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.6　初期値の標準偏差を決める</p>
+<p>(1) 入力 100 個から隠れユニット 100 個への tanh の層と，同じ形の ReLU の層について，式 \eqref{eq:15-init} の標準偏差 $\sigma_{\mathrm{init}}$ を求めよ．(2) シミュレーター15.3 の回帰の既定（入力 1 個，隠れユニット 3 個の tanh，出力 1 個）では，2 つの層の初期値の標準偏差はいくつか．(3) tanh の層で $\sigma_{\mathrm{init}}$ を (1) の 2 倍にすると，0 付近の線形近似で $\Var[a]$ は層ごとに何倍になるか．</p>
+<p><strong>解答</strong>　(1) tanh：$\sigma_{\mathrm{init}}=\sqrt{2/(100+100)}=0.1$．ReLU：$\sigma_{\mathrm{init}}=\sqrt{2/100}=0.1414$．</p>
+<p>(2) 第 1 層は $D_0=1$，$D_1=3$ なので $\sqrt{2/(1+3)}=0.7071$．出力層は $D_1=3$，$D_2=1$ なので同じく $0.7071$．</p>
+<p>(3) $\Var[a^{(l)}]=D\sigma_{\mathrm{init}}^{2}\Var[a^{(l-1)}]$ で $D\sigma_{\mathrm{init}}^{2}$ が $1$ から $4$ になるので，層ごとに 4 倍（標準偏差で 2 倍）．ただし tanh は $\abs{a}$ が大きくなると飽和して $\abs{z}\le1$ に収まるので，実際には増え続けず，<a href="#fig15-7">図15.7</a>(a) の一点鎖線のように 1.5 付近で止まる．代わりに $h'(a)=1-\tanh^{2}a$ が小さいユニットが増える．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-7">15.7 勾配消失・爆発の入口<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>15.7.1 誤差は掛け算で伝わる</h3>
+
+<p>式 \eqref{eq:15-bp2} を出力層から第 $l$ 層まで繰り返すと，</p>
+$$
+\begin{aligned}
+\bm{\delta}^{(l)}=h'(\bm{a}^{(l)})&\odot\Bigl(\bm{W}^{(l+1)\tp}\Bigl(h'(\bm{a}^{(l+1)})\\
+&\odot\bigl(\cdots\bm{W}^{(n_{\mathrm{layer}})\tp}\bm{\delta}^{(n_{\mathrm{layer}})}\bigr)\Bigr)\Bigr)
+\end{aligned}
+$$
+<p>となる．$h'$ の成分の絶対値の最大を $c_h$，行列の大きさ（ベクトルを最も引き伸ばす倍率．スペクトルノルム）を $\norm{\bm{W}}_2$ と書くと，各段で $\norm{\bm{\delta}^{(l)}}\le c_h\norm{\bm{W}^{(l+1)}}_2\norm{\bm{\delta}^{(l+1)}}$ なので</p>
+\begin{equation}
+\begin{aligned}
+\norm{\bm{\delta}^{(l)}}\le&\Bigl(\prod_{k=l+1}^{n_{\mathrm{layer}}}c_h\norm{\bm{W}^{(k)}}_2\Bigr)\\
+&\times\norm{\bm{\delta}^{(n_{\mathrm{layer}})}}
+\end{aligned} \label{eq:15-vanish}
+\end{equation}
+<p>である．各段の倍率 $c_h\norm{\bm{W}}_2$ が 1 より小さければ，誤差は層の数に対して<strong>指数関数的に小さく</strong>なる（<strong>勾配消失</strong>）．式 \eqref{eq:15-vanish} は上からの評価なので，倍率が 1 より大きいときに必ず増えるとは言えないが，実際に大きな重みでは誤差が指数関数的に増えることがある（<strong>勾配爆発</strong>）．入力に近い層の重みの勾配 $\bm{\delta}^{(l)}\bm{z}^{(l-1)\tp}$ も同じ倍率で小さく（大きく）なり，入力に近い層だけが学習しない（暴れる）ことになる．</p>
+
+<div class="box thm">
+<p class="box-title">定理15.4　sigmoid の導関数は 1/4 以下</p>
+<p>$\sigma'(a)=\sigma(a)\bigl(1-\sigma(a)\bigr)\le\tfrac14$ で，等号は $a=0$ のときだけ成り立つ．</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">証明</p>
+<p>$s=\sigma(a)\in(0,1)$ とおくと $s(1-s)=\tfrac14-\bigl(s-\tfrac12\bigr)^{2}\le\tfrac14$ で，等号は $s=\tfrac12$，すなわち $a=0$ のときである．</p>
+<p style="text-align:right">（証明終わり）</p>
+</div>
+
+<p>したがって sigmoid の隠れ層を重ねると，重みが 1 程度のままなら 1 層ごとに誤差が 1/4 以下になる．tanh は $h'(0)=1$，ReLU は $a\gt0$ で $h'=1$ なので，この意味の縮みは小さい．<a href="#fig15-8">図15.8</a> は，<a href="#fig15-7">図15.7</a> と同じ 10 層のネットワークで，第 10 層に乱数の誤差を与えて第 1 層まで戻したときの誤差の大きさの比である．sigmoid（Xavier）では 9 段で $2.0\times10^{-6}$ まで縮むが，ReLU（He）では 0.85 にとどまる．</p>
+
+<figure id="fig15-8">
+<img src="figs/ch15_fig15-8.svg" alt="横軸に層の番号 1 から 10，縦軸に第 l 層の誤差の大きさを第 10 層の値で割った比を対数でとったグラフ．ReLU と He では 0.85 前後でほぼ一定，tanh と Xavier では 0.28，ReLU と 1 割るルート D では 0.037，sigmoid と Xavier では第 1 層で 2 かける 10 のマイナス 6 乗まで直線的に減る．" style="max-width:640px;width:100%">
+<figcaption>図15.8　誤差 $\bm{\delta}^{(l)}$ の大きさ（500 個のデータでの平均）を第 10 層の値で割ったもの．<a href="#fig15-7">図15.7</a> と同じネットワーク（幅 100，10 層，seed 20261115）で，第 10 層の誤差を標準正規乱数とし，式 \eqref{eq:15-bp2} で第 1 層まで戻した．実線（丸）は ReLU と He，破線（四角）は tanh と Xavier，一点鎖線（三角）は ReLU と $\sigma_{\mathrm{init}}=1/\sqrt{D}$，点線（菱形）は sigmoid と Xavier の初期値．</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題15.7　sigmoid を 10 段つないだ鎖</p>
+<p>ユニットが 1 個ずつの層を 10 段つなぎ，各層の重みを 1，バイアスを 0，活性化を sigmoid とする．入力は $x=0$ である．(1) $a^{(1)},a^{(2)},a^{(3)}$ と $\sigma'(a^{(l)})$（$l=1,2,3$）を求めよ．(2) $\delta^{(1)}/\delta^{(10)}=\prod_{l=1}^{9}\sigma'(a^{(l)})$ であることを示し，上限 $(1/4)^{9}$ を求めよ．実際の値は $1.72\times10^{-6}$ である．</p>
+<p><strong>解答</strong>　(1) $a^{(1)}=1\times0=0$，$z^{(1)}=\sigma(0)=0.5$，$\sigma'(0)=0.25$．$a^{(2)}=z^{(1)}=0.5$，$z^{(2)}=\sigma(0.5)=0.6225$，$\sigma'(0.5)=0.6225\times0.3775=0.2350$．$a^{(3)}=0.6225$，$\sigma'(0.6225)=0.2273$．以降 $a^{(l)}$ は約 0.659 に落ち着き，$\sigma'$ は約 0.2247 になる．</p>
+<p>(2) 式 \eqref{eq:15-bp2} の 1 成分版 $\delta^{(l)}=\sigma'(a^{(l)})\,W^{(l+1)}\delta^{(l+1)}$ で $W^{(l+1)}=1$ なので，$l=9,8,\dots,1$ と繰り返すと $\delta^{(1)}=\sigma'(a^{(1)})\sigma'(a^{(2)})\cdots\sigma'(a^{(9)})\,\delta^{(10)}$．定理15.4 より各因子は $1/4$ 以下なので，比は $(1/4)^{9}=3.81\times10^{-6}$ 以下．実際には $a\ne0$ の層で $\sigma'\lt1/4$ なので $1.72\times10^{-6}$ とさらに小さい．入力に近い重みの勾配は，出力に近い重みの勾配の 100 万分の 1 程度になる．</p>
+</div>
+
+<h3>15.7.2 対策の見取り図</h3>
+
+<ul>
+  <li><strong>活性化関数</strong>：隠れ層には sigmoid より tanh，さらに ReLU とその仲間（<a href="ch14_neural_networks.html#sec14-2">第14章 14.2 節</a>の GELU など）を使う．ただし ReLU では $a\le0$ にとどまったユニットの勾配が 0 になり，二度と動かない（「死んだ」ユニット．例題15.11）．</li>
+  <li><strong>初期化</strong>：式 \eqref{eq:15-init} で各層の倍率を 1 付近にそろえる（15.6 節）．</li>
+  <li><strong>残差接続</strong>：$\bm{z}^{(l+1)}=\bm{z}^{(l)}+F(\bm{z}^{(l)})$ の形にすると，$\partial\bm{z}^{(l+1)}/\partial\bm{z}^{(l)}=\bm{I}+\partial F/\partial\bm{z}^{(l)}$ の単位行列の部分が「素通りの経路」となり，誤差が縮まずに戻る．Transformer の各層はこの形である（<a href="ch25_transformer.html#sec25-5">第25章 25.5 節</a>）．</li>
+  <li><strong>正規化</strong>：層の値の平均と分散をそろえる LayerNorm など（<a href="ch25_transformer.html#sec25-5">第25章 25.5 節</a>）．</li>
+  <li><strong>勾配の大きさの上限</strong>：勾配爆発に対して，$\norm{\bm{g}}$ が上限を超えたら縮める（勾配クリッピング）．系列を扱う RNN でとくに使われる（<a href="ch23_rnn_lstm.html#sec23-5">第23章 23.5 節</a>）．</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="sec15-8">15.8 過学習と正則化 — 重み減衰と早期終了<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>15.8.1 重み減衰</h3>
+
+<p>ニューラルネットワークでも，第6章（<a href="ch06_generalization.html#sec6-6">6.6 節</a>）の正則化がそのまま使える．本章では，ミニバッチの平均の損失に重みの 2 乗和を足す．</p>
+\begin{equation}
+\begin{aligned}
+L(\bm{w})=&\ \frac1B\sum_{n\in\mathcal{B}}\ell_n\\
+&+\frac{\lambda}{2}\sum_{l=1}^{n_{\mathrm{layer}}}\norm{\bm{W}^{(l)}}^{2}
+\end{aligned} \label{eq:15-wd}
+\end{equation}
+<p>ここで $\norm{\bm{W}}^{2}=\sum_{j,i}W_{ji}^{2}$（全成分の 2 乗和），$\lambda\ge0$ は正則化係数である．<strong>バイアスには掛けない</strong>（バイアスは出力の平行移動で，大きくても関数が複雑にはならないため）．罰則の項の勾配は $\lambda\bm{W}^{(l)}$ なので，更新は</p>
+$$
+\begin{aligned}
+\bm{W}^{(l)}&\leftarrow\bm{W}^{(l)}-\eta\Bigl(\pdiff{L_{\mathrm{data}}}{\bm{W}^{(l)}}+\lambda\bm{W}^{(l)}\Bigr)\\
+&=(1-\eta\lambda)\bm{W}^{(l)}-\eta\pdiff{L_{\mathrm{data}}}{\bm{W}^{(l)}}
+\end{aligned}
+$$
+<p>となる（$L_{\mathrm{data}}$ は式 \eqref{eq:15-wd} の第 1 項）．データの勾配がなければ，重みは更新のたびに $1-\eta\lambda$ 倍に縮む．これが<strong>重み減衰</strong>（weight decay）の名の由来である．</p>
+
+<div class="box note">
+<p class="box-title">記号：λ の値は損失の規約で変わる</p>
+<p>式 \eqref{eq:15-wd} は損失を<strong>平均</strong>で書いている．第8章の Ridge 回帰のように<strong>和</strong> $\sum_n\ell_n$ に $\tfrac{\lambda'}{2}\norm{\bm{w}}^{2}$ を足す規約では，全体を $N$ で割ると $\lambda=\lambda'/N$ になる．同じ正則化の強さでも，平均の規約の $\lambda$ は和の規約の $1/N$ である．文献や道具で $\lambda$ の値を比べるときは規約を確かめる．Gauss の事前分布による MAP 推定との対応は演習15.8 で導く．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題15.8　重み減衰で重みはどれだけ縮むか</p>
+<p>$\eta=0.1$，$\lambda=10^{-3}$ とする．(1) 1 回の更新で重みは何倍になるか（データの勾配を無視する）．(2) シミュレーター15.3 の「同心円」（$N=100$，$B=8$）で 2000 エポック学習させたときの更新の回数と，データの勾配がなければ重みが何倍に縮むかを求めよ．(3) 同じ正則化を，損失の和に罰則を足す規約で書くと $\lambda'$ はいくつか．</p>
+<p><strong>解答</strong>　(1) $1-\eta\lambda=1-10^{-4}=0.9999$ 倍．</p>
+<p>(2) 例題15.5 より 1 エポック 13 回なので $13\times2000=26000$ 回．$(0.9999)^{26000}=\exp(26000\ln0.9999)$ $\approx\exp(-2.6)=0.0743$ 倍．実際にはデータの勾配が重みを押し戻すので，重みはこの 2 つの釣り合う大きさに落ち着く．$\lambda=10^{-2}$ なら $\exp(-26)\approx5\times10^{-12}$ で，データの勾配が小さい重みはほぼ 0 になる．</p>
+<p>(3) $\lambda'=N\lambda=100\times10^{-3}=0.1$．</p>
+</div>
+
+<p>シミュレーター15.3 の「同心円」で隠れユニットを 4 個にして 2000 エポック学習させると，$\lambda=0$ では訓練損失 0.0129・検証損失 0.342（最小はエポック 978 の 0.0856），$\lambda=10^{-3}$ では 0.0488・0.218（最小はエポック 645 の 0.130），$\lambda=10^{-2}$ では 0.214・0.308（最小はエポック 1552 の 0.299）である（訓練損失は罰則を含まない値）．適度な $\lambda$ は終盤の検証損失の上昇を抑えるが，大きすぎると訓練データにも合わなくなる（未学習）．$\lambda$ は検証データで選ぶハイパーパラメーターである．</p>
+
+<h3>15.8.2 早期終了</h3>
+
+<p><strong>早期終了</strong>（early stopping）は，学習中に検証損失を見張り，その最小のエポックの重みを採用する方法である．<a href="#fig15-6">図15.6</a> ではエポック 806 の重みを使う．実務では「検証損失が $p$ エポック続けて最小を更新しなければ止め，最小のときの重みに戻す」という規則（$p$ を忍耐の回数と呼ぶ）がよく使われる．早期終了は，学習の回数を限ることで重みが大きく育つのを防ぎ，L2 正則化に近い働きをする（<a href="ch07_optimization.html#sec7-10">第7章 7.10 節</a>）．追加の計算はほとんど要らないが，止めるエポックを検証データで選んでいるので，最終的な性能は別のテストデータで測る．</p>
+
+<h3>15.8.3 ドロップアウトとデータ拡張（紹介）</h3>
+
+<ul>
+  <li><strong>ドロップアウト</strong>（dropout．Srivastava <em>et al.</em> 2014）：学習中，ミニバッチごとに隠れユニットを確率 $p$ で選んで出力を 0 にし，残りの出力を $1/(1-p)$ 倍する．予測のときは全ユニットを使う．特定のユニットの組み合わせに頼る適応を防ぐ効果がある．逆伝播では，0 にしたユニットの $\delta$ も 0 になる（式 \eqref{eq:15-bp3} の送り手が 0）．シミュレーターには入っていない．</li>
+  <li><strong>データ拡張</strong>（data augmentation）：答えを変えないと分かっている変換でデータを増やす．画像なら左右反転・小さな回転，結晶なら格子の対称操作や原子の番号の付け替えである．どの変換が「答えを変えない」かは問題の物理で決まる（<a href="ch16_structured_deep_learning.html#sec16-7">第16章 16.7 節</a>）．</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="sec15-9">15.9 自動微分 — 逆伝播は逆モード<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>15.9.1 微分を計算機で求める 3 つの方法</h3>
+
+<ul>
+  <li><strong>数値微分</strong>：差分 \eqref{eq:15-diff} で近似する．実装は簡単だが，打ち切り誤差と丸め誤差があり（15.4 節），パラメーター $P$ 個の勾配に $P$ 回（中心差分なら $2P$ 回）の関数の評価が要る．</li>
+  <li><strong>記号微分</strong>：式を記号のまま微分して導関数の式を作る（数式処理ソフトの方法）．正確だが，合成が深いと共通の部分が展開されて式が爆発的に長くなり，条件分岐や繰り返しを含むプログラムには使いにくい．</li>
+  <li><strong>自動微分</strong>（automatic differentiation）：プログラムを基本演算（足し算・掛け算・exp・tanh など）の列とみなし，各演算の局所的な微分を連鎖律で組み合わせて，<strong>その点での</strong>微分の値を求める．丸め誤差を除いて正確で，手間は元の計算の定数倍である．</li>
+</ul>
+
+<p>自動微分には，連鎖律の積をどちらの端からまとめるかで 2 つの型がある．関数 $\bm{f}:\R^{n}\to\R^{m}$ が $\bm{f}=\bm{f}_K\circ\cdots\circ\bm{f}_1$ と合成で書け，各段の Jacobi 行列（偏微分を並べた行列）を $\bm{J}_k$ とすると，全体の Jacobi 行列は $\bm{J}=\bm{J}_K\cdots\bm{J}_2\bm{J}_1\in\R^{m\times n}$ である．</p>
+
+<div class="box def">
+<p class="box-title">定義15.4　順モードと逆モード</p>
+<ul>
+  <li><strong>順モード</strong>（forward mode）：入力の方向ベクトル $\dot{\bm{x}}\in\R^{n}$ を決め，順伝播と同時に $\dot{\bm{v}}\leftarrow\bm{J}_k\dot{\bm{v}}$ を右から計算する．1 回で $\bm{J}\dot{\bm{x}}$（方向微分）が得られる．$\bm{J}$ 全体には $n$ 回要る．</li>
+  <li><strong>逆モード</strong>（reverse mode）：順伝播で中間の値を保存した後，出力の側のベクトル $\bar{\bm{y}}\in\R^{m}$ から $\bar{\bm{v}}^{\tp}\leftarrow\bar{\bm{v}}^{\tp}\bm{J}_k$ を左から計算する．1 回で $\bar{\bm{y}}^{\tp}\bm{J}$ が得られる．$\bm{J}$ 全体には $m$ 回要る．</li>
+</ul>
+</div>
+
+<p>損失は $m=1$（スカラー）でパラメーターは $n=P$ 個なので，逆モードなら 1 回で勾配全体が得られる．<strong>誤差逆伝播は，ニューラルネットワークの損失に逆モードの自動微分を当てはめたもの</strong>であり，$\bm{\delta}^{(l)}$ は逆モードで運ばれる $\bar{\bm{v}}$ そのものである．逆モードの代償は，順伝播の中間の値をすべて保存する記憶領域である．層が深く，ミニバッチが大きいほど記憶が要り，一部だけを保存して必要なときに計算し直す工夫（チェックポイント法）もある．PyTorch，JAX，TensorFlow などの深層学習の道具は逆モードの自動微分を備えているので，利用者が式 \eqref{eq:15-bp2} を実装することは少ない．それでも，何が保存され，何がどの順で掛けられるかを知っていると，記憶の不足や勾配消失の原因を考えられる．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.9　順モードで例題15.1 の $\partial L/\partial w$ を求める</p>
+<p>例題15.1 の 1 個のニューロン（$x=2.0$，$w=0.3$，$b=-0.1$，$y=1.0$）で，「$w$ を動かす向き」$\dot{w}=1$（他の入力の変化は 0）として，順モードで $\dot{a},\dot{z},\dot{L}$ を順に計算し，$\partial L/\partial w$ を求めよ．</p>
+<p><strong>解答</strong>　各段で「値」と「その変化率」を組で運ぶ．$a=wx+b$ の変化率は $\dot{a}=\dot{w}x+w\dot{x}+\dot{b}=1\times2.0+0+0=2.0$．$z=\tanh a$ の変化率は $\dot{z}=(1-z^{2})\dot{a}$ $=0.786448\times2.0=1.572895$．$L=\tfrac12(z-y)^{2}$ の変化率は $\dot{L}=(z-y)\dot{z}$ $=-0.537883\times1.572895=-0.846033$．</p>
+<p>これは例題15.1 の逆伝播の値と一致する．ただし順モードでは，$\partial L/\partial b$ を求めるには $\dot{b}=1$，$\dot{w}=0$ としてもう 1 回計算しなければならない．パラメーターが $P$ 個なら $P$ 回である．逆モード（逆伝播）は 1 回で両方を得た．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-10">15.10 材料工学・物性物理学との接点 — 小さな材料データと原子に働く力<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>15.10.1 小さな材料データでの学習曲線と早期終了</h3>
+
+<p>焼結では，粉末の成形体を融点より低い温度で加熱すると，粒子の接触部で原子が拡散して気孔が減り，<strong>相対密度</strong>（理論密度に対する割合）が上がる．温度が高いほど拡散が速いので密度は上がるが，やがて飽和し，さらに高温では粒成長や揮発で頭打ちになることがある．本書ではこの傾向を模した<strong>教育用の合成データ A</strong>（焼成温度 $T\in[1100,1500]$ °C，$s=(T-1300\ ^{\circ}\mathrm{C})/(200\ ^{\circ}\mathrm{C})$，真の関数 $g(s)=88+8s-5s^{2}+2\sin3s$（%），観測のノイズの標準偏差 1.0 %．実在の材料のデータではない）を使う．</p>
+
+<p>実際の焼結の実験では，1 系統の条件で得られる試料は 10 個に満たないことが多い．<a href="#fig15-9">図15.9</a> は，データ A から 8 個だけを取り，隠れユニット 16 個（パラメーター 49 個）の tanh のネットワークを学習させた結果である．パラメーターの数がデータの数の 6 倍もある．</p>
+
+<figure id="fig15-9">
+<img src="figs/ch15_fig15-9.svg" alt="左の図は横軸に焼成温度 1100 から 1500 度，縦軸に相対密度をとり，訓練データ 8 点，真の関数，エポック 1187 の予測曲線，エポック 5000 の予測曲線を描いたもの．5000 エポックの曲線は訓練データの間で波打つ．右の図は横軸にエポック，縦軸に RMSE をとり，訓練 RMSE が 3.9 % から 0.31 % まで下がる一方，検証 RMSE はエポック 1187 で最小 1.50 % となり 5000 エポックで 1.94 % に上がる様子．" style="max-width:640px;width:100%">
+<figcaption>図15.9　小さな材料データでの過学習と早期終了（教育用の合成データ A，訓練データ $N=8$，検証データ 200 個．隠れユニット 16 個の tanh，$\eta=0.1$，$B=8$，重み減衰なし，乱数とデータの seed 20261112）．(a) 真の関数（灰の破線），訓練データ（四角），検証 RMSE が最小のエポック 1187 の予測（実線），エポック 5000 の予測（一点鎖線）．(b) 訓練 RMSE（実線）と検証 RMSE（破線），◆は検証 RMSE の最小，点線はノイズの標準偏差 1 %．シミュレーター15.3 と同じ計算である．</figcaption>
+</figure>
+
+<p>読み取れることを挙げる．</p>
+<ul>
+  <li><strong>訓練 RMSE がノイズより小さい</strong>：5000 エポックでは訓練 RMSE が 0.31 % で，観測のノイズの標準偏差 1 % を大きく下回る．真の関数を完全に当てても RMSE は 1 % 程度残るはずなので，これは<strong>ノイズまで覚えた</strong>しるしである．検証 RMSE は 1.94 % に悪化する．</li>
+  <li><strong>早期終了</strong>：検証 RMSE が最小の 1187 エポック（訓練 0.78 %，検証 1.50 %）で止めると，予測曲線は波打ちが少ない．</li>
+  <li><strong>外挿</strong>：8 個の訓練データは $T=1159$〜$1473$ °C の範囲にしかない．範囲の外（1100 °C 付近，1500 °C 付近）では，どのエポックの予測も真の関数から離れうる（<a href="ch06_generalization.html#sec6-9">第6章 6.9 節</a>）．</li>
+  <li><strong>検証データの数</strong>：ここでは合成データなので検証データを 200 個用意できたが，実際の実験で 200 個の検証データがあれば，それも学習に使いたくなる．少ないデータでは交差検証（<a href="ch06_generalization.html#sec6-5">第6章 6.5 節</a>）で止めどきや $\lambda$ を選ぶか，そもそも少ないパラメーターのモデル（第8章の基底関数の回帰，第12章のガウス過程回帰）を先に試すほうがよい．</li>
+</ul>
+
+<p>同じ実験はシミュレーター15.3 で再現できる．課題「回帰（データ A）」で隠れユニット数を 16，訓練データ数を 8 にし，「速さ」を「10 エポック／コマ」にして 5000 エポック（装置の上限）まで学習させると，検証損失の最小（◆）がエポック 1187 の 0.0420 に付く（損失は標準化した単位）．</p>
+
+<h3>15.10.2 原子に働く力を損失に入れる</h3>
+
+<p>第7章（<a href="ch07_optimization.html#sec7-11">7.11 節</a>）で見たように，原子の配置 $\bm{R}=(\bm{R}_1,\dots,\bm{R}_{N_{\mathrm{at}}})$ のエネルギー $E(\bm{R})$ が分かれば，原子 $i$ に働く力は $\bm{F}_i=-\partial E/\partial\bm{R}_i$ である．密度汎関数理論（DFT）などの第一原理計算は，1 つの配置について全エネルギー 1 個と，全原子の力 $3N_{\mathrm{at}}$ 個を同時に出力する．<strong>機械学習原子間ポテンシャル</strong>は，$E(\bm{R};\bm{w})$ をニューラルネットワークなどで表し，重み $\bm{w}$ を第一原理計算の結果に合わせて学習する（Behler と Parrinello（2007）以来の方法．本格的には<a href="ch27_materials_statmech.html#sec27-7">第27章 27.7 節</a>）．</p>
+
+<p>力のデータは，配置 1 個あたりエネルギーの $3N_{\mathrm{at}}$ 倍の数があり，エネルギーの地形の<strong>傾き</strong>を直接教えてくれる．そこで損失を，配置 $m=1,\dots,M$ について</p>
+\begin{equation}
+L(\bm{w})=\frac1M\sum_{m=1}^{M}\bigl[\ell_{E,m}+\gamma\,\ell_{F,m}\bigr] \label{eq:15-force-loss}
+\end{equation}
+$$
+\begin{aligned}
+\ell_{E,m}&=\bigl(E(\bm{R}_m;\bm{w})-E^{\mathrm{ref}}_m\bigr)^{2},\\
+\ell_{F,m}&=\sum_{i}\norm{\bm{F}_i(\bm{R}_m;\bm{w})-\bm{F}^{\mathrm{ref}}_{i,m}}^{2}
+\end{aligned}
+$$
+<p>とする（$\gamma\gt0$ は 2 つの項の重みで，単位をそろえる役もする）．ここで逆伝播が二重に働く．</p>
+<ol>
+  <li><strong>予測の力を作る</strong>：$\bm{F}_i=-\partial E/\partial\bm{R}_i$ は，エネルギー（スカラー 1 個）の<strong>入力</strong>についての勾配である．例題15.1 (3) と同じく，逆伝播を入力まで続ければ，全原子の力が 1 回で得られる（逆モード，15.9 節）．</li>
+  <li><strong>学習のための勾配を作る</strong>：式 \eqref{eq:15-force-loss} の第 2 項を $\bm{w}$ で微分するには，「逆伝播で作った量」をさらに $\bm{w}$ で微分する必要がある．逆伝播の計算自体も基本演算の列なので，自動微分をもう一度当てはめればよい．このとき活性化関数の 2 階導関数 $h''$ が現れる（例題15.10）．</li>
+</ol>
+<p>エネルギーを先に学習して力を後から微分で作るので，予測の力は必ず「あるエネルギーの勾配」になる（エネルギー保存が成り立つ）．力を別のネットワークで直接予測すると，この性質は保証されない．</p>
+
+<div class="box ex">
+<p class="box-title">例題15.10　二原子の模型で力の損失の勾配を求める</p>
+<p>二原子の距離 $r$（Å）のエネルギーを，隠れユニット 1 個の模型 $E(r)=w_2\tanh(w_1r+b)+e_0$ で表す（教育用の模型）．$w_1=-2.0\ \text{Å}^{-1}$，$b=4.0$，$w_2=1.0$ eV，$e_0=-1.0$ eV とする．$r=1.5$ Å での参照の力を $F^{\mathrm{ref}}=0.5$ eV/Å とする．(1) $E$ と $F=-\diff{E}{r}$ を求めよ．(2) 力の損失 $\ell_F=\tfrac12(F-F^{\mathrm{ref}})^{2}$ について，$\partial\ell_F/\partial w_2$ と $\partial\ell_F/\partial b$ を求めよ．</p>
+<p><strong>解答</strong>　(1) $u=w_1r+b=-3.0+4.0=1.0$，$t=\tanh1.0=0.761594$，$E=1.0\times0.761594-1.0=-0.238406$ eV．連鎖律で $\diff{E}{r}=w_2(1-t^{2})w_1$ なので</p>
+$$
+\begin{aligned}
+F&=-w_2w_1(1-t^{2})\\
+&=-1.0\times(-2.0)\times0.419974\\
+&=0.839949\ \mathrm{eV/Å}.
+\end{aligned}
+$$
+<p>(2) $\partial\ell_F/\partial\theta=(F-F^{\mathrm{ref}})\,\partial F/\partial\theta$ で，$F-F^{\mathrm{ref}}=0.339949$ eV/Å．$w_2$ については $\partial F/\partial w_2=-w_1(1-t^{2})=0.839949\ \text{Å}^{-1}$ なので $\partial\ell_F/\partial w_2=0.339949\times0.839949$ $=0.285539$ eV/Å²．$b$ については，$1-t^{2}$ を $u$ で微分すると $-2t(1-t^{2})$（tanh の 2 階導関数）が現れ，$\partial u/\partial b=1$ だから</p>
+$$
+\begin{aligned}
+\pdiff{F}{b}&=-w_2w_1\cdot\bigl(-2t(1-t^{2})\bigr)\\
+&=2w_2w_1t(1-t^{2})=-1.279400\ \mathrm{eV/Å},
+\end{aligned}
+$$
+<p>$\partial\ell_F/\partial b=0.339949\times(-1.279400)$ $=-0.434930$ (eV/Å)²．エネルギーだけの損失なら $h'$ までで済むが，力の損失では $h''$ が要る．tanh や sigmoid は何回でも微分できるが，ReLU は $h''=0$（折れ目を除く）なので，力を学習するポテンシャルでは滑らかな活性化関数が好まれる．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-11">15.11 誤解しやすい点と適用限界<span class="route-tag adv">詳しいルート</span></h2>
+
+<div class="box warn">
+<p class="box-title">注意：逆伝播は学習則ではない</p>
+<p>誤差逆伝播は<strong>勾配を計算する方法</strong>であり，重みをどう動かすか（学習則）は別に決める．勾配を使う更新には，素朴な勾配降下法のほか，モーメンタム，Adam などがある（<a href="ch07_optimization.html#sec7-6">第7章 7.6 節</a>）．「逆伝播で学習する」という言い方は，「逆伝播で勾配を求め，勾配降下法の仲間で更新する」の省略である．逆に，逆伝播で得られる勾配は，学習に限らず，入力についての感度（15.10 節の力，どの記述子が予測に効くかの局所的な目安）にも使える．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：勾配が正しくても，良い解に着くとは限らない</p>
+<p>ニューラルネットワークの損失は非凸であり（<a href="ch07_optimization.html#sec7-4">第7章 7.4 節</a>），正しい勾配で下っても局所的な解や平らな領域に留まることがある．第14章（<a href="ch14_neural_networks.html#sec14-7">14.7 節</a>）では，隠れユニット 2 個で XOR を表せる重みが存在するのに，シミュレーターの既定の seed では正解率 75 % の解に留まる例を見た．勾配確認（15.4 節）が通ることは，学習が成功することを保証しない．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：勾配確認の落とし穴</p>
+<p>勾配確認は，倍精度・小さなネットワーク・少数のデータで行う．単精度（float32）では丸め誤差が $10^{-7}$ の程度なので，$\epsilon$ の最適値も合格の目安も変わる．ドロップアウトのような乱数を含む計算は，乱数を固定してから比べる．ReLU の折れ目の近くでは差分が微分にならない（シミュレーター15.2 の問い 2）．重み減衰の項を入れるなら，逆伝播の側と差分の側の両方に入れる．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：損失が下がらないときの点検</p>
+<p>表15.4 に，よく見る症状と点検の順を挙げる．上から順に，安く確かめられるものから点検する．</p>
+</div>
+
+<div class="tablewrap">
+<table id="tab15-4">
+<caption>表15.4　損失が下がらないときの点検表</caption>
+<thead><tr><th>症状</th><th>疑うこと</th><th>確かめ方</th></tr></thead>
+<tbody>
+<tr><td>初めから NaN・無限大，すぐに発散</td><td>学習率が大きすぎる，入力の尺度がそろっていない</td><td>$\eta$ を 1/10 にする．入力を標準化する（<a href="ch07_optimization.html#sec7-3">第7章 7.3 節</a>）</td></tr>
+<tr><td>少しも下がらない</td><td>勾配の実装の誤り，初期値が全部 0，学習率が小さすぎる</td><td>勾配確認（15.4 節）．初期値の分布を見る（15.6 節）</td></tr>
+<tr><td>出力が定数のまま</td><td>対称な初期値，死んだ ReLU，出力層の飽和</td><td>隠れユニットの出力 $z_j$ の分布を見る</td></tr>
+<tr><td>入力に近い層だけ動かない</td><td>勾配消失（sigmoid の多段，小さすぎる初期値）</td><td>層ごとの $\norm{\partial L/\partial\bm{W}^{(l)}}$ を比べる（15.7 節）</td></tr>
+<tr><td>訓練損失は下がるが検証損失が上がる</td><td>過学習</td><td>早期終了・重み減衰・データを増やす（15.8 節）</td></tr>
+<tr><td>訓練損失も検証損失も高いまま</td><td>モデルが小さすぎる，特徴量が足りない</td><td>隠れユニットを増やす，記述子を見直す</td></tr>
+<tr><td>極端に良い検証損失</td><td>データ漏洩</td><td>分割の仕方を見直す（<a href="ch06_generalization.html#sec6-7">第6章 6.7 節</a>）</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：脳の学習の仕組みではない</p>
+<p>誤差逆伝播は，同じ重みの転置で誤差を逆向きに運ぶことを要求する．生物の神経回路が同じことをしているかは分かっておらず，逆伝播を脳の学習の仕組みとみなす根拠はない．本書では，逆伝播を「微分可能な関数の合成について，勾配を効率よく求める計算法」として扱う．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題15.11　死んだ ReLU</p>
+<p>入力 $\bm{x}\in[-1,1]^{2}$（各成分が −1 以上 1 以下）を受ける ReLU の隠れユニットの重みが $\bm{w}=(0.5,\ 0.5)$，バイアスが $b=-2$ になってしまった．(1) どの入力でも $a=\bm{w}^{\tp}\bm{x}+b\lt0$ であることを示せ．(2) このユニットの $\bm{w}$ と $b$ の勾配が，どのデータでも 0 になることを示せ．(3) 重み減衰があるとき，このユニットの重みはどうなるか．</p>
+<p><strong>解答</strong>　(1) $a$ の最大は $x_1=x_2=1$ のときで $0.5+0.5-2=-1\lt0$．</p>
+<p>(2) どのデータでも $a\lt0$ なので $h'(a)=0$，式 \eqref{eq:15-bp2} より $\delta=0$．式 \eqref{eq:15-bp3}・\eqref{eq:15-bp4} より $\partial\ell/\partial\bm{w}=\delta\,\bm{x}^{\tp}=\bm{0}$，$\partial\ell/\partial b=0$．ミニバッチの平均も 0 なので，このユニットはもう動かない．出力も常に 0 で，出ていく重みの勾配 $\delta^{(l+1)}z=0$ も 0 である．</p>
+<p>(3) データの勾配は 0 のままで，重み減衰の項だけが働くので，$\bm{w}$ と出ていく重みは更新ごとに $1-\eta\lambda$ 倍に縮む．バイアスには減衰を掛けないので $b=-2$ のままで，ユニットは生き返らない．大きすぎる学習率で 1 回だけ大きく動いたときなどに起こる．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec15-12">15.12 まとめ・次章への接続・演習・参考文献</h2>
+
+<h3>15.12.1 まとめ</h3>
+<ul>
+  <li><strong>連鎖律と計算グラフ</strong>：1 本の経路では局所的な微分の積，枝分かれでは経路の和（定理15.1）．損失の側からまとめると，共通の部分を 1 回だけ計算して全パラメーターに配れる．</li>
+  <li><strong>4 本の式</strong>：$\bm{\delta}^{(n_{\mathrm{layer}})}=\hat{\bm{y}}-\bm{y}$，$\bm{\delta}^{(l)}=h'(\bm{a}^{(l)})\odot(\bm{W}^{(l+1)\tp}\bm{\delta}^{(l+1)})$，$\partial\ell/\partial\bm{W}^{(l)}=\bm{\delta}^{(l)}\bm{z}^{(l-1)\tp}$，$\partial\ell/\partial\bm{b}^{(l)}=\bm{\delta}^{(l)}$．逆伝播の手間は順伝播の約 2 倍で，パラメーターの数に比例して増えない．</li>
+  <li><strong>数値で追う</strong>：2–2–1 の例で $L=0.714438$ が 1 回の更新で $0.343888$ に下がった．減少量は 1 次の近似 $\eta\norm{\bm{g}}^{2}$ より小さい．</li>
+  <li><strong>勾配確認</strong>：中心差分の誤差は $O(\epsilon^{2})$，丸め誤差は $O(\epsilon_{\mathrm{mach}}/\epsilon)$．倍精度では $\epsilon\approx10^{-5}$ が目安で，ベクトルとしての相対誤差で判断する．</li>
+  <li><strong>ミニバッチ学習</strong>：1 エポックで $\lceil N/B\rceil$ 回の更新．学習曲線で訓練損失と検証損失を並べて見る．</li>
+  <li><strong>初期化・勾配消失</strong>：全部 0 は対称性を破れない．分散を保つ条件から Xavier（$2/(D_{l-1}+D_l)$）と He（$2/D_{l-1}$）．誤差は層ごとに $h'$ と $\bm{W}^{\tp}$ を掛けて伝わり，sigmoid では $h'\le1/4$．</li>
+  <li><strong>正則化</strong>：重み減衰（平均の損失に $\tfrac{\lambda}{2}\norm{\bm{W}}^{2}$．バイアスは除く），早期終了，ドロップアウト，データ拡張．</li>
+  <li><strong>自動微分</strong>：逆伝播は逆モードの自動微分．力 $\bm{F}=-\partial E/\partial\bm{R}$ も同じ仕組みで 1 回で求まる．</li>
+</ul>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+\bm{\delta}^{(l)}&=h'\bigl(\bm{a}^{(l)}\bigr)\\
+&\odot\bigl(\bm{W}^{(l+1)\tp}\bm{\delta}^{(l+1)}\bigr),\\
+\pdiff{\ell}{\bm{W}^{(l)}}&=\bm{\delta}^{(l)}\bm{z}^{(l-1)\tp},\\
+\pdiff{\ell}{\bm{b}^{(l)}}&=\bm{\delta}^{(l)}
+\end{aligned} \label{eq:15-key}
+\end{equation}
+</div>
+
+<h3>15.12.2 次章への接続</h3>
+<p>本章までのネットワークは全結合で，入力の並び方や対称性を何も知らない．次の<a href="ch16_structured_deep_learning.html">第16章</a>では，画像の並進や，結晶・分子の回転と原子の番号の付け替えといった<strong>構造</strong>をモデルに組み込む．畳み込み層やグラフニューラルネットワークでは，同じ重みを多くの場所で使い回す（重み共有）．そのような重みの勾配は，定理15.1 の「経路の和」により，使われた場所ごとの勾配の和になる．本章の逆伝播は，そのまま構造を持つネットワークの学習の土台になる．系列データと GPT へ進む入門ルートの読者は，<a href="ch22_sequences_hmm.html#sec22-1">第22章</a>（自己回帰分解）から<a href="ch23_rnn_lstm.html#sec23-4">第23章</a>（RNN．時間方向の逆伝播と勾配消失）へ進んでよい．</p>
+
+<h3>15.12.3 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習15.1　1–1–1 の ReLU のネットワーク（計算）</p>
+<p>入力 1 個・ReLU の隠れユニット 1 個・恒等出力 1 個のネットワークで，$W^{(1)}=0.8$，$b^{(1)}=-0.2$，$W^{(2)}=1.5$，$b^{(2)}=0.1$，損失を $\ell=\tfrac12(\hat{y}-y)^{2}$ とする．(1) データ $(x,y)=(1.5,\,2.0)$ について順伝播・逆伝播を行い，4 個のパラメーターの勾配を求めよ．(2) $\eta=0.1$ で 1 回更新した後の損失を求めよ．(3) データが $(x,y)=(-1.0,\,2.0)$ なら，どのパラメーターが動くか．</p>
+<p><em>ヒント：</em>ReLU の導関数は $a\gt0$ で 1，$a\lt0$ で 0．(3) は $a^{(1)}$ の符号を見る．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-1">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.2　sigmoid 出力に二乗誤差を組み合わせると（導出）</p>
+<p>出力を $\hat{y}=\sigma(a)$，損失を $\ell=\tfrac12(\hat{y}-y)^{2}$ とする．(1) $\delta=\partial\ell/\partial a=(\hat{y}-y)\hat{y}(1-\hat{y})$ を示せ．(2) $y=1$ で $\hat{y}=0.01$（大きく外れた予測）のとき，この $\delta$ と，交差エントロピーのときの $\delta=\hat{y}-y$ を比べよ．(3) 二値分類の出力層に交差エントロピーを使う理由を，(2) の結果から説明せよ．</p>
+<p><em>ヒント：</em>$\sigma'(a)=\sigma(a)(1-\sigma(a))$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-2">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.3　2 回目の更新（計算）</p>
+<p>15.3 節の 2–2–1 のネットワークで 1 回更新した後のパラメーター（表15.3）と，同じデータ $\bm{x}=(1.0,0.5)^{\tp}$，$y=1$ を使う．更新後の順伝播の値は $\bm{z}^{(1)}=(0.726897,\,0.445368)$，$\hat{y}=0.709008$ である．(1) $\delta^{(2)}$，$\bm{\delta}^{(1)}$ を求めよ．(2) 9 個の勾配を求めよ．(3) $\eta=0.5$ で 2 回目の更新をした後の損失を求め，1 回目の減少量と比べよ．</p>
+<p><em>ヒント：</em>$h'(a^{(1)}_j)=1-(z^{(1)}_j)^{2}$．2 回目の更新後の損失はシミュレーター15.1 の手順 4 で確かめられる．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-3">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.4　差分の最適な刻み（導出）</p>
+<p>(1) 中心差分の全体の誤差の目安 \eqref{eq:15-err-total} を最小にする $\epsilon^{*}$ を導き，そのときの誤差が $\epsilon_{\mathrm{mach}}^{2/3}$ に比例することを示せ．(2) 前進差分について，同じ考え方で $\epsilon^{*}=2\sqrt{\epsilon_{\mathrm{mach}}\abs{L}/\abs{L''}}$ を導け．(3) 例題15.4 の値（$L=0.714438$，$L''=0.5230$，$L'''=-0.0334$，$\epsilon_{\mathrm{mach}}=1.11\times10^{-16}$）で両者を計算し，<a href="#fig15-5">図15.5</a> の谷の位置と比べよ．</p>
+<p><em>ヒント：</em>前進差分の丸め誤差は，引き算 1 回分として $2\epsilon_{\mathrm{mach}}\abs{L}/\epsilon$ と見積もる．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-4">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.5　He の初期化（導出）</p>
+<p>(1) $a$ が 0 について対称な分布に従い，分散が有限のとき，$\Ex[\relu(a)^{2}]=\tfrac12\Var[a]$ を示せ．(2) 15.6.2 項の仮定のもとで，ReLU の層を重ねても $\Var[a^{(l)}]$ が変わらない条件 $\sigma_{\mathrm{init}}^{2}=2/D_{l-1}$ を導け．(3) 入力が 64 個の ReLU の層の $\sigma_{\mathrm{init}}$ を求めよ．Xavier の値（出力も 64 個とする）で初期化すると，10 層で $\Var[a]$ は約何倍になるか．</p>
+<p><em>ヒント：</em>(3) Xavier では $D_{l-1}\sigma_{\mathrm{init}}^{2}/2=1/2$ になる．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-5">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.6　原子ごとのエネルギーと力（材料の題材）</p>
+<p>直線上に 3 個の原子があり，位置は $x_1=0$，$x_2=1.0$，$x_3=2.2$（単位 Å．教育用の模型）である．原子 $i$ の周りの環境を表す記述子を $G_i=\sum_{j\ne i}\exp\bigl(-(x_i-x_j)^{2}/(1\ \text{Å}^{2})\bigr)$（無次元）とし，原子ごとのエネルギーを $\varepsilon(G)=v\tanh G$（$v=-1.0$ eV），全エネルギーを $E=\sum_{i=1}^{3}\varepsilon(G_i)$ とする（Behler–Parrinello 型の模型を極端に小さくしたもの）．(1) $G_1,G_2,G_3$ と $E$ を求めよ．(2) 原子 2 に働く力 $F_2=-\partial E/\partial x_2$ を連鎖律で求めよ．$G_1,G_2,G_3$ のどれもが $x_2$ に依存することに注意せよ．(3) $F_1+F_2+F_3=0$ となる理由を説明せよ．</p>
+<p><em>ヒント：</em>$F_2=-\sum_i\varepsilon'(G_i)\,\partial G_i/\partial x_2$．$\partial G_1/\partial x_2=2(x_1-x_2)e^{-(x_1-x_2)^{2}}$ の符号に注意する．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-6">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.7　焼結データの学習曲線を読む（材料の題材・考察）</p>
+<p>15.10.1 項の実験（データ A，訓練 8 個，隠れユニット 16 個）で，訓練 RMSE と検証 RMSE（%）は次のとおりであった．エポック 0：3.91／5.19，100：1.21／1.94，300：1.14／1.85，1000：0.84／1.52，1187：0.78／1.50，2000：0.51／1.65，5000：0.31／1.94．(1) どのエポックの重みを採用するか．理由も述べよ．(2) エポック 5000 の訓練 RMSE 0.31 % が「良すぎる」と言える根拠を述べよ．(3) 同じ検証データで隠れユニット数・学習率・止めるエポックを何十通りも選んだ後，検証 RMSE 1.50 % をこのモデルの性能として報告してよいか．(4) 実際の研究で検証データが 200 個も取れないとき，どうするか．</p>
+<p><em>ヒント：</em>データ A のノイズの標準偏差は 1.0 %．<a href="ch06_generalization.html#sec6-3">第6章 6.3 節</a>，<a href="ch06_generalization.html#sec6-5">6.5 節</a>．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-7">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習15.8　重み減衰と MAP 推定（導出）</p>
+<p>回帰の出力を $f(\bm{x}_n;\bm{w})$，観測を $y_n=f(\bm{x}_n;\bm{w})+\varepsilon_n$，$\varepsilon_n\sim\Normal(0,\sigma^{2})$（独立）とし，重みの事前分布を $p(\bm{w})=\Normal(\bm{w}\mid\bm{0},\sigma_w^{2}\bm{I})$ とする．(1) $-\ln p(\bm{w}\mid\data)$ を $\bm{w}$ によらない定数を除いて書け．(2) それを正の定数倍して，式 \eqref{eq:15-wd} の形（全データの平均の損失 $\frac1N\sum_n\tfrac12(f_n-y_n)^{2}$ と $\tfrac{\lambda}{2}\norm{\bm{w}}^{2}$ の和）にし，$\lambda=\sigma^{2}/(N\sigma_w^{2})$ を示せ．(3) データ A を目標値の標準偏差 $s_y=7.15$ % で標準化したとき，ノイズの分散は標準化した単位でいくつか．$N=20$，$\sigma_w=1$ なら $\lambda$ はいくつか．</p>
+<p><em>ヒント：</em>Bayes の定理 $p(\bm{w}\mid\data)\propto p(\data\mid\bm{w})p(\bm{w})$（<a href="ch04_bayesian_inference.html#sec4-3">第4章 4.3 節</a>）．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-15-8">→ 解答</a></p>
+</div>
+
+<h3>15.12.4 参考文献</h3>
+<div class="refs">
+<ol>
+<li>D. E. Rumelhart, G. E. Hinton, R. J. Williams, "Learning representations by back-propagating errors", <em>Nature</em> <strong>323</strong>, 533–536 (1986)，doi:10.1038/323533a0（誤差逆伝播で隠れユニットが特徴を学ぶことを示した論文）．</li>
+<li>C. M. Bishop, <em>Pattern Recognition and Machine Learning</em>, Springer (2006)（5 章でニューラルネットワークの学習と誤差逆伝播を扱う）．</li>
+<li>I. Goodfellow, Y. Bengio, A. Courville, <em>Deep Learning</em>, MIT Press (2016)，著者公開版 https://www.deeplearningbook.org/（6 章で逆伝播と計算グラフ，7 章で正則化，8 章で最適化と初期化を扱う）．</li>
+<li>X. Glorot, Y. Bengio, "Understanding the difficulty of training deep feedforward neural networks", <em>Proceedings of the Thirteenth International Conference on Artificial Intelligence and Statistics</em>, PMLR <strong>9</strong>, 249–256 (2010)（Xavier の初期化）．</li>
+<li>K. He, X. Zhang, S. Ren, J. Sun, "Delving Deep into Rectifiers: Surpassing Human-Level Performance on ImageNet Classification", <em>Proceedings of the IEEE International Conference on Computer Vision (ICCV)</em>, 1026–1034 (2015)，arXiv:1502.01852（He の初期化）．</li>
+<li>Y. Bengio, P. Simard, P. Frasconi, "Learning long-term dependencies with gradient descent is difficult", <em>IEEE Transactions on Neural Networks</em> <strong>5</strong>, 157–166 (1994)，doi:10.1109/72.279181（勾配消失・爆発の古典的な分析）．</li>
+<li>N. Srivastava, G. Hinton, A. Krizhevsky, I. Sutskever, R. Salakhutdinov, "Dropout: A Simple Way to Prevent Neural Networks from Overfitting", <em>Journal of Machine Learning Research</em> <strong>15</strong>, 1929–1958 (2014)．</li>
+<li>L. Prechelt, "Early Stopping — But When?", G. B. Orr, K.-R. Müller 編, <em>Neural Networks: Tricks of the Trade</em>, Lecture Notes in Computer Science <strong>1524</strong>, Springer, 55–69 (1998)，doi:10.1007/3-540-49430-8_3（早期終了の止め方の規則の比較）．</li>
+<li>A. G. Baydin, B. A. Pearlmutter, A. A. Radul, J. M. Siskind, "Automatic Differentiation in Machine Learning: a Survey", <em>Journal of Machine Learning Research</em> <strong>18</strong>(153), 1–43 (2018)（順モード・逆モードの自動微分の解説）．</li>
+<li>A. Griewank, A. Walther, <em>Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation</em>, 2nd ed., SIAM (2008)（自動微分の教科書．チェックポイント法を含む）．</li>
+<li>J. Behler, M. Parrinello, "Generalized Neural-Network Representation of High-Dimensional Potential-Energy Surfaces", <em>Physical Review Letters</em> <strong>98</strong>, 146401 (2007)，doi:10.1103/PhysRevLett.98.146401（原子ごとのエネルギーの和で全エネルギーと力を表すニューラルネットワークポテンシャル）．</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch14_neural_networks.html">← 第14章：ニューラルネットワークの表現 — 基底関数を学習する</a>
+  <span class="spacer"></span>
+  <a href="ch16_structured_deep_learning.html">第16章：構造を利用する深層学習 — 画像・グラフ・対称性 →</a>
+</nav>
+</main>
+</body>
+</html>

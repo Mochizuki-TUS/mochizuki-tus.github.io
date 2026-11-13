@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention と次トークン生成シミュレーター — 重み付きで情報を集め，次の 1 語を選ぶ</title>
+<meta name="description" content="手で設定した重みで scaled dot-product attention を数値で追い，この教材のために学習した小規模な Transformer で次トークンの分布・temperature・top-k・top-p・生成を確かめるシミュレーターです．">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第24〜26章のシミュレーター S10．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます．学習済みの重みは data/tinygpt.js を <script src> で読みます）．
+     数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim .kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; }
+#qsim .kind { border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 8px; background: #fff; font-size: .75rem; line-height: 1.5; color: var(--sub); }
+#qsim .kind b { display: block; font-size: .8rem; color: #15202b; margin-bottom: 1px; }
+#qsim .kind.k1 { border-left: 6px solid #0f4c81; }
+#qsim .kind.k2 { border-left: 6px double #00876c; }
+#qsim .kind.k3 { border-left: 6px dashed #6b7480; background: #f3f4f6; }
+#qsim .kind .tag { display: inline-block; font-size: .7rem; font-weight: 700; padding: 0 6px; border-radius: 6px; margin-left: 4px; border: 1px solid currentColor; }
+@media (max-width: 760px) { #qsim .kinds { grid-template-columns: 1fr; } }
+#qsim .mats { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-start; }
+#qsim .mat { min-width: 0; }
+#qsim .mat .mname { font-size: .76rem; color: var(--sub); margin: 0 0 2px; }
+#qsim .mat table.grid td { min-width: 3.6em; }
+#qsim .mat table.grid td.inf { color: var(--sub); background: repeating-linear-gradient(135deg, #f4f4f4 0 4px, #e6e6e6 4px 6px); }
+#qsim .medit { margin: 6px 0 8px; }
+#qsim .medit table { border-collapse: collapse; }
+#qsim .medit th { font-size: .7rem; color: var(--sub); font-weight: 400; padding: 0 4px; text-align: center; }
+#qsim .medit input { font: inherit; font-size: .8rem; width: 3.9em; padding: 2px 3px; border: 1px solid rgba(15,76,129,.30); border-radius: 6px; text-align: right; font-variant-numeric: tabular-nums; }
+#qsim .medit-wrap { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+#qsim .handnote { font-size: .76rem; color: #0a355a; background: var(--accent-soft); border-radius: 8px; padding: 6px 10px; margin: 0 0 10px; border-left: 4px solid #0f4c81; }
+#qsim .modelnote { font-size: .76rem; color: #0b4d3f; background: #eaf6ef; border-radius: 8px; padding: 6px 10px; margin: 0 0 10px; border-left: 4px double #00876c; }
+#qsim .toks { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+#qsim .tk { display: inline-flex; flex-direction: column; align-items: center; border: 1px solid var(--line); border-radius: 7px; padding: 1px 6px 2px; background: #fff; font-size: .8rem; line-height: 1.25; }
+#qsim .tk small { font-size: .62rem; color: var(--sub); }
+#qsim .tk.gen { border: 2px solid #d55e00; background: #fff6ef; font-weight: 700; }
+#qsim .tk.gen small::after { content: " 生成"; }
+#qsim .tk.sp { color: var(--sub); }
+#qsim .vocab { max-height: 250px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px 8px; margin: 4px 0 6px; }
+#qsim .vocab .ctlhead { margin: 6px 0 2px; }
+#qsim .vocab .pills { gap: 4px; }
+#qsim .vocab .btn { font-size: .74rem; padding: 3px 8px; font-weight: 400; }
+#qsim ul.judge { list-style: none; padding: 0; margin: 4px 0; }
+#qsim ul.judge li { margin: 4px 0; padding: 5px 8px; border-radius: 8px; background: var(--panel-soft); font-size: .8rem; }
+#qsim .jl { display: inline-block; font-weight: 700; border-radius: 6px; padding: 0 6px; margin-right: 6px; font-size: .76rem; }
+#qsim .jl.correct { background: #e3f3ea; color: #0b5e43; border: 1px solid #0b5e43; }
+#qsim .jl.wrong { background: #fde9e7; color: #9c1c12; border: 2px solid #9c1c12; }
+#qsim .jl.not_in_table { background: #fdf5e3; color: #7a5200; border: 1px dashed #7a5200; }
+#qsim .jl.ungrammatical, #qsim .jl.incomplete { background: #f0f0f0; color: #4b5560; border: 1px dotted #4b5560; }
+#qsim .attnwarn { font-size: .76rem; color: var(--warn); background: var(--warnbg); border-left: 3px solid #d9a400; border-radius: 0 8px 8px 0; padding: 6px 10px; margin: 8px 10px; }
+#qsim table.grid.small { font-size: .74rem; }
+#qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+#qsim .tablewrap table.grid td, #qsim .tablewrap table.grid th { white-space: nowrap; }
+#qsim table.kv.wrapv th { width: 52%; }
+#qsim table.kv.wrapv td { white-space: normal; }
+@media (max-width: 820px) { #qsim [data-panel="model"] .layout > .col-side { order: -1; } }
+#qsim tr.cut td { color: #8a9099; text-decoration: line-through; }
+#qsim .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { #qsim .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>Attention と次トークン生成 — 重み付きで情報を集め，次の 1 語を選ぶ</h1>
+  <p class="lead">①では，手で設定した小さな行列で <i>Q</i>，<i>K</i>，<i>V</i> → スコア → mask → softmax の重み → 出力，を数値で追い，√<i>d</i><sub><i>k</i></sub> で割る意味と causal mask の効き方を確かめます．②では，この教材のために学習した小さな Transformer をブラウザの中で動かし，次のトークンの確率，temperature・top-k・top-p による分布の変化，生成した文が正しいかどうかを確かめます．確率が高い文がいつも正しいとは限らないことも見てください．</p>
+
+  <div class="kinds" role="note" aria-label="このページにある計算の種類">
+    <div class="kind k1"><b>① 手で設定した重みの計算デモ<span class="tag">タブ①</span></b>行列の値はすべて手で入れたものです．学習はしていません．Attention の計算の手順を数値で追うためのものです．</div>
+    <div class="kind k2"><b>② この教材のために学習した小規模なモデル<span class="tag">タブ②</span></b>decoder のみの Transformer（2 層・2 ヘッド・<i>d</i><sub>model</sub> = 32，パラメーター 28,384 個）．教育用の合成コーパス（材料についての短い文）だけで学習しました．GPT と同じ型の小さなモデルで，GPT ではありません．</div>
+    <div class="kind k3"><b>③ 実際の GPT<span class="tag">ここには無い</span></b>このページでは動いていません．規模（パラメーター数・層数）も学習データ（実在の大量の文章）も桁違いで，②の数値（誤りの割合など）はそのまま当てはまりません．</div>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="シミュレーターの切り替え">
+    <button class="tab is-active" data-tab="attn" role="tab" type="button">① Attention を数値で追う</button>
+    <button class="tab" data-tab="model" role="tab" type="button">② 小規模な学習済みモデル（次トークンの分布と生成）</button>
+  </div>
+
+  <!-- ① attn -->
+  <section class="panel" data-panel="attn">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">softmax の重み <i>A</i>（各行 = 各 Query．Key の方向に和が 1）</p>
+        <p class="psub"><i>A</i> = softmax(<i>Q</i><i>K</i><sup>T</sup>/√<i>d</i><sub><i>k</i></sub> + <i>M</i>)．出力は <i>Z</i> = <i>A</i><i>V</i> です．</p>
+        <div class="stage">
+          <canvas data-role="cvA"></canvas>
+          <p class="cap" data-role="capA"></p>
+        </div>
+        <div class="info">
+          <h3>計算の流れ（系列を行に並べた行列．各行が 1 つの位置）</h3>
+          <div class="mats" data-role="mats" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqA" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <p class="handnote"><strong>重みは手で設定した値です．学習したモデルではありません．</strong>行列の値は下の欄で変えられます（−5〜5）．</p>
+        <div class="controls" data-role="ctlA"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readA" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② model -->
+  <section class="panel" data-panel="model" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="modelnote"><strong>この教材のために学習した小規模なモデル</strong>（パラメーター 28,384 個．GPT ではありません）．学習データは教育用の合成コーパスです．計算はすべてこのブラウザの中で行っています．</p>
+        <p class="ptitle">文脈と次のトークンの分布</p>
+        <div class="toks" data-role="toks" aria-live="polite"></div>
+        <p class="hint" data-role="toksHint"></p>
+        <div class="stage">
+          <canvas data-role="cvD"></canvas>
+          <div data-role="lgD"></div>
+          <p class="cap" data-role="capD"></p>
+        </div>
+        <div class="info">
+          <h3>上位 10 語の確率（τ・top-k・top-p の各段階）</h3>
+          <div class="tablewrap" data-role="tblD"></div>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqD" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>生成した列と判定</h3>
+          <div data-role="genOut" aria-live="polite"></div>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvW"></canvas>
+          <p class="attnwarn"><strong>注意：</strong>重みは情報を集める割合であり，モデルの判断理由とは限りません（第24章 24.10）．</p>
+          <p class="cap" data-role="capW"></p>
+        </div>
+        <div class="info">
+          <h3>比較：bigram モデル（直前の 1 トークンだけを見る数え上げ．Transformer ではありません）</h3>
+          <div data-role="bigram"></div>
+        </div>
+        <div class="info">
+          <h3>このモデルの説明</h3>
+          <div data-role="shapes"></div>
+          <table class="kv wrapv">
+            <tr><th>型</th><td>decoder のみの Transformer（pre-LN）</td></tr>
+            <tr><th>語彙 <i>V</i><sub>voc</sub>（単語単位）</th><td>67</td></tr>
+            <tr><th><i>d</i><sub>model</sub> ／ <i>n</i><sub>head</sub> ／ <i>d</i><sub><i>k</i></sub></th><td>32 ／ 2 ／ 16</td></tr>
+            <tr><th><i>n</i><sub>layer</sub> ／ 文脈長 <i>T</i><sub>max</sub></th><td>2 ／ 24</td></tr>
+            <tr><th>FFN の中間の次元</th><td>128（GELU）</td></tr>
+            <tr><th>位置の情報</th><td>学習する位置埋め込み <i>W</i><sub><i>P</i></sub></td></tr>
+            <tr><th>出力</th><td>重み共有 <i>W</i><sub><i>U</i></sub> = <i>W</i><sub><i>E</i></sub><sup>T</sup></td></tr>
+            <tr><th>パラメーター数</th><td>28,384</td></tr>
+            <tr><th>　うち 1 層の Attention ／ FFN</th><td>4,224 ／ 8,352</td></tr>
+          </table>
+          <p class="hint"><strong>学習データ：</strong>教育用の合成コーパス．材料 27 種の表（分類・電気・熱・結晶構造・磁石・常温の状態．大学初年の教科書的な事実だけ）と文の型 8 種から機械的に作った短い文で，実在の文章は使っていません．材料ごとに文の数を変えています（多い 6 種：各 1000 文，中 8 種：各 100 文，少ない 13 種：各 8 文）．訓練 6211 文（56476 トークン），検証 693 文．</p>
+          <p class="hint"><strong>学習の条件：</strong>次トークン予測の交差エントロピー．AdamW，学習率 3×10⁻³（warmup のあと cosine），ミニバッチ 32 行 × 24 トークン，1500 ステップ（訓練データの約 20 周），seed 1．CPU・float32 で 14 s．</p>
+          <table class="kv wrapv">
+            <tr><th>検証の損失（nat/トークン）／ perplexity</th><td>0.501 ／ 1.65</td></tr>
+            <tr><th>bigram モデルの perplexity（比較）</th><td>2.52</td></tr>
+            <tr><th>「〈材料〉 は …」での上位 1 位の正答率：多い ／ 中 ／ 少ない</th><td>33/33 ／ 44/44 ／ 62/67</td></tr>
+            <tr><th>材料を指定した τ = 1 の生成での誤りの割合：多い ／ 中 ／ 少ない</th><td>0.8 % ／ 1.3 % ／ 9.0 %</td></tr>
+          </table>
+          <p class="hint">誤りの割合などは，この小さなモデルとこの合成コーパスでの実測値です．実際の GPT の誤りの割合ではありません．</p>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlM"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readM" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">このページの操作部分は JavaScript で動きます．JavaScript が無効なので，図と操作は表示されません．下の説明（操作手順・式・条件・問い）は読めます．本文は<a href="../ch24_attention.html#sec24-3" target="_top">第24章 24.3 節</a>，<a href="../ch26_gpt.html#sec26-6" target="_top">第26章 26.6 節</a>から読めます．</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>このシミュレーターの説明（操作手順・式・条件・問い）</summary>
+
+      <h2>操作手順と観察する点</h2>
+      <ol>
+        <li>①を既定のまま見ます（<i>T</i> = 3，<i>d</i><sub>model</sub> = <i>d</i><sub><i>k</i></sub> = 2，<i>W</i><sub><i>Q</i></sub> = <i>W</i><sub><i>K</i></sub> = <i>W</i><sub><i>V</i></sub> = 単位行列，<i>X</i> の行は (1, 0)，(0, 1)，(1, 1)）．<span class="look">見る点：スコアの 1 行目は (1, 0, 1)，√2 で割ると (0.7071, 0, 0.7071)，重みは (0.4011, 0.1978, 0.4011)，出力は (0.8022, 0.5989)．どの行も重みの和が 1 であること．</span></li>
+        <li>「causal mask」をオンにします．<span class="look">見る点：1 行目の重みが (1, 0, 0) になり，出力が <i>X</i> の 1 行目そのものになること．2 行目は (0.3302, 0.6698, 0)．3 行目（最後の位置）は mask の前と変わらないこと．</span></li>
+        <li>プリセット「W_Q を 3 倍」を選び，「√d_k で割る」をオン・オフします．<span class="look">見る点：スコアが大きいほど重みが 1 つの Key に集中する（softmax が飽和する）こと．√<i>d</i><sub><i>k</i></sub> で割るとスコアが縮み，重みがなだらかになること．</span></li>
+        <li>「X の 1 行目と 2 行目を入れ替える」を押します（mask はオフ）．<span class="look">見る点：出力 <i>Z</i> の 1 行目と 2 行目もそのまま入れ替わる（置換同変）こと．Attention だけでは順序の情報が入らないこと．</span></li>
+        <li>②で文脈のプリセット「金属 の 例 に は」を選び，temperature <i>τ</i> を 0.5，1，2 にします．<span class="look">見る点：上位の確率（τ = 1 で 鉄 0.321，銅 0.288，アルミニウム 0.267）が，<i>τ</i> = 0.5 で鋭く，<i>τ</i> = 2 でなだらかになること．top-p = 0.9 では 4 語が残り，残った確率を足して 1 になるよう割り直されること．</span></li>
+        <li>②でプリセット「水銀 は 常温 で」を選び，「greedy で 1 トークン」を押します．<span class="look">見る点：表では液体なのに，モデルは「固体」を確率 0.998 で選ぶこと．判定が「誤り（表と矛盾）」になること．確率が高いことは正しいことを意味しません．</span></li>
+        <li>②でプリセット「チタン酸バリウム の 結晶構造 は」を選び，「サンプリングで 1 トークン」を seed を変えながら何度か押します．<span class="look">見る点：正解のペロブスカイト構造の確率は 0.047（4 位）で，もっともらしい誤り（岩塩構造 0.550 など）がよく出ること．頻度の少ない材料ほど誤りやすいこと．</span></li>
+        <li>②で第 2 層・ヘッド 2 の Attention の重みを見ます．<span class="look">見る点：「ニッケル は 磁石 に」の最後の位置は「ニッケル」に 0.94 の重みを置くこと．ただし重みは情報を集める割合で，判断の理由とは限りません．</span></li>
+      </ol>
+      <p>キーボードでは Tab でボタン・数値欄・スライダーへ移り，Enter（または Space）で押し，矢印キーで数値やスライダーを動かせます．タブは ←→ で切り替えられます．</p>
+
+      <h2>計算している式とアルゴリズム</h2>
+      <p>系列を行に並べます（<i>X</i> ∈ ℝ<sup><i>T</i>×<i>d</i><sub>model</sub></sup> の第 <i>t</i> 行が位置 <i>t</i> のベクトル．線形変換は右から掛ける）．</p>
+      <div class="eq"><math display="block"><mrow><mi mathvariant="bold-italic">Q</mi><mo>=</mo><mi mathvariant="bold-italic">X</mi><msub><mi mathvariant="bold-italic">W</mi><mi>Q</mi></msub><mo>,</mo><mspace width="0.8em"/><mi mathvariant="bold-italic">K</mi><mo>=</mo><mi mathvariant="bold-italic">X</mi><msub><mi mathvariant="bold-italic">W</mi><mi>K</mi></msub><mo>,</mo><mspace width="0.8em"/><mi mathvariant="bold-italic">V</mi><mo>=</mo><mi mathvariant="bold-italic">X</mi><msub><mi mathvariant="bold-italic">W</mi><mi>V</mi></msub><mo>,</mo><mspace width="0.8em"/><mi>Attention</mi><mo stretchy="false">(</mo><mi mathvariant="bold-italic">Q</mi><mo>,</mo><mi mathvariant="bold-italic">K</mi><mo>,</mo><mi mathvariant="bold-italic">V</mi><mo stretchy="false">)</mo><mo>=</mo><mi>softmax</mi><mrow><mo>(</mo><mfrac><mrow><mi mathvariant="bold-italic">Q</mi><msup><mi mathvariant="bold-italic">K</mi><mi mathvariant="normal">T</mi></msup></mrow><msqrt><msub><mi>d</mi><mi>k</mi></msub></msqrt></mfrac><mo>+</mo><mi mathvariant="bold-italic">M</mi><mo>)</mo></mrow><mi mathvariant="bold-italic">V</mi></mrow></math></div>
+      <p>softmax は各行（各 Query）について列（Key）の方向に取ります．行 <i>i</i> の重みと出力は</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>s</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>=</mo><mfrac><mrow><msub><mi mathvariant="bold-italic">q</mi><mi>i</mi></msub><mo>⋅</mo><msub><mi mathvariant="bold-italic">k</mi><mi>j</mi></msub></mrow><msqrt><msub><mi>d</mi><mi>k</mi></msub></msqrt></mfrac><mo>+</mo><msub><mi>M</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>=</mo><mfrac><mrow><mi>exp</mi><msub><mi>s</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow><mrow><munder><mo>∑</mo><msup><mi>j</mi><mo>′</mo></msup></munder><mi>exp</mi><msub><mi>s</mi><mrow><mi>i</mi><msup><mi>j</mi><mo>′</mo></msup></mrow></msub></mrow></mfrac><mo>,</mo><mspace width="0.8em"/><msub><mi mathvariant="bold-italic">z</mi><mi>i</mi></msub><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi mathvariant="bold-italic">v</mi><mi>j</mi></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>M</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>=</mo><mrow><mo>{</mo><mtable columnalign="left"><mtr><mtd><mn>0</mn></mtd><mtd><mo stretchy="false">(</mo><mi>j</mi><mo>≤</mo><mi>i</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mo>−</mo><mi>∞</mi></mtd><mtd><mo stretchy="false">(</mo><mi>j</mi><mo>&gt;</mo><mi>i</mi><mo stretchy="false">)</mo></mtd></mtr></mtable></mrow></mrow></math></div>
+      <p>です（causal mask がオフなら <i>M</i> = 0）．softmax は各行の最大値を引いてから exp を取ります（値は同じで，桁あふれしません）．exp(−∞) = 0 なので，mask した位置の重みは 0 になり，行の和は 1 のままです．</p>
+      <p>②の次トークンの確率は，位置 <i>t</i> の logits <i>o</i><sub><i>i</i></sub>（<i>i</i> は語彙の番号）から</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>p</mi><mi>i</mi></msub><mo>=</mo><mfrac><mrow><mi>exp</mi><mo stretchy="false">(</mo><msub><mi>o</mi><mi>i</mi></msub><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo></mrow><mrow><munder><mo>∑</mo><mi>j</mi></munder><mi>exp</mi><mo stretchy="false">(</mo><msub><mi>o</mi><mi>j</mi></msub><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"/><msubsup><mi>p</mi><mi>i</mi><mo>′</mo></msubsup><mo>=</mo><mfrac><msub><mi>p</mi><mi>i</mi></msub><mrow><munder><mo>∑</mo><mrow><mi>j</mi><mo>∈</mo><mtext>残る語</mtext></mrow></munder><msub><mi>p</mi><mi>j</mi></msub></mrow></mfrac></mrow></math></div>
+      <p>で作ります．順序は (1) logits を <i>τ</i> で割る，(2) softmax，(3) top-k：確率の大きい順に <i>k</i> 個を残す，(4) top-p：(3) で割り直した確率を大きい順に足し，累積が <i>p</i> 以上になった語まで残す，(5) 残った語の確率を和が 1 になるよう割り直す，です．greedy は最大の logits の語を選びます．サンプリングでは一様乱数 <i>u</i> を 1 つ引き，大きい順に確率を足して初めて <i>u</i> を超えた語を選びます．</p>
+      <p>モデルの順伝播（pre-LN）：<i>h</i><sub><i>t</i></sub> = <i>W</i><sub><i>E</i></sub>[<i>x</i><sub><i>t</i></sub>] + <i>W</i><sub><i>P</i></sub>[<i>t</i>]，各層で <i>h</i> ← <i>h</i> + MHA(LN(<i>h</i>))（MHA は multi-head attention），<i>h</i> ← <i>h</i> + FFN(LN(<i>h</i>))，最後に LN をかけて <i>W</i><sub><i>E</i></sub><sup>T</sup> を掛けると logits です．位置 <i>t</i> の logits が <i>x</i><sub><i>t</i>+1</sub> の分布を与えます．列の対数確率は，モデルそのもの（<i>τ</i> = 1）の確率で</p>
+      <div class="eq"><math display="block"><mrow><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mi>a</mi><mo>:</mo><mi>b</mi></mrow></msub><mo>∣</mo><msub><mi>x</mi><mrow><mo>&lt;</mo><mi>a</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mi>a</mi></mrow><mi>b</mi></munderover><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo>∣</mo><msub><mi>x</mi><mrow><mo>&lt;</mo><mi>t</mi></mrow></msub><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><mtext>perplexity</mtext><mo>=</mo><mi>exp</mi><mrow><mo>(</mo><mo>−</mo><mfrac><mn>1</mn><mi>n</mi></mfrac><mi>ln</mi><mi>p</mi><mo>)</mo></mrow></mrow></math></div>
+      <p>と計算します（<i>n</i> はトークンの数）．causal mask があるので，列全体を 1 回順伝播すれば全位置の確率が同時に出ます．</p>
+      <p>生成した文の判定は，学習データを作った表と 8 つの文の型に照らして行います：<strong>正しい</strong>（型に合い，表の値と一致），<strong>誤り（表と矛盾）</strong>，<strong>学習データに根拠のない文</strong>（型には合うが，表にその材料のその性質の値が無い組み合わせ．たとえば高分子の結晶構造．学習データに一度も出てこない文），<strong>型に合わない文</strong>．文が「．」まで終わっていないものは<strong>未完</strong>として判定しません．</p>
+
+      <h2>データと乱数の条件</h2>
+      <ul>
+        <li>①の行列はすべて手で入れた値です（学習していません）．既定は <i>X</i> = [[1, 0], [0, 1], [1, 1]]，<i>W</i><sub><i>Q</i></sub> = <i>W</i><sub><i>K</i></sub> = <i>W</i><sub><i>V</i></sub> = 単位行列（<i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub> = <i>d</i><sub>model</sub> = 2）．入力は −5〜5，<i>T</i> = 3〜5，<i>d</i><sub>model</sub> = 2〜4 に制限しています．単位はありません．</li>
+        <li>②のモデルの重みは，この教材のために PyTorch（CPU・float32）で学習したものを有効数字 7 桁で書き出した値です．学習データは<strong>教育用の合成コーパス</strong>（材料 27 種の表と文の型 8 種から機械的に作った文．乱数 seed 20261112）です．実在の文章ではありません．</li>
+        <li>サンプリングの乱数は seed つきの生成器（mulberry32）です．既定の seed は 20261112．同じ seed・同じ設定・同じ文脈からやり直すと，同じ列が生成されます．seed の操作と「やり直す」は，生成した部分を消して乱数を最初から作り直します．</li>
+        <li>上限：文脈の長さは 24 トークン（モデルの文脈長）まで．生成は <code>&lt;eos&gt;</code> が出るか 24 トークンに達したら止まります．<i>τ</i> は 0.05〜3，top-k は 0（使わない）〜67，top-p は 0.05〜1（1 は使わない）．</li>
+      </ul>
+
+      <h2>簡略化している点</h2>
+      <ul>
+        <li>①は 1 ヘッドで，<i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub> = <i>d</i><sub>model</sub>（<i>W</i> は正方行列），バイアスなし，出力の射影 <i>W</i><sub><i>O</i></sub> なしです．</li>
+        <li>②のモデルは語彙 67 語・文脈長 24 の非常に小さなモデルで，トークンは単語単位（空白区切り）です．実際の GPT はサブワードのトークン（第26章 26.2），はるかに多い層・次元・語彙を使い，学習データも違います．</li>
+        <li>判定は 8 つの文の型に完全に一致する文だけを対象にしています．表の事実は室温・常圧・純物質での教科書的なものだけで，条件によって変わる性質は表に入れていません．</li>
+        <li>bigram モデルは直前の 1 トークンだけを数え上げた比較用のモデルです（加算スムージング α = 0.1）．Transformer でも GPT でもありません．</li>
+      </ul>
+
+      <h2>結果が不安定になる条件</h2>
+      <ul>
+        <li>①で入力の値を大きくすると（たとえば −5〜5 の端の値），スコアが大きくなって softmax が飽和し，重みがほぼ 0 と 1 になります．最大値を引いて計算するので数値はあふれませんが，学習では勾配が非常に小さくなります（第24章 24.4）．</li>
+        <li><i>τ</i> を 0.05 のように小さくすると分布は greedy とほぼ同じになり，3 のように大きくすると一様に近づいて型に合わない文が増えます．</li>
+        <li>確率が僅差の文脈（例：「窒化ガリウム の 結晶構造 は」の上位 2 語は 0.244 と 0.226）では，seed を変えると正しい文と誤った文が入れ替わります．</li>
+        <li>NaN・無限大が出た場合（通常は起きません）は計算を止めて理由を表示します．</li>
+      </ul>
+
+      <h2>本文の対応節</h2>
+      <ul>
+        <li><a href="../ch24_attention.html#sec24-2" target="_top">第24章 24.2 scaled dot-product attention</a>，<a href="../ch24_attention.html#sec24-3" target="_top">24.3 手計算</a>，<a href="../ch24_attention.html#sec24-4" target="_top">24.4 なぜ √d_k で割るか</a></li>
+        <li><a href="../ch24_attention.html#sec24-5" target="_top">第24章 24.5 self-attention</a>，<a href="../ch24_attention.html#sec24-6" target="_top">24.6 causal mask</a>，<a href="../ch24_attention.html#sec24-7" target="_top">24.7 multi-head attention</a>，<a href="../ch24_attention.html#sec24-10" target="_top">24.10 Attention の重みをどう読むか</a></li>
+        <li><a href="../ch25_transformer.html#sec25-7" target="_top">第25章 25.7 GPT 型（decoder のみ）の流れ</a>，<a href="../ch25_transformer.html#sec25-8" target="_top">25.8 小さなモデルを形で追う</a></li>
+        <li><a href="../ch26_gpt.html#sec26-4" target="_top">第26章 26.4 学習：次トークン予測</a>，<a href="../ch26_gpt.html#sec26-5" target="_top">26.5 学習時と生成時の違い</a>，<a href="../ch26_gpt.html#sec26-6" target="_top">26.6 次のトークンの選び方</a></li>
+        <li><a href="../ch26_gpt.html#sec26-9" target="_top">第26章 26.9 もっともらしい誤りが出る理由</a>，<a href="../ch26_gpt.html#sec26-10" target="_top">26.10 生成確率と正しさ・確信度の区別</a></li>
+      </ul>
+
+      <h2>操作後に答える短い問い</h2>
+      <ol>
+        <li>①の既定値で，1 行目の重みが (0.4011, 0.1978, 0.4011) になる理由を，スコアと exp の値から説明してください．causal mask をかけると 1 行目はどうなりますか．
+          <details class="ans"><summary>答えの例</summary><p>1 行目のスコアは <i>q</i><sub>1</sub> = (1, 0) と各 Key の内積 (1, 0, 1) を √2 で割った (0.7071, 0, 0.7071)．exp を取ると (2.028, 1, 2.028)，和 5.056 で割って (0.4011, 0.1978, 0.4011)．1 列目と 3 列目は Key と Query の内積が同じなので同じ重みです．causal mask をかけると 1 行目は自分（<i>j</i> = 1）しか見られないので，重みは (1, 0, 0)，出力は <i>v</i><sub>1</sub> = (1, 0) です．</p></details></li>
+        <li><i>W</i><sub><i>Q</i></sub> を 3 倍にすると，√<i>d</i><sub><i>k</i></sub> で割らない場合に 3 行目の重みはどれだけ偏りますか．割るとどうなりますか．
+          <details class="ans"><summary>答えの例</summary><p>3 行目のスコアは (3, 3, 6)．割らないと重みは (0.0453, 0.0453, 0.9094) で，ほぼ 3 列目だけになります．√2 で割ると (2.121, 2.121, 4.243) で，重みは (0.0967, 0.0967, 0.8066)．スコアを縮めるほど重みはなだらかになり，softmax の飽和（勾配が小さくなる）を避けられます．</p></details></li>
+        <li>②の「水銀 は 常温 で」で，モデルが「固体」を確率 0.998 で選ぶのはなぜですか．確率が高いことと正しいことは同じですか．
+          <details class="ans"><summary>答えの例</summary><p>学習データでは「〈金属〉 は 常温 で 固体 である ．」が多く，水銀の文（液体）は 1 文しかありません．次トークン予測の損失は学習データで次に来やすい語の尤度を上げるだけなので，頻度の低い例外は多数派の値に引き寄せられます．文全体の ln <i>p</i> も，正しい「液体」の文 −17.68 より誤った「固体」の文 −9.57 の方が大きく，確率が高いことは正しいことを意味しません．</p></details></li>
+        <li>「金属 の 例 に は」で <i>τ</i> = 0.5 と <i>τ</i> = 2 の上位 3 語の確率はいくつですか．top-p = 0.9 で何語が残りますか．
+          <details class="ans"><summary>答えの例</summary><p><i>τ</i> = 1 で 鉄 0.321，銅 0.288，アルミニウム 0.267．<i>τ</i> = 0.5 で 0.397，0.319，0.275（確率の比が 2 乗になり，大きい方に集まる），<i>τ</i> = 2 で 0.172，0.163，0.157（比が平方根になり，なだらかになる）．top-p = 0.9（<i>τ</i> = 1）では 鉄・銅・アルミニウム・マグネシウムの 4 語が残り（累積 0.910），各確率を 0.910 で割り直します．</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">機械学習 — 確率から GPT まで（目次）へ戻る</a>　｜　本文：<a href="../ch24_attention.html#sec24-3" target="_top">第24章 24.3 節</a>，<a href="../ch26_gpt.html#sec26-6" target="_top">第26章 26.6 節</a>　｜　数式はブラウザ標準の MathML で組んでいます（外部ライブラリ不使用）．</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="data/tinygpt.js"></script>
+<script src="data/tinygpt_bigram.js"></script>
+<script src="attention.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.Attention;
+  var app = document.getElementById('qsim');
+  var col = U.colors, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var CF = U.font;
+
+  /* ---- MathML・表の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  function mn(s) { return '<mn>' + U.mn(s) + '</mn>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function row(s) { return '<mtr><mtd><mstyle displaystyle="true">' + s + '</mstyle></mtd></mtr>'; }
+  function table(rows) { return '<math display="block"><mstyle displaystyle="true"><mtable columnalign="left" rowspacing="0.7em">' + rows.join('') + '</mtable></mstyle></math>'; }
+  function msub(a, b) { return '<msub>' + a + '<mrow>' + b + '</mrow></msub>'; }
+  function bold(s) { return '<mi mathvariant="bold-italic">' + s + '</mi>'; }
+  function kv2(rows) { return kv(rows).replace('class="kv"', 'class="kv wrapv"'); }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function f4(v) {                                                            /* 有効数字 4 桁（小数 3 桁で割り切れる値はそのまま） */
+    if (v === -Infinity) return '−∞';
+    var r = Math.round(v * 1000) / 1000;
+    return Math.abs(v - r) < 1e-12 ? U.mn(String(r)) : fmt(v, 4);
+  }
+  function nm(v) { return U.mn(String(Math.round(v * 1000) / 1000)); }         /* 入力した値（0.5 刻みなど）そのまま */
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function vecM(v, f) { return mo('(') + v.map(function (x) { return mn(f(x)); }).join(mo(',')) + mo(')'); }
+
+  /* 重みの濃淡（数値つき）．A：行列．o：{x0,y0,cw,ch, mask(i,j), digits, hiRow} */
+  function heatCells(c, A, o) {
+    var cm = U.cmap('blues');
+    for (var i = 0; i < A.length; i++) for (var j = 0; j < A[i].length; j++) {
+      var x = o.x0 + j * o.cw, y = o.y0 + i * o.ch, masked = o.mask && o.mask(i, j), v = A[i][j];
+      if (masked) {
+        c.fillStyle = '#f3f3f3'; c.fillRect(x, y, o.cw, o.ch);
+        c.save(); c.beginPath(); c.rect(x, y, o.cw, o.ch); c.clip(); c.strokeStyle = 'rgba(92,102,112,.35)'; c.lineWidth = 1;
+        for (var s = -o.ch; s < o.cw; s += 6) { c.beginPath(); c.moveTo(x + s, y + o.ch); c.lineTo(x + s + o.ch, y); c.stroke(); }
+        c.restore();
+      } else { c.fillStyle = cm(Math.min(1, v / (o.vmax || 1))); c.fillRect(x, y, o.cw, o.ch); }
+      if (o.digits != null && o.cw >= o.minText) {
+        var t = masked ? (o.maskText || '0') : fx(v, o.digits);
+        U.label(c, t, x + o.cw / 2, y + o.ch / 2, { size: o.fs || 11, bold: !masked, color: (!masked && v / (o.vmax || 1) > 0.55) ? '#fff' : col.ink, halo: false });
+      }
+    }
+    c.save(); c.strokeStyle = 'rgba(31,35,40,.25)'; c.lineWidth = 1;
+    for (i = 0; i <= A.length; i++) { c.beginPath(); c.moveTo(o.x0, o.y0 + i * o.ch + 0.5); c.lineTo(o.x0 + A[0].length * o.cw, o.y0 + i * o.ch + 0.5); c.stroke(); }
+    for (j = 0; j <= A[0].length; j++) { c.beginPath(); c.moveTo(o.x0 + j * o.cw + 0.5, o.y0); c.lineTo(o.x0 + j * o.cw + 0.5, o.y0 + A.length * o.ch); c.stroke(); }
+    if (o.hiRow != null) { c.strokeStyle = col.orange; c.lineWidth = 2.5; c.setLineDash([6, 3]); c.strokeRect(o.x0 + 1, o.y0 + o.hiRow * o.ch + 1, A[0].length * o.cw - 2, o.ch - 2); }
+    c.restore();
+  }
+
+  /* =================================================================
+     ① 手で設定した重みの Attention
+     ================================================================= */
+  function AttnSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var P0 = M.PRESETS.hand;
+    var S = { X: copy(P0.X), WQ: copy(P0.WQ), WK: copy(P0.WK), WV: copy(P0.WV), scale: true, causal: false, row: 0, preset: 'hand', lastPerm: null };
+    function copy(A) { return A.map(function (r) { return r.slice(); }); }
+    var LIM = M.LIMITS;
+    var ctl = q('ctlA');
+    var redraw = function () { self.update(); };
+    var presetOpts = Object.keys(M.PRESETS).map(function (k) { return { value: k, label: M.PRESETS[k].label }; }).concat([{ value: 'custom', label: '（手で変えた値）' }]);
+    var sel = U.select({ label: 'プリセット', options: presetOpts, value: 'hand', onChange: function (v) { if (v === 'custom') return; loadPreset(v); } });
+    function loadPreset(k) { var p = M.PRESETS[k]; S.X = copy(p.X); S.WQ = copy(p.WQ); S.WK = copy(p.WK); S.WV = copy(p.WV); S.preset = k; S.lastPerm = null; S.row = Math.min(S.row, S.X.length - 1); syncCtl(); redraw(); }
+    var pT = U.pills({ label: '系列の長さ <i>T</i>', options: [3, 4, 5].map(function (v) { return { value: v, label: String(v) }; }), value: 3, onChange: function (v) { resize(+v, S.X[0].length); } });
+    var pD = U.pills({ label: '<i>d</i><sub>model</sub>（= <i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub>）', options: [2, 3, 4].map(function (v) { return { value: v, label: String(v) }; }), value: 2, onChange: function (v) { resize(S.X.length, +v); } });
+    function resize(T, d) {
+      var X = [], i, j;
+      for (i = 0; i < T; i++) { X.push([]); for (j = 0; j < d; j++) X[i].push(S.X[i] && S.X[i][j] != null ? S.X[i][j] : 0); }
+      function W(old) { var A = []; for (var a = 0; a < d; a++) { A.push([]); for (var b = 0; b < d; b++) A[a].push(old[a] && old[a][b] != null ? old[a][b] : (a === b ? 1 : 0)); } return A; }
+      S.X = X; S.WQ = W(S.WQ); S.WK = W(S.WK); S.WV = W(S.WV); S.row = Math.min(S.row, T - 1); S.preset = 'custom'; S.lastPerm = null; syncCtl(); redraw();
+    }
+    var ckS = U.check({ label: '√<i>d</i><sub><i>k</i></sub> で割る', checked: true, onChange: function (v) { S.scale = v; redraw(); } });
+    var ckM = U.check({ label: 'causal mask（<i>j</i> &gt; <i>i</i> を −∞ に）', checked: false, onChange: function (v) { S.causal = v; redraw(); } });
+    var rowBox = U.el('div', 'ctl');
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var bPerm = U.button('X の 1 行目と 2 行目を入れ替える', function () {
+      var before = M.attention(S.X, S.WQ, S.WK, S.WV, { scale: S.scale, causal: S.causal });
+      var perm = S.X.map(function (_, i) { return i === 0 ? 1 : i === 1 ? 0 : i; });
+      S.X = M.permuteRows(S.X, perm); S.preset = 'custom';
+      var after = M.attention(S.X, S.WQ, S.WK, S.WV, { scale: S.scale, causal: S.causal });
+      var Zp = M.permuteRows(before.Z, perm), dmax = 0;
+      Zp.forEach(function (r, i) { r.forEach(function (v, j) { dmax = Math.max(dmax, Math.abs(v - after.Z[i][j])); }); });
+      S.lastPerm = { causal: S.causal, dmax: dmax };
+      syncCtl(); redraw();
+    }, { title: '置換同変性（第24章 24.8）を確かめます' });
+    var bReset = U.button('既定に戻す', function () { S.scale = true; S.causal = false; S.row = 0; loadPreset('hand'); });
+    var mEdit = U.el('div', 'medit-wrap');
+    ctl.appendChild(sel.el); ctl.appendChild(pT.el); ctl.appendChild(pD.el); ctl.appendChild(ckS.el); ctl.appendChild(ckM.el);
+    ctl.appendChild(rowBox);
+    ctl.appendChild(U.buttonRow([bPerm, bReset])); ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', '行列の値（−5〜5．Tab で次の欄，矢印キーで 0.5 ずつ）'));
+    ctl.appendChild(mEdit);
+    function rowPills() {
+      rowBox.innerHTML = '';
+      var p = U.pills({ label: '式を表示する Query の行 <i>i</i>', options: S.X.map(function (_, i) { return { value: i, label: String(i + 1) }; }), value: S.row, onChange: function (v) { S.row = +v; redraw(); } });
+      rowBox.appendChild(p.el);
+    }
+    function editor(name, html, A) {
+      var box = U.el('div', 'medit'), t = '<div class="ctlhead">' + html + '</div><table><tr><th></th>';
+      for (var j = 0; j < A[0].length; j++) t += '<th>' + (j + 1) + '</th>';
+      t += '</tr>';
+      A.forEach(function (r, i) {
+        t += '<tr><th>' + (i + 1) + '</th>';
+        r.forEach(function (v, j) { t += '<td><input type="number" step="0.5" min="' + LIM.entry[0] + '" max="' + LIM.entry[1] + '" value="' + v + '" data-m="' + name + '" data-i="' + i + '" data-j="' + j + '" aria-label="' + name.replace('W', 'W_') + ' の ' + (i + 1) + ' 行 ' + (j + 1) + ' 列"></td>'; });
+        t += '</tr>';
+      });
+      box.innerHTML = t + '</table>';
+      return box;
+    }
+    function syncCtl() {
+      sel.set(S.preset, true); pT.set(S.X.length, true); pD.set(S.X[0].length, true); ckS.set(S.scale, true); ckM.set(S.causal, true); rowPills();
+      mEdit.innerHTML = '';
+      mEdit.appendChild(editor('X', '<i>X</i>（<i>T</i> × <i>d</i><sub>model</sub>．行 = 位置）', S.X));
+      mEdit.appendChild(editor('WQ', '<i>W</i><sub><i>Q</i></sub>', S.WQ));
+      mEdit.appendChild(editor('WK', '<i>W</i><sub><i>K</i></sub>', S.WK));
+      mEdit.appendChild(editor('WV', '<i>W</i><sub><i>V</i></sub>', S.WV));
+      U.postHeightLater();
+    }
+    function onEdit(e) {
+      var t = e.target; if (!t.dataset || !t.dataset.m) return;
+      var v = parseFloat(t.value), A = S[t.dataset.m], i = +t.dataset.i, j = +t.dataset.j;
+      if (!isFinite(v)) { if (e.type === 'change') t.value = A[i][j]; return; }
+      var w = Math.max(LIM.entry[0], Math.min(LIM.entry[1], v));
+      if (e.type === 'change' && w !== v) t.value = w;
+      if (A[i][j] === w) return;
+      A[i][j] = w; S.preset = 'custom'; S.lastPerm = null; sel.set('custom', true); redraw();
+    }
+    mEdit.addEventListener('input', onEdit); mEdit.addEventListener('change', onEdit);
+    syncCtl();
+
+    function matTable(nameHTML, A, digits, isInt) {
+      var h = '<div class="mat"><div class="mname">' + nameHTML + '</div><table class="grid small">';
+      A.forEach(function (r) { h += '<tr>' + r.map(function (v) { return v === -Infinity ? '<td class="inf">−∞</td>' : '<td>' + (isInt ? nm(v) : f4(v)) + '</td>'; }).join('') + '</tr>'; });
+      return h + '</table></div>';
+    }
+    function drawA(r) {
+      var cv = q('cvA'), T = r.T;
+      var F = U.fitCanvas(cv, { height: 0 }), W0 = F.W;
+      var lw = 60, rw = 50, top = 34, cw = Math.max(34, Math.min(130, (W0 - lw - rw - 10) / T)), ch = Math.min(48, Math.max(30, cw * 0.55));
+      var foot = '色が濃いほど重みが大きい（0〜1）．破線の枠は下の式の行 i = ' + (S.row + 1) + (r.causal ? '．斜線は mask した位置' : '');
+      var two = U.textWidth(F.c, foot, 10.5) > W0 - 10;
+      var H = top + T * ch + (two ? 46 : 32);
+      F = U.fitCanvas(cv, { height: H }); var c = F.c;
+      var x0 = lw + Math.max(0, (F.W - lw - rw - 10 - cw * T) / 2), y0 = top;
+      heatCells(c, r.A, { x0: x0, y0: y0, cw: cw, ch: ch, mask: function (i, j) { return r.causal && j > i; }, digits: 4, minText: 40, maskText: cw >= 64 ? 'mask → 0' : '0', fs: cw >= 56 ? 11.5 : 10.5, vmax: 1, hiRow: S.row });
+      for (var j = 0; j < T; j++) U.label(c, 'Key ' + (j + 1), x0 + (j + 0.5) * cw, top - 11, { size: 11, color: col.sub });
+      for (var i = 0; i < T; i++) {
+        U.label(c, 'Query ' + (i + 1), x0 - 6, y0 + (i + 0.5) * ch, { size: 11, align: 'right', color: i === S.row ? col.orange : col.sub, bold: i === S.row });
+        U.label(c, '和 ' + fx(r.rowSum[i], 3), x0 + T * cw + 6, y0 + (i + 0.5) * ch, { size: 11, align: 'left', color: col.green, bold: true });
+      }
+      U.label(c, '行の和', x0 + T * cw + 6, top - 11, { size: 10.5, align: 'left', color: col.green });
+      if (two) {
+        U.label(c, '色が濃いほど重みが大きい（0〜1）', F.W / 2, H - 27, { size: 10.5, color: col.sub, halo: false });
+        U.label(c, '破線の枠は下の式の行 i = ' + (S.row + 1) + (r.causal ? '．斜線は mask した位置' : ''), F.W / 2, H - 12, { size: 10.5, color: col.sub, halo: false });
+      } else U.label(c, foot, F.W / 2, H - 13, { size: 10.5, color: col.sub, halo: false });
+      U.setCanvasLabel(cv, 'Attention の重み ' + T + ' 行 ' + T + ' 列．' + r.A.map(function (a, i) { return 'Query ' + (i + 1) + '：' + a.map(function (v) { return fx(v, 3); }).join('，'); }).join('．') + '．各行の和は 1．' + (r.causal ? 'causal mask あり．' : ''));
+    }
+    function eq(r) {
+      var i = S.row, T = r.T, d = r.dk, rows = [];
+      var qi = r.Q[i];
+      var sq = r.scale ? '<msqrt>' + msub(mi('d'), mi('k')) + '</msqrt>' : '<mn>1</mn>';
+      /* 狭い幅（章の 390 px に埋め込んだ iframe は幅 310〜352 px）でも切れないよう，長い行は 2 行以上に分ける（2026-11-13 点検） */
+      var hdr = msub(mi('s'), mn(i + 1) + mi('j')) + mo('=') + frac(msub(bold('q'), mn(i + 1)) + mo('⋅') + msub(bold('k'), mi('j')), sq) + (r.causal ? mo('+') + msub(mi('M'), mn(i + 1) + mi('j')) : '');
+      rows.push(row(hdr));
+      rows.push(row('<mtext>（</mtext>' + msub(bold('q'), mn(i + 1)) + mo('=') + vecM(qi, f4) + (r.scale ? '<mtext>，</mtext><msqrt>' + mn(d) + '</msqrt>' + mo('=') + mn(f4(r.factor)) : '<mtext>，割らない</mtext>') + '<mtext>）</mtext>'));
+      for (var j = 0; j < T; j++) {
+        var kj = r.K[j], masked = r.causal && j > i;
+        var dotStr = qi.map(function (v, k) { return mn(f4(v)) + mo('×') + mn(f4(kj[k])); }).join(mo('+'));
+        var lhs = msub(mi('s'), mn(i + 1) + mn(j + 1)) + mo('=');
+        if (masked) rows.push(row(lhs + '<mtext>（</mtext>' + mi('j') + mo('&gt;') + mi('i') + '<mtext> なので mask）</mtext>' + mo('−') + mi('∞')));
+        else rows.push(row(lhs + frac(dotStr, r.scale ? mn(f4(r.factor)) : mn(1)) + mo('=') + mn(f4(r.Ss[i][j]))));
+      }
+      var e = r.Sm[i].map(function (s) { return s === -Infinity ? 0 : Math.exp(s); }), es = e.reduce(function (a, b) { return a + b; }, 0);
+      rows.push(row(mi('exp') + msub(mi('s'), mn(i + 1) + mi('j')) + mo(':') + vecM(e, f4) + '<mspace width="0.5em"/><mtext>和</mtext>' + mo('=') + mn(f4(es))));
+      rows.push(row(msub(mi('A'), mn(i + 1) + mi('j')) + mo('=') + frac(mi('exp') + msub(mi('s'), mn(i + 1) + mi('j')), mn(f4(es)))));
+      rows.push(row('<mphantom>' + msub(mi('A'), mn(i + 1) + mi('j')) + '</mphantom>' + mo('=') + vecM(r.A[i], f4)));
+      rows.push(row('<mtext>行の和 </mtext>' + '<munder><mo>∑</mo><mi>j</mi></munder>' + msub(mi('A'), mn(i + 1) + mi('j')) + mo('=') + mn(fx(r.rowSum[i], 4))));
+      var terms = r.A[i].map(function (a, j) { return mn(f4(a)) + mo('×') + vecM(r.V[j], f4); }).filter(function (_, j) { return !(r.causal && j > i); });
+      var zph = '<mphantom>' + msub(bold('z'), mn(i + 1)) + '<mo>=</mo></mphantom>';
+      terms.forEach(function (tm, k) { rows.push(row(k === 0 ? msub(bold('z'), mn(i + 1)) + mo('=') + tm : zph + mo('+') + tm)); });   /* 項ごとに改行 */
+      rows.push(row('<mphantom>' + msub(bold('z'), mn(i + 1)) + '</mphantom>' + mo('=') + vecM(r.Z[i], f4)));
+      q('eqA').innerHTML = table(rows) + '<p class="hint">実際の計算では各行の最大値を引いてから exp を取ります（重みは同じ値になります）．数値は有効数字 4 桁で表示しています．</p>';
+    }
+    var self = {
+      update: function () {
+        var r = M.attention(S.X, S.WQ, S.WK, S.WV, { scale: S.scale, causal: S.causal });
+        if (!U.guardFinite([r.A, r.Z], msg, 'Attention の重みと出力')) return;
+        if (S.lastPerm) U.status(msg, 'X の 1 行目と 2 行目を入れ替えました．' + (S.lastPerm.causal ? 'causal mask があるので，出力は単純な入れ替えにはなりません（位置によって見られる範囲が違うため）．入れ替える前の出力を入れ替えたものとの差の最大 ' + fmt(S.lastPerm.dmax, 3) + '．' : '入れ替える前の出力 Z の 1 行目と 2 行目を入れ替えたものと，いまの出力の差の最大は ' + fmt(S.lastPerm.dmax, 2) + '（置換同変）．'), S.lastPerm.causal ? 'warn' : 'ok');
+        else U.status(msg, '');
+        drawA(r);
+        var sc = r.scale ? '/√' + r.dk : '';
+        q('capA').innerHTML = '<i>T</i> = ' + r.T + '，<i>d</i><sub>model</sub> = <i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub> = ' + r.dk + '，' + (r.scale ? '√<i>d</i><sub><i>k</i></sub> = ' + f4(r.factor) + ' で割る' : '√<i>d</i><sub><i>k</i></sub> で割らない') + '，causal mask ' + (r.causal ? 'あり' : 'なし') + '．重みは手で設定した値による計算で，学習したモデルではありません．';
+        var mats = '';
+        mats += matTable('<i>X</i>（入力）', S.X, 4, true);
+        mats += matTable('<i>Q</i> = <i>X</i><i>W</i><sub><i>Q</i></sub>', r.Q) + matTable('<i>K</i> = <i>X</i><i>W</i><sub><i>K</i></sub>', r.K) + matTable('<i>V</i> = <i>X</i><i>W</i><sub><i>V</i></sub>', r.V);
+        mats += matTable('スコア <i>Q</i><i>K</i><sup>T</sup>', r.S);
+        if (r.scale) mats += matTable('<i>Q</i><i>K</i><sup>T</sup>/√' + r.dk, r.Ss);
+        if (r.causal) mats += matTable('+ <i>M</i>（causal mask）', r.Sm);
+        mats += matTable('重み <i>A</i> = softmax（各行）', r.A) + matTable('出力 <i>Z</i> = <i>A</i><i>V</i>', r.Z);
+        q('mats').innerHTML = mats;
+        eq(r);
+        var maxw = r.A.map(function (a) { return Math.max.apply(null, a); });
+        var nmask = r.causal ? r.T * (r.T - 1) / 2 : 0;
+        q('readA').innerHTML = kv2([
+          ['<i>T</i>，<i>d</i><sub><i>k</i></sub>', r.T + '，' + r.dk],
+          ['スコアを割る数', r.scale ? '√' + r.dk + ' = ' + f4(r.factor) : '1（割らない）'],
+          ['各行の重みの和', r.rowSum.map(function (v) { return fx(v, 4); }).join('，')],
+          ['各行の最大の重み', maxw.map(function (v) { return fx(v, 3); }).join('，')],
+          ['スコアの範囲（割った後）', f4(Math.min.apply(null, [].concat.apply([], r.Ss))) + ' 〜 ' + f4(Math.max.apply(null, [].concat.apply([], r.Ss)))],
+          ['mask で 0 にした重み', nmask + ' 個' + (r.causal ? '（すべて厳密に 0）' : '')]]);
+        U.postHeightLater();
+      },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② 小規模な学習済みモデル
+     ================================================================= */
+  function ModelSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    if (!window.MLData || !window.MLData.tinygpt) throw new Error('学習済みの重み data/tinygpt.js を読み込めませんでした．');
+    var J = window.MLData.tinygpt, B = window.MLData.tinygptBigram;
+    var P = M.prepareModel(J), JG = M.buildJudge(J.judge), V = P.vocab, TM = P.cfg.t_max;
+    var CTX = [
+      ['金属 の 例 に は', 'temperature の例（上位 3 語が僅差）'], ['', '<bos> だけ（文の始まり）'],
+      ['銅 の 結晶構造 は', '多い材料：正しく確信も高い'], ['鉄 は 磁石 に', '多い材料の例外（磁石につく）'],
+      ['ニッケル は 磁石 に', '少ない材料の例外：正しいが確率が下がる'], ['コバルト は 磁石 に', '少ない材料の例外'],
+      ['水銀 は 常温 で', '少ない材料の例外を落とす（高い確率で誤る）'], ['チタン酸バリウム の 結晶構造 は', 'もっともらしい誤り（正解は 4 位）'],
+      ['窒化アルミニウム の 結晶構造 は', 'もっともらしい誤り（正解は 2 位）'], ['窒化ガリウム の 結晶構造 は', '僅差：seed で正誤が入れ替わる'],
+      ['黒鉛 の 結晶構造 は', '正解は 3 位'], ['黒鉛 は 炭素材料 で 電気 を', '少ない材料でも例外を覚えている'],
+      ['ポリエチレン の', '学習データに無い「結晶構造」を続ける（greedy では型に合わない文）'], ['ナイロン の', '表に無い組み合わせの文を作る（根拠のない文）']];
+    function ctxIds(s) { return [P.bos].concat(s ? s.split(' ').map(function (w) { return P.stoi[w]; }) : []); }
+    var S = { ids: ctxIds(CTX[0][0]), rec: [], base: null, tau: 1, topK: 0, topP: 1, seed: DEFAULT_SEED, layer: 1, head: 1, running: false, lastU: null };
+    S.rec = S.ids.map(function () { return null; }); S.base = S.ids.slice();
+    var rng = C.rng(S.seed);
+    var ctl = q('ctlM');
+    var redraw = function () { self.update(); };
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+
+    var selCtx = U.select({ label: '文脈のプリセット', options: CTX.map(function (c, k) { return { value: k, label: '<bos> ' + c[0] + '（' + c[1] + '）' }; }).concat([{ value: 'custom', label: '（語彙のボタンで作った文脈）' }]), value: 0, onChange: function (v) {
+      if (v === 'custom') return; setCtx(ctxIds(CTX[+v][0])); } });
+    function setCtx(ids) { stop(); S.ids = ids.slice(); S.rec = ids.map(function () { return null; }); S.base = ids.slice(); rng = C.rng(S.seed); S.lastU = null; U.status(msg, ''); redraw(); }
+    /* 語彙のボタン（グループ分け） */
+    var facts = J.judge.facts, names = facts.map(function (f) { return f.name; });
+    var classes = [], structs = [];
+    facts.forEach(function (f) { if (classes.indexOf(f.cls) < 0) classes.push(f.cls); if (f.struct && structs.indexOf(f.struct) < 0) structs.push(f.struct); });
+    var groups = [['特別なトークン', ['<bos>', '<eos>']], ['材料（27）', names], ['分類', classes], ['結晶構造', structs]];
+    var used = {}; groups.forEach(function (g) { g[1].forEach(function (w) { used[w] = 1; }); });
+    groups.push(['その他の語', V.filter(function (w) { return !used[w]; })]);
+    var vocabBox = U.el('div', 'vocab'); vocabBox.setAttribute('role', 'group'); vocabBox.setAttribute('aria-label', '語彙のボタン（押すと文脈の最後に足します）');
+    groups.forEach(function (g) {
+      vocabBox.appendChild(U.el('div', 'ctlhead', g[0]));
+      vocabBox.appendChild(U.buttonRow(g[1].map(function (w) { return U.button(esc(w), function () { addTok(P.stoi[w]); }, { title: '「' + w + '」を文脈の最後に足します' }); })));
+    });
+    function addTok(id) {
+      if (S.running) return;
+      if (S.ids.length >= TM) { U.status(msg, '文脈は ' + TM + ' トークン（このモデルの文脈長）までです．', 'warn'); return; }
+      S.ids.push(id); S.rec.push(null); S.base = S.ids.slice(); selCtx.set('custom', true); rng = C.rng(S.seed); U.status(msg, ''); redraw();
+    }
+    var bPop = U.button('1 語消す', function () { if (S.running || S.ids.length <= 1) return; S.ids.pop(); S.rec.pop(); S.base = S.ids.slice(); selCtx.set('custom', true); U.status(msg, ''); redraw(); });
+    var bClr = U.button('&lt;bos&gt; だけにする', function () { selCtx.set(1, true); setCtx([P.bos]); });
+
+    var rTau = U.range({ label: 'temperature <i>τ</i>', min: 0.05, max: 3, step: 0.05, value: 1, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.tau = v; redraw(); } });
+    var rK = U.range({ label: 'top-k（0 は使わない）', min: 0, max: 67, step: 1, value: 0, fmt: function (v) { return v === 0 ? 'なし' : String(v); }, onInput: function (v) { S.topK = Math.round(v); redraw(); } });
+    var rP = U.range({ label: 'top-p（1 は使わない）', min: 0.05, max: 1, step: 0.01, value: 1, fmt: function (v) { return v >= 1 ? 'なし' : fx(v, 2); }, onInput: function (v) { S.topP = v; redraw(); } });
+    var bG1 = U.button('greedy で 1 トークン', function () { gen('greedy', 1); });
+    var bS1 = U.button('サンプリングで 1 トークン', function () { gen('sample', 1); }, { primary: true });
+    var bGA = U.button('文末まで生成（サンプリング）', function () { gen('sample', TM); });
+    var bGG = U.button('文末まで生成（greedy）', function () { gen('greedy', TM); });
+    var bRedo = U.button('やり直す', function () { stop(); S.ids = S.base.slice(); S.rec = S.rec.slice(0, S.base.length); rng = C.rng(S.seed); S.lastU = null; U.status(msg, '生成した部分を消し，seed ' + S.seed + ' で乱数を作り直しました．', ''); redraw(); }, { title: '生成した部分を消して，同じ seed の乱数で最初から' });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { stop(); S.seed = s; rng = C.rng(s); S.ids = S.base.slice(); S.rec = S.rec.slice(0, S.base.length); S.lastU = null; U.status(msg, 'seed ' + s + ' で乱数を作り直し，生成した部分を消しました．', ''); redraw(); } });
+    var selL = U.select({ label: 'Attention の重みを見る層', options: [{ value: 1, label: '第 1 層' }, { value: 2, label: '第 2 層' }], value: 1, onChange: function (v) { S.layer = +v; redraw(); } });
+    var selH = U.select({ label: 'ヘッド', options: [{ value: 1, label: 'ヘッド 1' }, { value: 2, label: 'ヘッド 2' }], value: 1, onChange: function (v) { S.head = +v; redraw(); } });
+    S.layer = 2; S.head = 2; selL.set(2, true); selH.set(2, true);
+
+    ctl.appendChild(selCtx.el);
+    ctl.appendChild(U.el('div', 'ctlhead', '語彙のボタン（押すと文脈の最後に足します）'));
+    ctl.appendChild(vocabBox);
+    ctl.appendChild(U.buttonRow([bPop, bClr]));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(rTau.el); ctl.appendChild(rK.el); ctl.appendChild(rP.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', '生成（文脈長 24 まで）'));
+    ctl.appendChild(U.buttonRow([bG1, bS1])); ctl.appendChild(U.buttonRow([bGA, bGG])); ctl.appendChild(U.buttonRow([bRedo]));
+    ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', 'greedy は τ・top-k・top-p によらず最大の確率の語を選びます．サンプリングは右の設定の分布から 1 つ引きます．'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(seed.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var lh = U.el('div', 'two'); lh.appendChild(selL.el); lh.appendChild(selH.el); ctl.appendChild(lh);
+
+    /* 生成（1 トークンずつ時間を分けて進める．停止できる） */
+    var timer = null, genBtns = [bG1, bS1, bGA, bGG];
+    function stop() { if (timer) { clearTimeout(timer); timer = null; } S.running = false; setBusy(false); }
+    function setBusy(b) { genBtns.forEach(function (x) { x.disabled = b || S.ids.length >= TM; }); bGA.textContent = (b && S.runMode === 'sample') ? '停止' : '文末まで生成（サンプリング）'; bGG.textContent = (b && S.runMode === 'greedy') ? '停止' : '文末まで生成（greedy）'; if (b) { (S.runMode === 'sample' ? bGA : bGG).disabled = false; } }
+    function gen(mode, n) {
+      if (S.running) { stop(); U.status(msg, '生成を止めました．', ''); redraw(); return; }
+      if (S.ids.length >= TM) { U.status(msg, '文脈長 ' + TM + ' に達しているので，これ以上は生成できません．「やり直す」か「1 語消す」を押してください．', 'warn'); return; }
+      var left = n; S.running = n > 1; S.runMode = mode;
+      if (S.running) setBusy(true);
+      var delay = U.reducedMotion() ? 0 : 60;
+      (function one() {
+        var t0 = performance.now();
+        var r;
+        try { r = M.step(P, S.ids, mode, rng, S.tau, S.topK, S.topP); }
+        catch (e) { stop(); U.status(msg, '計算を止めました：' + e.message, 'warn'); return; }
+        if (r.stop === 'full' || !isFinite(r.pModel)) { stop(); U.status(msg, r.stop === 'full' ? '文脈長 ' + TM + ' に達したので止めました．' : '確率に NaN が出たので止めました．', 'warn'); redraw(); return; }
+        S.ids.push(r.id); S.rec.push({ mode: mode, pUsed: r.pUsed, pModel: r.pModel, u: r.u, tau: S.tau, topK: S.topK, topP: S.topP });
+        S.lastU = r.u; left--;
+        var done = r.id === P.eos || S.ids.length >= TM || left <= 0;
+        U.status(msg, (mode === 'greedy' ? 'greedy で' : 'サンプリング（一様乱数 u = ' + fx(r.u, 4) + '）で') + '「' + V[r.id] + '」を選びました（' + fmt(performance.now() - t0, 2) + ' ms）．' + (done && n > 1 ? (r.id === P.eos ? '<eos> が出たので止めました．' : S.ids.length >= TM ? '文脈長 ' + TM + ' に達したので止めました．' : '') : ''), '');
+        redraw();
+        if (!done && S.running) timer = setTimeout(one, delay); else { S.running = false; timer = null; setBusy(false); redraw(); }
+      })();
+    }
+
+    U.legendHTML(q('lgD'), [
+      { label: 'temperature をかけた後の確率 <i>p</i><sub><i>i</i></sub>（枠）', color: col.gray, kind: 'band', alpha: 0.12 },
+      { label: 'top-k・top-p の後に割り直した確率 <i>p</i>′<sub><i>i</i></sub>（塗り）', color: col.accent, kind: 'band', alpha: 0.85 },
+      { label: '除外された語（斜線・取り消し線）', color: col.gray, dash: [2, 3], width: 2 }]);
+
+    function drawDist(d, d1) {
+      var cv = q('cvD'), K = Math.min(10, d.order.length);
+      var F = U.fitCanvas(cv, { height: 30 + K * 26 + 34 }), c = F.c;
+      var top = 22, rh = 26;
+      var lw = 0; for (var k = 0; k < K; k++) lw = Math.max(lw, U.textWidth(c, V[d.order[k]], 11.5));
+      lw = Math.min(lw + 26, F.W * 0.38);
+      var x0 = lw + 4, x1 = F.W - 58, xs = function (p) { return x0 + (x1 - x0) * p; };
+      var ax = { box: [x0, top, x1, top + K * rh] };
+      /* 目盛 */
+      c.save(); c.strokeStyle = 'rgba(31,35,40,.10)'; c.lineWidth = 1;
+      [0, 0.25, 0.5, 0.75, 1].forEach(function (t) { var X = Math.round(xs(t)) + 0.5; c.beginPath(); c.moveTo(X, top - 4); c.lineTo(X, top + K * rh); c.stroke(); U.label(c, String(t), X, top + K * rh + 10, { size: 10, color: col.sub, halo: false }); });
+      c.restore();
+      U.label(c, '確率', (x0 + x1) / 2, top + K * rh + 25, { size: 10.5, color: col.sub, halo: false });
+      for (k = 0; k < K; k++) {
+        var id = d.order[k], y = top + k * rh, kept = d.keep.indexOf(id) >= 0, pt = d.pTau[id], pf = d.p[id];
+        U.label(c, (k + 1) + ' ' + V[id], x0 - 6, y + rh / 2, { size: 11.5, align: 'right', color: kept ? col.ink : '#8a9099', bold: kept && k === 0 });
+        c.save(); c.strokeStyle = col.gray; c.lineWidth = 1.2; c.fillStyle = 'rgba(107,116,128,.12)';
+        c.fillRect(x0, y + 4, xs(pt) - x0, rh - 8); c.strokeRect(x0 + 0.5, y + 4.5, Math.max(1, xs(pt) - x0 - 1), rh - 9); c.restore();
+        if (kept) { c.fillStyle = 'rgba(15,76,129,.85)'; c.fillRect(x0, y + 8, Math.max(1, xs(pf) - x0), rh - 16); }
+        else {
+          c.save(); c.beginPath(); c.rect(x0, y + 4, Math.max(2, xs(pt) - x0), rh - 8); c.clip(); c.strokeStyle = 'rgba(92,102,112,.6)';
+          for (var s = -rh; s < xs(pt) - x0 + rh; s += 5) { c.beginPath(); c.moveTo(x0 + s, y + rh - 4); c.lineTo(x0 + s + rh, y + 4); c.stroke(); } c.restore();
+        }
+        var txt = kept ? (d.greedy ? '1（greedy）' : fmt(pf, 3)) : '除外';
+        U.label(c, txt, Math.min(Math.max(xs(Math.max(pt, pf)) + 4, x0 + 4), x1 + 52 - U.textWidth(c, txt, 11)), y + rh / 2, { size: 11, align: 'left', color: kept ? col.accent : '#8a9099', bold: kept });
+      }
+      var setting = d.greedy ? 'greedy' : 'τ = ' + fx(S.tau, 2) + '，top-k = ' + (S.topK || 'なし') + '，top-p = ' + (S.topP >= 1 ? 'なし' : fx(S.topP, 2));
+      U.label(c, '次のトークンの確率（上位 ' + K + ' 語）', F.W / 2, 10, { size: 10.5, color: col.sub, halo: false, box: [2, 0, F.W - 2, F.H] });
+      U.setCanvasLabel(cv, '次のトークンの確率の上位 ' + K + ' 語：' + d.order.slice(0, K).map(function (id) { return V[id] + ' ' + (d.keep.indexOf(id) >= 0 ? fmt(d.p[id], 3) : '除外') ; }).join('，') + '．' + setting + '．残る語 ' + d.keep.length + ' 語．');
+    }
+    function drawAttn(F) {
+      var cv = q('cvW'), T = S.ids.length, A = F.attn[S.layer - 1][S.head - 1];
+      var G = U.fitCanvas(cv, { height: 60 }), c = G.c;
+      var lw = 0; for (var t = 0; t < T; t++) lw = Math.max(lw, U.textWidth(c, (t + 1) + ' ' + V[S.ids[t]], 10.5));
+      lw = Math.min(lw + 8, G.W * 0.42);
+      var cw = Math.max(9, Math.min(48, (G.W - lw - 12) / T)), ch = Math.max(14, Math.min(30, cw * 0.8));
+      var H = 34 + T * ch + 26;
+      G = U.fitCanvas(cv, { height: H }); c = G.c;
+      var x0 = lw + 4, y0 = 30;
+      heatCells(c, A, { x0: x0, y0: y0, cw: cw, ch: ch, mask: function (i, j) { return j > i; }, digits: 2, minText: 30, maskText: '', fs: 10, vmax: 1, hiRow: T - 1 });
+      var step = cw < 16 ? 2 : 1;
+      for (var j = 0; j < T; j += step) U.label(c, String(j + 1), x0 + (j + 0.5) * cw, y0 - 9, { size: 10, color: col.sub, halo: false });
+      for (var i = 0; i < T; i++) {
+        var lab = (i + 1) + ' ' + V[S.ids[i]];
+        while (U.textWidth(c, lab, 10.5) > lw - 6 && lab.length > 3) lab = lab.slice(0, -2) + '…';
+        U.label(c, lab, x0 - 4, y0 + (i + 0.5) * ch, { size: 10.5, align: 'right', color: i === T - 1 ? col.orange : col.ink, bold: i === T - 1, halo: false });
+      }
+      U.label(c, '第 ' + S.layer + ' 層・ヘッド ' + S.head + '：行 = Query の位置，列 = Key の位置（番号）', G.W / 2, 10, { size: 10.5, color: col.sub, halo: false, box: [2, 0, G.W - 2, H] });
+      U.label(c, '破線の枠：最後の位置（次のトークンを予測する位置）．斜線：causal mask', G.W / 2, H - 11, { size: 10, color: col.sub, halo: false, box: [2, 0, G.W - 2, H] });
+      var last = A[T - 1].map(function (w, j) { return [w, j]; }).sort(function (a, b) { return b[0] - a[0]; }).slice(0, 4);
+      var lastTxt = last.map(function (p) { return (p[1] + 1) + '「' + V[S.ids[p[1]]] + '」' + fx(p[0], 3); }).join('，');
+      U.setCanvasLabel(cv, '第 ' + S.layer + ' 層ヘッド ' + S.head + ' の Attention の重み．最後の位置の重みの上位：' + lastTxt + '．');
+      q('capW').innerHTML = '<strong>最後の位置（' + T + '「' + esc(V[S.ids[T - 1]]) + '」）の重みの上位：</strong>' + esc(lastTxt) + '．各行の和は 1，未来の位置（右上）の重みは 0 です．' + (T > 12 ? '（列の番号は 1 つおきに表示）' : '');
+    }
+    function toksHTML() {
+      return S.ids.map(function (id, t) {
+        var g = S.rec[t], cls = 'tk' + (g ? ' gen' : '') + (id === P.bos || id === P.eos ? ' sp' : '');
+        return '<span class="' + cls + '"><small>' + (t + 1) + '</small>' + esc(V[id]) + '</span>';
+      }).join('');
+    }
+    function genHTML(seq) {
+      var gpos = []; S.rec.forEach(function (r, t) { if (r) gpos.push(t); });
+      var h = '';
+      if (gpos.length) {
+        h += '<div class="tablewrap"><table class="grid small"><thead><tr><th>位置</th><th>トークン</th><th>方式</th><th><i>p</i>（使った分布）</th><th><i>p</i>（モデル，τ = 1）</th><th>ln <i>p</i>（τ = 1）</th></tr></thead><tbody>';
+        gpos.forEach(function (t) { var r = S.rec[t]; h += '<tr><td>' + (t + 1) + '</td><td class="l">' + esc(V[S.ids[t]]) + '</td><td class="l">' + (r.mode === 'greedy' ? 'greedy' : 'τ=' + fx(r.tau, 2) + (r.topK ? '，k=' + r.topK : '') + (r.topP < 1 ? '，p=' + fx(r.topP, 2) : '')) + '</td><td>' + fmt(r.pUsed, 3) + '</td><td>' + fmt(r.pModel, 3) + '</td><td>' + fx(seq.lp[t - 1], 3) + '</td></tr>'; });
+        h += '</tbody></table></div>';
+        var sGen = 0; gpos.forEach(function (t) { sGen += seq.lp[t - 1]; });
+        h += kv([['生成した部分（' + gpos.length + ' トークン）の ln <i>p</i>（τ = 1）', fx(sGen, 3)], ['その perplexity', fmt(Math.exp(-sGen / gpos.length), 4)]]);
+      } else h += '<p class="hint">まだ生成していません．「greedy で 1 トークン」などを押してください．</p>';
+      var ss = M.sentences(V, S.ids, P.bos, P.eos);
+      if (ss.length) {
+        h += '<ul class="judge">';
+        ss.forEach(function (s) {
+          var lab, why = '', st;
+          if (!s.complete) { st = 'incomplete'; lab = '… 未完'; why = '文が終わっていない（「．」まで来ていない）ので判定しません．'; }
+          else {
+            var j = M.judge(JG, s.toks); st = j.status;
+            if (st === 'correct') { lab = '✓ 正しい'; why = '型 ' + j.tpl + ' に合い，表の値と一致します．'; }
+            else if (st === 'wrong') { lab = '✗ 誤り（表と矛盾）'; why = j.wrongFields.map(function (k) { return '表では ' + (k === 'C' ? j.mat + 'の分類' : j.mat + 'の' + M.FIELD_JA[k]) + 'は「' + (j.truth[k] || '').replace(/ /g, '') + '」'; }).join('，') + '．' + (j.tier === 'low' ? '（学習データに少ない材料）' : j.tier === 'mid' ? '（学習データに中程度の材料）' : ''); }
+            else if (st === 'not_in_table') { lab = '？ 学習データに根拠のない文'; why = '表に「' + j.mat + 'の' + j.unknownFields.map(function (k) { return M.FIELD_JA[k]; }).join('・') + '」の値が無い組み合わせで，学習データに一度も出てこない文です．型だけを当てはめて内容を作っています．'; }
+            else { lab = '— 型に合わない文'; why = '学習データの 8 つの文の型のどれにも合いません．'; }
+          }
+          var lp = 0, n = 0; for (var t = s.start; t <= Math.min(s.end + (s.complete && S.ids[s.end + 1] === P.eos ? 1 : 0), S.ids.length - 1); t++) if (t >= 1) { lp += seq.lp[t - 1]; n++; }
+          h += '<li><span class="jl ' + st + '">' + lab + '</span>' + esc(s.toks.join(' ')) + '<br><span class="hint">' + esc(why) + (n ? '　文の ln <i>p</i>（τ = 1，' + n + ' トークン' + (S.ids[s.end + 1] === P.eos ? '，&lt;eos&gt; を含む' : '') + '）= ' + fx(lp, 2) + '，perplexity ' + fmt(Math.exp(-lp / n), 3) : '') + '</span></li>';
+        });
+        h += '</ul>';
+      }
+      return h;
+    }
+    function eqD(lo, d, d1, seq) {
+      var rows = [], top = d.order[0], o = lo, omax = Math.max.apply(null, o), tau = S.tau;
+      var sum = 0; o.forEach(function (v) { sum += Math.exp((v - omax) / tau); });
+      var w = '<mtext>「' + esc(V[top]) + '」</mtext>';
+      rows.push(row(msub(mi('p'), w) + mo('=') + frac(mi('exp') + mo('(') + msub(mi('o'), w) + mo('/') + mi('τ') + mo(')'), '<munder><mo>∑</mo><mi>j</mi></munder>' + mi('exp') + mo('(') + msub(mi('o'), mi('j')) + mo('/') + mi('τ') + mo(')'))));
+      var phP = '<mphantom>' + msub(mi('p'), w) + '</mphantom>';   /* 狭い幅で切れないよう 1 つの式を 3 行に分ける（2026-11-13 点検） */
+      rows.push(row(phP + mo('=') + frac(mi('exp') + mo('(') + mn(f4(o[top])) + mo('/') + mn(fx(tau, 2)) + mo(')'), mi('exp') + mo('(') + mn(f4(omax)) + mo('/') + mn(fx(tau, 2)) + mo(')') + mo('×') + mn(f4(sum)))));
+      rows.push(row(phP + mo('=') + mn(fmt(d.pTau[top], 4))));
+      var noteD = '分母は最大の logits ' + f4(omax) + ' を引いて計算しています（τ = 1 なら「' + esc(V[top]) + '」の確率は ' + fmt(d1.pTau[top], 4) + '）．';
+      if (d.greedy) rows.push(row('<mtext>greedy：最大の logits の語を確率 1 で選ぶ</mtext>'));
+      else if (d.keep.length < V.length) {
+        var sk = 0; d.keep.forEach(function (i) { sk += d.pTau[i]; });
+        rows.push(row(msubsup(mi('p'), w, mo('′')) + mo('=') + frac(msub(mi('p'), w), '<munder><mo>∑</mo><mtext>残る ' + d.keep.length + ' 語</mtext></munder>' + msub(mi('p'), mi('j')))));
+        rows.push(row('<mphantom>' + msubsup(mi('p'), w, mo('′')) + '</mphantom>' + mo('=') + frac(mn(fmt(d.pTau[top], 4)), mn(fmt(sk, 4))) + mo('=') + mn(fmt(d.p[top], 4))));
+      } else noteD += 'top-k・top-p で除外される語はありません（p′ = p）．';
+      if (S.ids.length > 1) {
+        var lps = seq.lp.slice(-Math.min(4, seq.lp.length));
+        var termsArr = lps.map(function (v, k) { var a = mn(fx(Math.abs(v), 3)); return (k === 0 && seq.lp.length <= 4) ? (v < 0 ? mo('−') + a : a) : (v < 0 ? mo('−') : mo('+')) + a; });
+        var phL = '<mphantom>' + mi('ln') + mi('p') + '</mphantom>';
+        rows.push(row(mi('ln') + mi('p') + mo('(') + msub(mi('x'), mn(2) + mo(':') + mn(S.ids.length)) + mo('∣') + msub(mi('x'), mn(1)) + mo(')')));
+        /* 項は 2 つずつ改行（狭い幅で切れないように） */
+        for (var tk = 0; tk < termsArr.length; tk += 2) rows.push(row(phL + (tk === 0 ? mo('=') + (seq.lp.length > 4 ? mo('⋯') : '') : '<mphantom>' + mo('=') + '</mphantom>') + termsArr.slice(tk, tk + 2).join('')));
+        rows.push(row(phL + mo('=') + mn(fx(seq.sum, 3))));
+        rows.push(row('<mtext>perplexity</mtext>' + mo('=') + mi('exp') + mo('(') + mo('−') + frac(mi('ln') + mi('p'), mi('n')) + mo(')')));
+        rows.push(row('<mphantom><mtext>perplexity</mtext></mphantom>' + mo('=') + mi('exp') + mo('(') + frac(mn(fx(-seq.sum, 3)), mn(seq.n)) + mo(')') + mo('=') + mn(fmt(seq.ppl, 4))));
+      }
+      q('eqD').innerHTML = table(rows) + '<p class="hint">' + noteD + '列の ln <i>p</i> はモデルそのもの（τ = 1）の確率で，<i>x</i><sub>1</sub> = &lt;bos&gt; の次のトークンから最後までを足しています．</p>';
+    }
+    function msubsup(a, b, c) { return '<msubsup>' + a + '<mrow>' + b + '</mrow><mrow>' + c + '</mrow></msubsup>'; }
+    function tableD(d, d1) {
+      var K = Math.min(10, d.order.length), h = '<table class="grid small"><thead><tr><th>順位</th><th>トークン</th><th>logits <i>o</i><sub><i>i</i></sub></th><th>τ = 1</th><th>τ をかけた後</th><th>累積（top-p 用）</th><th>最終 <i>p</i>′</th></tr></thead><tbody>';
+      for (var k = 0; k < K; k++) {
+        var id = d.order[k], kept = d.keep.indexOf(id) >= 0, ka = d.afterK.indexOf(id);
+        h += '<tr' + (kept ? '' : ' class="cut"') + '><td>' + (k + 1) + '</td><td class="l">' + esc(V[id]) + '</td><td>' + fx(S.lo[id], 3) + '</td><td>' + fmt(d1.pTau[id], 3) + '</td><td>' + fmt(d.pTau[id], 3) + '</td><td>' + (ka >= 0 && !d.greedy ? fx(d.cumK[ka], 3) : '—') + '</td><td>' + (kept ? fmt(d.p[id], 3) : '除外') + '</td></tr>';
+      }
+      return h + '</tbody></table><p class="hint">残る語 ' + d.keep.length + ' 語（語彙 ' + V.length + ' 語のうち）．「累積」は top-k の後に割り直した確率を大きい順に足したもので，top-p はこれが <i>p</i> 以上になった語まで残します．</p>';
+    }
+    function bigramHTML(d1) {
+      var last = S.ids[S.ids.length - 1], bd = M.bigramDist(B, last);
+      var ob = C.linspace(0, V.length - 1, V.length).map(Math.round).sort(function (a, b) { return bd[b] - bd[a] || a - b; }).slice(0, 5);
+      var h = '<div class="two"><div><div class="ctlhead">bigram モデル（直前の「' + esc(V[last]) + '」だけ）</div><table class="grid small"><tbody>' + ob.map(function (i) { return '<tr><td class="l">' + esc(V[i]) + '</td><td>' + fmt(bd[i], 3) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      h += '<div><div class="ctlhead">小規模な Transformer（文脈全体，τ = 1）</div><table class="grid small"><tbody>' + d1.order.slice(0, 5).map(function (i) { return '<tr><td class="l">' + esc(V[i]) + '</td><td>' + fmt(d1.pTau[i], 3) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+      h += '<p class="hint">bigram は直前の語が同じなら，前に何の材料があっても同じ分布を出します（検証の perplexity 2.52．Transformer は 1.65）．</p>';
+      return h;
+    }
+    function shapesHTML(T) {
+      return '<table class="grid small"><thead><tr><th class="l">流れる値（いまの <i>T</i> = ' + T + '）</th><th>形</th></tr></thead><tbody>' +
+        [['トークン ID', String(T)], ['埋め込み＋位置 <i>h</i>', T + ' × 32'], ['<i>Q</i>，<i>K</i>，<i>V</i>（1 層）', '各 ' + T + ' × 32（ヘッドごとに ' + T + ' × 16）'], ['スコア・重み（ヘッドごと）', T + ' × ' + T], ['FFN の中間', T + ' × 128'], ['層の出力', T + ' × 32'], ['logits', T + ' × 67（最後の行が次トークン）']]
+          .map(function (r) { return '<tr><td class="l">' + r[0] + '</td><td>' + r[1] + '</td></tr>'; }).join('') + '</tbody></table>';
+    }
+
+    var self = {
+      update: function () {
+        var F;
+        try { F = M.forward(P, S.ids); } catch (e) { U.status(msg, '計算を止めました：' + e.message, 'warn'); return; }
+        var lo = F.logits[S.ids.length - 1]; S.lo = lo;
+        if (!U.guardFinite(lo, msg, 'logits')) return;
+        var d = M.nextDist(lo, S.tau, S.topK, S.topP), d1 = M.nextDist(lo, 1, 0, 1);
+        var seq = S.ids.length > 1 ? M.seqLogProb(P, S.ids, 1) : { lp: [], sum: 0, n: 0, ppl: null };
+        q('toks').innerHTML = toksHTML();
+        q('toks').setAttribute('aria-label', '文脈：' + S.ids.map(function (i) { return V[i]; }).join(' '));
+        q('toksHint').innerHTML = '文脈 ' + S.ids.length + ' トークン（上限 ' + TM + '）．オレンジの太枠は生成したトークン．位置 <i>t</i> の番号は本文の <i>x</i><sub><i>t</i></sub> の添字です．';
+        drawDist(d, d1);
+        q('capD').innerHTML = '<strong>' + (d.greedy ? 'greedy' : 'τ = ' + fx(S.tau, 2) + '，top-k = ' + (S.topK || 'なし') + '，top-p = ' + (S.topP >= 1 ? 'なし' : fx(S.topP, 2))) + '．</strong>最後の位置（' + S.ids.length + '「' + esc(V[S.ids[S.ids.length - 1]]) + '」）の logits から作った次のトークン <i>x</i><sub>' + (S.ids.length + 1) + '</sub> の分布です．語彙 67 語のうち確率の大きい 10 語を表示しています．学習データは教育用の合成コーパスです．';
+        q('tblD').innerHTML = tableD(d, d1);
+        eqD(lo, d, d1, seq);
+        q('genOut').innerHTML = genHTML(seq);
+        drawAttn(F);
+        q('bigram').innerHTML = bigramHTML(d1);
+        q('shapes').innerHTML = shapesHTML(S.ids.length);
+        var ent = 0; d1.pTau.forEach(function (p) { if (p > 0) ent -= p * Math.log(p); });
+        q('readM').innerHTML = kv([
+          ['文脈の長さ <i>T</i>', S.ids.length + ' / ' + TM],
+          ['次のトークンの第 1 位（τ = 1）', esc(V[d1.order[0]]) + ' ' + fmt(d1.pTau[d1.order[0]], 3)],
+          ['分布のエントロピー（τ = 1）', fx(ent, 3) + ' nat'],
+          ['残る語（いまの設定）', d.keep.length + ' 語'],
+          ['いまの設定での第 1 位の確率', fmt(d.p[d.keep[0]], 3)],
+          ['列の ln <i>p</i>（<i>x</i><sub>2</sub> から）', S.ids.length > 1 ? fx(seq.sum, 3) : '—'],
+          ['perplexity', seq.ppl === null ? '—' : fmt(seq.ppl, 4)],
+          ['seed', String(S.seed)]]);
+        [bG1, bS1, bGA, bGG].forEach(function (b) { if (!S.running) b.disabled = S.ids.length >= TM; });
+        bPop.disabled = S.ids.length <= 1 || S.running; bRedo.disabled = S.running;
+        U.postHeightLater();
+      },
+      hide: function () { stop(); },
+      state: S
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { attn: AttnSim, model: ModelSim }, initial: 'attn' });
+})();
+</script>
+</body>
+</html>

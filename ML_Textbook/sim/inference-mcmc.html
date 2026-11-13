@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>近似推論と MCMC シミュレーター — Laplace 近似・KL の向き・Metropolis–Hastings 法</title>
+<meta name="description" content="1 次元の標的分布を，Laplace 近似と 2 つの向きの KL を最小にする Gauss 分布で近似して比べ，Metropolis–Hastings 法の連鎖の振る舞いと収束の診断を確かめるシミュレーターです．">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第20章・第21章のシミュレーター S08．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim table.grid.cmp { width: 100%; font-size: .74rem; }
+#qsim table.grid.cmp th:first-child, #qsim table.grid.cmp td:first-child { text-align: left; }
+#qsim table.grid.cmp td.inf { color: var(--warn); }
+#qsim table.grid.cmp td, #qsim table.grid.chains td { white-space: nowrap; }
+@media (max-width: 480px) { #qsim table.grid.cmp, #qsim table.grid.chains { font-size: .68rem; } #qsim table.grid.cmp th, #qsim table.grid.cmp td, #qsim table.grid.chains th, #qsim table.grid.chains td { padding: 2px 4px; } }
+#qsim table.grid.chains { width: 100%; font-size: .74rem; }
+#qsim details.three { margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow); padding: 8px 14px; font-size: .82rem; }
+#qsim details.three > summary { cursor: pointer; font-weight: 700; color: var(--accent-strong); }
+#qsim .threeIn { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+#qsim .threeIn .ctl { margin: 0; }
+#qsim .threeIn input.num { width: 6em; }
+#qsim .tparams .ctl[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>近似推論と MCMC — 解けない積分を，近似と乱数で扱う</h1>
+  <p class="lead">正規化定数 <i>Z</i> = ∫ <i>p̃</i>(<i>x</i>) d<i>x</i> を知らなくても使える 2 つの方法を，1 次元の標的分布で確かめます．①では Laplace 近似と，KL ダイバージェンスを 2 つの向きで最小にした Gauss 分布を重ね，近似がどちらに歪むか，ELBO が ln <i>Z</i> の下界で差が KL(<i>q</i>‖<i>p</i>) であることを数値で見ます．②では Metropolis–Hastings 法の連鎖を走らせ，提案幅・受理率・自己相関・有効標本数・<i>R̂</i> を読み，障壁の高い二重井戸では「落ち着いて見えるのに収束していない」ことを確かめます．</p>
+
+  <div class="tabs" role="tablist" aria-label="シミュレーターの切り替え">
+    <button class="tab is-active" data-tab="approx" role="tab" type="button">① 近似分布を比べる</button>
+    <button class="tab" data-tab="mh" role="tab" type="button">② Metropolis–Hastings 法</button>
+  </div>
+
+  <!-- ① approx -->
+  <section class="panel" data-panel="approx">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">標的 <i>p</i>(<i>x</i>) と 3 つの Gauss 近似</p>
+        <p class="psub">Laplace 近似（モードでの 2 次の展開），KL(<i>q</i>‖<i>p</i>) を最小にする <i>q</i>，KL(<i>p</i>‖<i>q</i>) を最小にする <i>q</i>（平均と分散の一致）を同じ図に描きます．</p>
+        <div class="stage">
+          <canvas data-role="cvA"></canvas>
+          <div data-role="lgA"></div>
+          <p class="cap" data-role="capA"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvB"></canvas>
+          <div data-role="lgB"></div>
+          <p class="cap">横軸は nat（自然対数の単位）．縦の実線が ln <i>Z</i>（格子の上の数値積分）．各 <i>q</i> の ELBO（●）から ln <i>Z</i> までの斜線の帯の長さが KL(<i>q</i>‖<i>p</i>) です．どの <i>q</i> でも ELBO ≤ ln <i>Z</i> になります．Beta の標的では，ELBO と KL(<i>q</i>‖<i>p</i>) を 0 &lt; <i>x</i> &lt; 1 に切断して正規化した <i>q</i> で計算します．</p>
+        </div>
+        <div class="info">
+          <h3>近似の数値</h3>
+          <div class="tablewrap" data-role="cmp" aria-live="polite"></div>
+          <p class="msg empty" data-role="cmpNote"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqA" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlA"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② mh -->
+  <section class="panel" data-panel="mh" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">標本のヒストグラムと真の密度</p>
+        <p class="psub">burn-in（捨てる初期の標本）の後の全連鎖の標本をまとめたヒストグラムです．</p>
+        <div class="stage">
+          <canvas data-role="cvH"></canvas>
+          <div data-role="lgH"></div>
+          <p class="cap" data-role="capH"></p>
+        </div>
+        <p class="ptitle">トレース図（連鎖ごとの <i>x</i> の推移）</p>
+        <div class="stage">
+          <canvas data-role="cvT"></canvas>
+          <div data-role="lgT"></div>
+          <p class="cap" data-role="capT"></p>
+        </div>
+        <p class="ptitle">自己相関関数 <i>ρ</i><sub><i>k</i></sub></p>
+        <div class="stage">
+          <canvas data-role="cvR"></canvas>
+          <div data-role="lgR"></div>
+          <p class="cap">横軸は遅れ <i>k</i>（ステップ），縦軸は <i>ρ</i><sub><i>k</i></sub>（無次元）．burn-in の後の標本で連鎖ごとに計算します．各連鎖の線の上の印は積分自己相関時間の打ち切り <i>k</i><sub>c</sub>（Sokal の自動窓）です．</p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqM" aria-live="polite"></div>
+        </div>
+        <details class="three" data-role="three">
+          <summary>3 状態の離散分布で Metropolis 法の遷移行列を作る（第21章 21.7 の手計算）</summary>
+          <div data-role="threeBody"></div>
+        </details>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlM"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readM" aria-live="polite"></div>
+          <p class="msg empty" data-role="diagNote"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">このページの操作部分は JavaScript で動きます．JavaScript が無効なので，図と操作は表示されません．下の説明（操作手順・式・条件・問い）は読めます．本文は<a href="../ch20_approximate_inference.html#sec20-2" target="_top">第20章 20.2 節</a>と<a href="../ch21_sampling.html#sec21-6" target="_top">第21章 21.6 節</a>から読めます．</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>このシミュレーターの説明（操作手順・式・条件・問い）</summary>
+
+      <h2>操作手順と観察する点</h2>
+      <ol>
+        <li>①を既定（歪んだ単峰 Beta(3, 9)）のまま見ます．<span class="look">見る点：Laplace 近似はモード <i>x</i>* = 0.2 に中心を置き，分散は 1/Λ = 1/62.5 = 0.016．真の分布の平均は 0.25，分散は 0.01442 です．Laplace 近似は右の長い裾を取りこぼし，左の <i>x</i> &lt; 0（<i>p</i> = 0 の範囲）に確率 0.0569 を置くので，KL(<i>q</i>‖<i>p</i>) は ∞ になります．</span></li>
+        <li>標的を「双峰」にし，「KL(<i>q</i>‖<i>p</i>) 最小化の初期値」を「左の峰の近くから」「右の峰の近くから」「広く中央から」と切り替えます．<span class="look">見る点：KL(<i>q</i>‖<i>p</i>) を最小にする <i>q</i> は出発点によって左の峰・右の峰・両方を覆う広い形の 3 つの局所解に分かれます（既定 <i>w</i> = 0.6，<i>d</i> = 6 で KL(<i>q</i>‖<i>p</i>) = 0.507，0.911，0.846）．KL(<i>p</i>‖<i>q</i>) を最小にする <i>q</i> は 2 つの峰の間の確率の小さい所に中心を置き，両方を覆います．</span></li>
+        <li>「式に入れる <i>q</i>」を切り替え，下の「いまの数値を式に入れると」を読みます．<span class="look">見る点：ELBO + KL(<i>q</i>‖<i>p</i>) が，どの <i>q</i> でも同じ ln <i>Z</i> になること．ELBO の棒の図で，ln <i>Z</i> との差（斜線の帯）が KL(<i>q</i>‖<i>p</i>) であること．</span></li>
+        <li>「手で動かす <i>q</i> を重ねる」をオンにし，<i>m</i> と <i>s</i> を動かします．<span class="look">見る点：<i>q</i> を <i>p</i> に重ねるほど ELBO が ln <i>Z</i> に近づくこと．KL(<i>q</i>‖<i>p</i>) と KL(<i>p</i>‖<i>q</i>) は一般に違う値になること．</span></li>
+        <li>②を既定（二重井戸 <i>b</i> = 2，<i>s</i> = 0.3，連鎖 4 本）で「1000 ステップ進める」を 2 回押します．<span class="look">見る点：ヒストグラムが真の密度に近づくこと，受理率，<i>τ</i><sub>int</sub>，有効標本数，<i>R̂</i>．</span></li>
+        <li>提案幅 <i>s</i> を 0.01 と 10 にして，同じ seed でやり直します．<span class="look">見る点：小さすぎる <i>s</i> では受理率は高いのにトレースがゆっくり動き，<i>τ</i><sub>int</sub> が大きい．大きすぎる <i>s</i> では受理率が低く，トレースが平らな段になる．どちらも有効標本数が小さくなります．</span></li>
+        <li>「障壁の例（<i>b</i> = 12）」を押します（<i>s</i> = 0.3，4 本，散らした初期値，既定の seed で 2000 ステップ）．<span class="look">見る点：4 本の連鎖がそれぞれ出発した井戸から出ず，各連鎖のトレースは落ち着いて <i>τ</i><sub>int</sub> も小さいのに，<i>R̂</i> は約 9.9 と大きいこと．burn-in を 50 % にしても変わりません．初期値を「すべて同じ点」にすると <i>R̂</i> ≈ 1.00 になりますが，平均は真の 0 から遠い −0.98 のままです．</span></li>
+        <li>②の下の「3 状態の離散分布で Metropolis 法の遷移行列を作る」を開きます．<span class="look">見る点：<i>p̃</i> = (2, 3, 5) のとき遷移行列の各行の和が 1，<i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub> = <i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub>（詳細釣り合い），<b><i>p</i></b><i>T</i> = <b><i>p</i></b>（定常分布）．</span></li>
+      </ol>
+      <p>キーボードでは Tab でボタンとスライダーへ移り，Enter（または Space）で押し，矢印キーでスライダーを動かせます．タブは ←→ で切り替えられます．</p>
+
+      <h2>計算している式とアルゴリズム</h2>
+      <p>標的は非正規化の密度 <i>p̃</i>(<i>x</i>) で与え，<i>p</i>(<i>x</i>) = <i>p̃</i>(<i>x</i>)/<i>Z</i> とします．これは第20章の事後分布 <i>p</i>(<i>θ</i> | 𝒟) = <i>p</i>(𝒟, <i>θ</i>)/<i>p</i>(𝒟) に当たります（<i>x</i> ↔ <i>θ</i>，<i>p̃</i> ↔ <i>p</i>(𝒟, <i>θ</i>)，<i>Z</i> ↔ <i>p</i>(𝒟)）．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mtext>歪んだ単峰：</mtext><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><msup><mi>x</mi><mrow><mi>a</mi><mo>−</mo><mn>1</mn></mrow></msup><msup><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><mrow><mi>b</mi><mo>−</mo><mn>1</mn></mrow></msup><mspace width="0.4em"/><mo stretchy="false">(</mo><mn>0</mn><mo>&lt;</mo><mi>x</mi><mo>&lt;</mo><mn>1</mn><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.6em"/><mi>Z</mi><mo>=</mo><mi mathvariant="normal">B</mi><mo stretchy="false">(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mtext>双峰：</mtext><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>w</mi><msup><mi>e</mi><mrow><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mi>x</mi><mo>+</mo><mi>d</mi><mo>/</mo><mn>2</mn><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>/</mo><mn>2</mn></mrow></msup><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>w</mi><mo stretchy="false">)</mo><msup><mi>e</mi><mrow><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mi>x</mi><mo>−</mo><mi>d</mi><mo>/</mo><mn>2</mn><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>/</mo><mn>2</mn></mrow></msup><mo>,</mo><mspace width="0.6em"/><mi>Z</mi><mo>=</mo><msqrt><mrow><mn>2</mn><mi>π</mi></mrow></msqrt></mtd></mtr><mtr><mtd><mtext>二重井戸：</mtext><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>exp</mi><mo>[</mo><mo>−</mo><mi>b</mi><mspace width="0.17em"/><msup><mrow><mo stretchy="false">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>]</mo><mo>,</mo><mspace width="0.6em"/><mi>b</mi><mo>=</mo><mfrac><msub><mi>E</mi><mi mathvariant="normal">b</mi></msub><mrow><msub><mi>k</mi><mi mathvariant="normal">B</mi></msub><mi>T</mi></mrow></mfrac></mtd></mtr></mtable></math></div>
+      <p>Laplace 近似は，選んだモード <i>x</i>* の周りで ln <i>p̃</i> を 2 次まで展開したものです．周辺尤度 <i>Z</i>（第20章の <i>p</i>(𝒟)）の近似もこの展開から出ます．曲率は Λ と書きます（第20章と同じ文字．Gauss 分布の精度に当たります）．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>𝒩</mi><mo stretchy="false">(</mo><mi>x</mi><mo>∣</mo><msup><mi>x</mi><mo>*</mo></msup><mo>,</mo><mspace width="0.2em"/><msup><mi mathvariant="normal">Λ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><mi mathvariant="normal">Λ</mi><mo>=</mo><mo>−</mo><msub><mrow><mfrac><mrow><msup><mi mathvariant="normal">d</mi><mn>2</mn></msup></mrow><mrow><mi mathvariant="normal">d</mi><msup><mi>x</mi><mn>2</mn></msup></mrow></mfrac><mi>ln</mi><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>|</mo></mrow><mrow><mi>x</mi><mo>=</mo><msup><mi>x</mi><mo>*</mo></msup></mrow></msub></mtd></mtr><mtr><mtd><mi>ln</mi><mi>Z</mi><mo>≈</mo><mi>ln</mi><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><msup><mi>x</mi><mo>*</mo></msup><mo stretchy="false">)</mo><mo>+</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>ln</mi><mfrac><mrow><mn>2</mn><mi>π</mi></mrow><mi mathvariant="normal">Λ</mi></mfrac></mtd></mtr></mtable></math></div>
+      <p>KL ダイバージェンスは向きによって値も性質も違います（単位は nat）．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mi>KL</mi><mo stretchy="false">(</mo><mi>q</mi><mo>‖</mo><mi>p</mi><mo stretchy="false">)</mo><mo>=</mo><mo>∫</mo><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mi>ln</mi><mfrac><mrow><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><mrow><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mspace width="0.17em"/><mi mathvariant="normal">d</mi><mi>x</mi><mo>,</mo><mspace width="1em"/><mi>KL</mi><mo stretchy="false">(</mo><mi>p</mi><mo>‖</mo><mi>q</mi><mo stretchy="false">)</mo><mo>=</mo><mo>∫</mo><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mi>ln</mi><mfrac><mrow><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><mrow><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mspace width="0.17em"/><mi mathvariant="normal">d</mi><mi>x</mi></mtd></mtr><mtr><mtd><mi>ln</mi><mi>Z</mi><mo>=</mo><mi>ELBO</mi><mo stretchy="false">(</mo><mi>q</mi><mo stretchy="false">)</mo><mo>+</mo><mi>KL</mi><mo stretchy="false">(</mo><mi>q</mi><mo>‖</mo><mi>p</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><mi>ELBO</mi><mo stretchy="false">(</mo><mi>q</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>𝔼</mi><mi>q</mi></msub><mo stretchy="false">[</mo><mi>ln</mi><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mo>−</mo><msub><mi>𝔼</mi><mi>q</mi></msub><mo stretchy="false">[</mo><mi>ln</mi><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mo>≤</mo><mi>ln</mi><mi>Z</mi></mtd></mtr></mtable></math></div>
+      <p>KL(<i>p</i>‖<i>q</i>) を最小にする Gauss 分布 <i>q</i> = 𝒩(<i>x</i> | <i>m</i>, <i>s</i><sup>2</sup>) は，<i>m</i> = 𝔼<sub><i>p</i></sub>[<i>x</i>]，<i>s</i><sup>2</sup> = Var<sub><i>p</i></sub>[<i>x</i>]（平均と分散の一致）です．KL(<i>q</i>‖<i>p</i>) を最小にする <i>q</i>（＝ ELBO を最大にする <i>q</i>）は閉じた式がないので，(<i>m</i>, ln <i>s</i>) について Nelder–Mead 法で数値的に探します．目的関数に局所的な最小が複数あれば，初期値によって行き先が変わります．</p>
+      <p>Metropolis–Hastings 法：いまの点 <i>x</i> から提案 <i>x</i>′ = <i>x</i> + <i>s</i><i>ε</i>（<i>ε</i> ~ 𝒩(0, 1)）を作り，一様乱数 <i>u</i> ∈ [0, 1) が <i>u</i> &lt; min(1, <i>r</i>) なら受理（<i>x</i> ← <i>x</i>′），そうでなければ棄却（<i>x</i> のまま．同じ値をもう一度標本に数える）します．提案が対称なので <i>q</i>(<i>x</i> | <i>x</i>′) = <i>q</i>(<i>x</i>′ | <i>x</i>) が約分され，<i>Z</i> も約分されて要りません．</p>
+      <div class="eq"><math display="block"><mrow><mi>r</mi><mo>=</mo><mfrac><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo><mspace width="0.17em"/><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo>∣</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo></mrow><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mspace width="0.17em"/><mi>q</mi><mo stretchy="false">(</mo><msup><mi>x</mi><mo>′</mo></msup><mo>∣</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mo>=</mo><mfrac><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo></mrow><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"/><mtext>受理確率 </mtext><mi>min</mi><mo stretchy="false">(</mo><mn>1</mn><mo>,</mo><mi>r</mi><mo stretchy="false">)</mo></mrow></math></div>
+      <p>自己相関関数 <i>ρ</i><sub><i>k</i></sub> は，連鎖の標本 <i>x</i><sub>1</sub>, …, <i>x</i><sub><i>S</i></sub>（burn-in の後）について，分母を <i>S</i> で割る標準的な推定量で計算します（FFT で計算．直接の和と一致することを試験で確かめています）．積分自己相関時間 <i>τ</i><sub>int</sub>（第21章と同じ記号．<i>τ</i> だけだと第26・27章の temperature と紛れるので添字を付けます）と有効標本数は</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>τ</mi><mi>int</mi></msub><mo>=</mo><mn>1</mn><mo>+</mo><mn>2</mn><munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><msub><mi>k</mi><mi mathvariant="normal">c</mi></msub></munderover><msub><mi>ρ</mi><mi>k</mi></msub><mo>,</mo><mspace width="1em"/><msub><mi>S</mi><mi>eff</mi></msub><mo>=</mo><mfrac><mi>S</mi><msub><mi>τ</mi><mi>int</mi></msub></mfrac></mrow></math></div>
+      <p><b>打ち切りの規則</b>：和の上限 <i>k</i><sub>c</sub> は Sokal の自動窓で決めます．<i>k</i> = 1, 2, … と足していき，はじめて <i>k</i> ≥ 5 <i>τ</i><sub>int</sub>(<i>k</i>) となった <i>k</i> を <i>k</i><sub>c</sub> とします（<i>τ</i><sub>int</sub>(<i>k</i>) はその <i>k</i> までの部分和）．系列長の半分まで足しても条件を満たさないときは「系列が短すぎる」と表示し，<i>τ</i><sub>int</sub> と有効標本数は過小評価のおそれがあります．全連鎖の有効標本数は各連鎖の和です．平均の Monte Carlo 標準誤差（MCSE）は √(分散 / 有効標本数) です．</p>
+      <p><b><i>R̂</i> の定義</b>：split-<i>R̂</i>（Gelman ら『Bayesian Data Analysis』第3版 11.4 節の形．順位による正規化はしない）です．burn-in の後の各連鎖を前半と後半に分けて <i>M</i> = 2 × 連鎖の数 本とし，その長さを <i>n</i>，連鎖内分散の平均を <i>W</i>，連鎖の平均のばらつきを <i>B</i> として</p>
+      <div class="eq"><math display="block"><mrow><mi>B</mi><mo>=</mo><mfrac><mi>n</mi><mrow><mi>M</mi><mo>−</mo><mn>1</mn></mrow></mfrac><munderover><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>1</mn></mrow><mi>M</mi></munderover><msup><mrow><mo stretchy="false">(</mo><msub><mover><mi>x</mi><mo>¯</mo></mover><mi>j</mi></msub><mo>−</mo><mover><mi>x</mi><mo>¯</mo></mover><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><mover><mi>R</mi><mo>^</mo></mover><mo>=</mo><msqrt><mfrac><mrow><mfrac><mrow><mi>n</mi><mo>−</mo><mn>1</mn></mrow><mi>n</mi></mfrac><mi>W</mi><mo>+</mo><mfrac><mi>B</mi><mi>n</mi></mfrac></mrow><mi>W</mi></mfrac></msqrt></mrow></math></div>
+      <p><i>R̂</i> は連鎖が 2 本以上のときだけ表示します．連鎖が同じ分布を見ていれば 1 に近く，連鎖ごとに見ている所が違うと大きくなります．目安として 1.01 より大きければ収束を疑います（古い目安は 1.1）．ただし <i>R̂</i> ≈ 1 は収束の必要条件にすぎません．</p>
+      <p>3 状態の例では，提案 <i>Q</i><sub><i>ij</i></sub> = <i>q</i>(<i>j</i> | <i>i</i>)（ほかの 2 状態を 1/2 ずつ）から遷移行列 <i>T</i><sub><i>ij</i></sub> = <i>Q</i><sub><i>ij</i></sub> min(1, <i>p̃</i><sub><i>j</i></sub><i>Q</i><sub><i>ji</i></sub> / (<i>p̃</i><sub><i>i</i></sub><i>Q</i><sub><i>ij</i></sub>))（<i>j</i> ≠ <i>i</i>），<i>T</i><sub><i>ii</i></sub> = 1 − Σ<sub><i>j</i>≠<i>i</i></sub> <i>T</i><sub><i>ij</i></sub> を作ります．行が「いまの状態」，列が「次の状態」で，各行の和は 1 です．</p>
+
+      <h2>データと乱数の条件</h2>
+      <ul>
+        <li>標的分布は式で与えた<strong>教育用の例</strong>で，実測のデータではありません．<i>x</i> は無次元です．既定：①は歪んだ単峰 Beta(3, 9)，双峰は <i>w</i> = 0.6，<i>d</i> = 6（各成分の標準偏差 1），二重井戸は <i>b</i> = 3．②は二重井戸 <i>b</i> = 2．</li>
+        <li>正規化定数 <i>Z</i>，平均，分散，KL，ELBO は格子（区間 4000 の Simpson 則）の上の数値積分です．Beta では <i>x</i> = <i>u</i><sup>3</sup>(10 − 15<i>u</i> + 6<i>u</i><sup>2</sup>) と変数を変えて端の特異性を弱めています．<i>q</i> の期待値は <i>q</i> の平均 ± 12 <i>s</i> の格子（区間 2000）で計算します．</li>
+        <li>①には乱数を使いません．②の乱数は seed つきの生成器（mulberry32）です．既定の seed は 20261112．連鎖 <i>k</i>（<i>k</i> = 0, 1, 2, 3）は seed + 7919 <i>k</i> の生成器を使うので，連鎖の数を変えても連鎖 1 の列は同じです．1 ステップごとに <i>ε</i>（Gauss 乱数）と <i>u</i>（一様乱数）を 1 個ずつ引きます．同じ seed でやり直すと同じ列になります．</li>
+        <li>初期値：「散らす」は真の分布の 5 %，95 %，30 %，70 % 点（連鎖 1〜4），「すべて同じ点」は 4 本とも 5 % 点です．初期値は標本に数えません．</li>
+        <li>上限：1 本の連鎖は 20000 ステップまで，連鎖は 4 本まで．提案幅 <i>s</i> は 0.01〜10，<i>a</i>, <i>b</i> は 1.5〜20，<i>w</i> は 0.05〜0.95，<i>d</i> は 0〜8，障壁 <i>b</i> は 0.25〜15．</li>
+      </ul>
+
+      <h2>簡略化している点</h2>
+      <ul>
+        <li>標的は 1 次元で，格子の上の数値積分で正規化できるものに限っています．実際の推論では <i>Z</i> が計算できないので近似や MCMC を使います．ここでは近似の良し悪しを確かめるために，あえて <i>Z</i> を数値積分で求めています．</li>
+        <li>近似の族は 1 次元の Gauss 分布だけです．Beta の標的では，Gauss 分布が 0 &lt; <i>x</i> &lt; 1 の外に確率を置くと KL(<i>q</i>‖<i>p</i>) = ∞ になるので，KL(<i>q</i>‖<i>p</i>) の最小化と ELBO の棒では <i>q</i> を 0 &lt; <i>x</i> &lt; 1 に切断して正規化した分布を使います（表に「切断」と書きます）．KL(<i>p</i>‖<i>q</i>) と Laplace 近似は切断しない Gauss 分布です．</li>
+        <li>MH の提案は Gauss 型のランダムウォークだけです（Gibbs サンプリング，レプリカ交換，ハミルトニアン Monte Carlo はありません）．<i>R̂</i> は順位による正規化をしない split-<i>R̂</i> です．</li>
+      </ul>
+
+      <h2>結果が不安定になる条件</h2>
+      <ul>
+        <li>KL(<i>q</i>‖<i>p</i>) の最小化には局所解があり，初期値で結果が変わります（それ自体が観察の対象です）．Nelder–Mead 法が 4000 回で収束しなければ表に書きます．</li>
+        <li>Beta の <i>a</i> や <i>b</i> が 1.5 に近いと，端の近くで密度の傾きが急になり，Laplace 近似は大きく外れます．</li>
+        <li>MH の連鎖が短いと，<i>τ</i><sub>int</sub> の打ち切りが系列長の半分に届き（「系列が短すぎる」），<i>τ</i><sub>int</sub>・有効標本数・<i>R̂</i> は信頼できません．提案が台の外（Beta の <i>x</i> ≤ 0 または <i>x</i> ≥ 1）に出ると <i>p̃</i> = 0 なので必ず棄却されます．</li>
+        <li>計算の途中で NaN や無限大が出たら止めて理由を表示します．</li>
+      </ul>
+
+      <h2>本文の対応節</h2>
+      <ul>
+        <li><a href="../ch20_approximate_inference.html#sec20-2" target="_top">第20章 20.2 Laplace 近似</a>（Beta(3, 9) の手計算）</li>
+        <li><a href="../ch20_approximate_inference.html#sec20-3" target="_top">第20章 20.3 変分推論の考え方</a>（ln <i>p</i>(𝒟) = ELBO + KL）</li>
+        <li><a href="../ch20_approximate_inference.html#sec20-7" target="_top">第20章 20.7 KL の向きと近似の性質</a></li>
+        <li><a href="../ch20_approximate_inference.html#sec20-10" target="_top">第20章 20.10 近似の選び方による不確かさの違い</a></li>
+        <li><a href="../ch21_sampling.html#sec21-5" target="_top">第21章 21.5 Markov 連鎖</a>，<a href="../ch21_sampling.html#sec21-6" target="_top">21.6 Metropolis–Hastings 法</a>，<a href="../ch21_sampling.html#sec21-7" target="_top">21.7 手計算（3 状態）</a></li>
+        <li><a href="../ch21_sampling.html#sec21-8" target="_top">第21章 21.8 提案幅・受理率・自己相関</a>，<a href="../ch21_sampling.html#sec21-9" target="_top">21.9 Gibbs サンプリング</a>，<a href="../ch21_sampling.html#sec21-10" target="_top">21.10 収束の診断</a></li>
+      </ul>
+
+      <h2>操作後に答える短い問い</h2>
+      <ol>
+        <li>Beta(3, 9) の Laplace 近似の平均と分散はいくつですか．真の平均・分散と比べて，近似はどちらに歪んでいますか．
+          <details class="ans"><summary>答えの例</summary><p>モード <i>x</i>* = (<i>a</i> − 1)/(<i>a</i> + <i>b</i> − 2) = 2/10 = 0.2，Λ = 2/0.2<sup>2</sup> + 8/0.8<sup>2</sup> = 50 + 12.5 = 62.5 なので，平均 0.2，分散 1/62.5 = 0.016．真の平均は 3/12 = 0.25，分散は 27/1872 ≈ 0.01442．Laplace 近似は中心がモードにあるので，右に長い裾の重みを取りこぼして平均を小さく見積もります．しかも左の <i>x</i> &lt; 0 に確率 0.0569 を置きます．KL(<i>p</i>‖<i>q</i>) は 0.12884 で，平均と分散を合わせた Gauss 分布（0.048117）より大きくなります．</p></details></li>
+        <li>双峰の標的で，KL(<i>q</i>‖<i>p</i>) を最小にする <i>q</i> と KL(<i>p</i>‖<i>q</i>) を最小にする <i>q</i> はそれぞれどこに置かれますか．なぜそうなりますか．
+          <details class="ans"><summary>答えの例</summary><p>KL(<i>q</i>‖<i>p</i>) は <i>q</i> による期待値なので，<i>p</i> がほぼ 0 の所に <i>q</i> が確率を置くと ln(<i>q</i>/<i>p</i>) が大きくなり，強く罰せられます．そのため片方の峰に寄り，分散も小さめになります（既定で左の峰：<i>m</i> = −2.988，<i>s</i> = 1.019）．KL(<i>p</i>‖<i>q</i>) は <i>p</i> による期待値なので，<i>p</i> が確率を持つ所で <i>q</i> が 0 に近いと罰せられ，両方の峰を覆うように広がります（<i>m</i> = −0.6，<i>s</i><sup>2</sup> = 9.64．中心は確率の小さい谷にあります）．</p></details></li>
+        <li>ELBO と ln <i>Z</i> の差は何ですか．ELBO を最大にすることは何をすることになりますか．
+          <details class="ans"><summary>答えの例</summary><p>差は KL(<i>q</i>‖<i>p</i>) ≥ 0 です（ln <i>Z</i> = ELBO + KL(<i>q</i>‖<i>p</i>)）．ln <i>Z</i> は <i>q</i> によらないので，ELBO を最大にすることは KL(<i>q</i>‖<i>p</i>) を最小にすることと同じです．Beta(3, 9) では ln <i>Z</i> = ln B(3, 9) = −6.2046，KL(<i>q</i>‖<i>p</i>) を最小にした（切断した）<i>q</i> の ELBO は −6.2437 で，差 0.039178 が KL(<i>q</i>‖<i>p</i>) です．</p></details></li>
+        <li>障壁の例（<i>b</i> = 12）で，各連鎖のトレースが落ち着いて見え，<i>τ</i><sub>int</sub> も小さいのに，なぜ収束したと言えないのですか．<i>R̂</i> はそれをどう捉えていますか．
+          <details class="ans"><summary>答えの例</summary><p>どの連鎖も出発した井戸の中だけを見ており，もう一方の井戸の確率（半分）を知りません．井戸の中ではよく混ざるので <i>τ</i><sub>int</sub> は小さく（約 4），burn-in を捨てても変わりません．<i>R̂</i> は連鎖間のばらつき <i>B</i> と連鎖内の分散 <i>W</i> を比べ，連鎖の平均が −0.98 と +0.98 に分かれていることから約 9.9 と大きな値を示します．ただし，4 本とも同じ井戸から出発すると <i>R̂</i> ≈ 1 なのに全体の平均は −0.98 で，<i>R̂</i> でも気づけません．</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">機械学習 — 確率から GPT まで（目次）へ戻る</a>　｜　本文：<a href="../ch20_approximate_inference.html#sec20-2" target="_top">第20章 20.2 節</a>，<a href="../ch21_sampling.html#sec21-6" target="_top">第21章 21.6 節</a>　｜　数式はブラウザ標準の MathML で組んでいます（外部ライブラリ不使用）．</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="inference-mcmc.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.InferenceMCMC;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var LIM = M.LIMITS;
+
+  /* ---- 小道具 ---- */
+  function num(v) { return U.mn(String(Math.round(v * 1000) / 1000)); }
+  function f5(v) { return v === Infinity ? '∞' : v === -Infinity ? '−∞' : fmt(v, 5); }
+  function f4(v) { if (typeof v === 'number' && isFinite(v) && Math.abs(v) < 1e-6) return '0.000'; return v === Infinity ? '∞' : v === -Infinity ? '−∞' : fmt(v, 4); }
+  function mi(s) { return s === 'ln' ? '<mspace width="0.1em"/><mi>ln</mi><mspace width="0.17em"/>' : '<mi>' + s + '</mi>'; }
+  function mo(s) { return (s === '[' || s === ']' || s === '‖' || s === '(' || s === ')') ? '<mo stretchy="false">' + s + '</mo>' : '<mo>' + s + '</mo>'; }
+  function mnum(s) { return '<mn>' + s + '</mn>'; }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function par(s) { return '<mo stretchy="false">(</mo>' + s + '<mo stretchy="false">)</mo>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  var BR = '\u0001';
+  function row(s) { return s.split(BR).map(function (t, i) { return '<mtr><mtd columnalign="left">' + (i ? '<mspace width="1.5em"/>' : '') + t + '</mtd></mtr>'; }).join(''); }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.6em">' + rows.join('') + '</mtable></math>'; }
+  function ptl() { return '<mover><mi>p</mi><mo>~</mo></mover>'; }
+  function KL(a, b) { return '<mi>KL</mi>' + par(mi(a) + mo('‖') + mi(b)); }
+  function sp(w) { return '<mspace width="' + (w || '0.6em') + '"/>'; }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  /* 小さい分母の分数で書けるなら分数で（3 状態の遷移行列用） */
+  function fracStr(v) {
+    if (Math.abs(v) < 1e-15) return '0';
+    for (var q = 1; q <= 400; q++) { var p = Math.round(v * q); if (Math.abs(v - p / q) < 1e-12) return q === 1 ? String(p) : p + '/' + q; }
+    return fmt(v, 5);
+  }
+  var TKINDS = [{ value: 'beta', label: '歪んだ単峰 Beta' }, { value: 'mix', label: '双峰（Gauss 混合）' }, { value: 'well', label: '二重井戸' }];
+  /* 標的のパラメーターの部品（①と②で別々に持つ） */
+  function targetControls(ctl, S, onChange) {
+    var redo = function () { onChange(); };
+    var pills = U.pills({ label: '標的分布', options: TKINDS, value: S.kind, onChange: function (v) { S.kind = v; show(); redo(); } });
+    var box = U.el('div', 'tparams');
+    var rA = U.range({ label: 'Beta の <i>a</i>', min: LIM.beta[0], max: LIM.beta[1], step: 0.5, value: S.a, fmt: num, onInput: function (v) { S.a = v; redo(); } });
+    var rB = U.range({ label: 'Beta の <i>b</i>', min: LIM.beta[0], max: LIM.beta[1], step: 0.5, value: S.b, fmt: num, onInput: function (v) { S.b = v; redo(); } });
+    var rW = U.range({ label: '左の峰の重み <i>w</i>', min: LIM.mixW[0], max: LIM.mixW[1], step: 0.05, value: S.w, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.w = v; redo(); } });
+    var rD = U.range({ label: '峰の間隔 <i>d</i>（各峰の標準偏差は 1）', min: LIM.mixD[0], max: LIM.mixD[1], step: 0.1, value: S.d, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.d = v; redo(); } });
+    var rE = U.range({ label: '障壁 <i>b</i> = <i>E</i><sub>b</sub>/(<i>k</i><sub>B</sub><i>T</i>)', min: LIM.wellB[0], max: LIM.wellB[1], step: 0.25, value: S.bw, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.bw = v; redo(); } });
+    [rA, rB, rW, rD, rE].forEach(function (r) { box.appendChild(r.el); });
+    function show() { rA.el.hidden = rB.el.hidden = S.kind !== 'beta'; rW.el.hidden = rD.el.hidden = S.kind !== 'mix'; rE.el.hidden = S.kind !== 'well'; U.postHeightLater(); }
+    ctl.appendChild(pills.el); ctl.appendChild(box); show();
+    return { pills: pills, rA: rA, rB: rB, rW: rW, rD: rD, rE: rE, show: show };
+  }
+  function paramsOf(S) { return S.kind === 'beta' ? { a: S.a, b: S.b } : S.kind === 'mix' ? { w: S.w, d: S.d } : { b: S.bw }; }
+  var tcache = {};
+  function getTarget(S) {
+    var key = S.kind + JSON.stringify(paramsOf(S));
+    if (!tcache[key]) { var keys = Object.keys(tcache); if (keys.length > 30) tcache = {}; tcache[key] = M.makeTarget(S.kind, paramsOf(S)); }
+    return tcache[key];
+  }
+  function targetText(T) {
+    var p = T.params;
+    if (T.kind === 'beta') return 'Beta(' + num(p.a) + ', ' + num(p.b) + ')';
+    if (T.kind === 'mix') return '双峰（w = ' + fx(p.w, 2) + '，d = ' + fx(p.d, 1) + '）';
+    return '二重井戸（b = ' + fx(p.b, 2) + '）';
+  }
+  function targetHTML(T) {
+    var p = T.params;
+    if (T.kind === 'beta') return 'Beta(' + num(p.a) + ', ' + num(p.b) + ')';
+    if (T.kind === 'mix') return '双峰（<i>w</i> = ' + fx(p.w, 2) + '，<i>d</i> = ' + fx(p.d, 1) + '）';
+    return '二重井戸（<i>b</i> = ' + fx(p.b, 2) + '）';
+  }
+
+  /* =================================================================
+     ① 近似分布を比べる
+     ================================================================= */
+  function ApproxSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { kind: 'beta', a: 3, b: 9, w: 0.6, d: 6, bw: 3, mode: 'left', init: 'left', man: false, mm: 0.25, ms: 0.12, pick: 'klqp' };
+    var ctl = q('ctlA'), lastKey = '';
+    var redraw = function () { self.update(); };
+    var tc = targetControls(ctl, S, function () { syncManual(true); redraw(); });
+    ctl.appendChild(U.el('hr', 'sep'));
+    var pMode = U.pills({ label: 'Laplace 近似のモード', options: [{ value: 'left', label: '左のモード' }, { value: 'right', label: '右のモード' }], value: S.mode, onChange: function (v) { S.mode = v; redraw(); } });
+    var pInit = U.pills({ label: 'KL(<i>q</i>‖<i>p</i>) 最小化の初期値', options: [{ value: 'left', label: '左の峰の近くから' }, { value: 'right', label: '右の峰の近くから' }, { value: 'wide', label: '広く中央から' }], value: S.init, onChange: function (v) { S.init = v; redraw(); } });
+    ctl.appendChild(pMode.el); ctl.appendChild(pInit.el);
+    var modeHint = U.el('span', 'hint', ''); ctl.appendChild(modeHint);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var ckMan = U.check({ label: '手で動かす <i>q</i> を重ねる', checked: false, onChange: function (v) { S.man = v; if (!v && S.pick === 'manual') pPick.set('klqp', true), S.pick = 'klqp'; rM.input.disabled = rS.input.disabled = !v; redraw(); } });
+    var rM = U.range({ label: '手で動かす <i>q</i> の平均 <i>m</i>', min: -1, max: 1, step: 0.01, value: S.mm, fmt: function (v) { return fx(v, 3); }, onInput: function (v) { S.mm = v; redraw(); } });
+    var rS = U.range({ label: '手で動かす <i>q</i> の標準偏差 <i>s</i>', min: 0.01, max: 1, step: 0.005, value: S.ms, fmt: function (v) { return fx(v, 3); }, onInput: function (v) { S.ms = v; redraw(); } });
+    rM.input.disabled = rS.input.disabled = true;
+    ctl.appendChild(ckMan.el); ctl.appendChild(rM.el); ctl.appendChild(rS.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var pPick = U.pills({ label: '式に入れる <i>q</i>（下の「いまの数値を式に入れると」）', options: [{ value: 'laplace', label: 'Laplace' }, { value: 'klqp', label: 'KL(q‖p) 最小' }, { value: 'klpq', label: 'KL(p‖q) 最小' }, { value: 'manual', label: '手で動かす q' }], value: S.pick, onChange: function (v) { if (v === 'manual' && !S.man) { ckMan.set(true); } S.pick = v; redraw(); } });
+    ctl.appendChild(pPick.el);
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite'); ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', 'この①は乱数を使いません（すべて格子の上の数値積分と最適化です）．'));
+
+    function syncManual(reset) {
+      var T = getTarget(S), r = T.plotRange, sd = Math.sqrt(T.var);
+      if (T.kind === 'beta') { rM.setRange({ min: -0.2, max: 1.2, step: 0.005 }, true); rS.setRange({ min: 0.01, max: 0.6, step: 0.005 }, true); }
+      else { rM.setRange({ min: Math.floor(r[0]), max: Math.ceil(r[1]), step: 0.05 }, true); rS.setRange({ min: 0.05, max: Math.ceil(2 * sd), step: 0.05 }, true); }
+      if (reset) { S.mm = rM.set(T.mean, true) || T.mean; rS.set(0.5 * sd, true); S.mm = rM.get(); S.ms = rS.get(); }
+    }
+    syncManual(true);
+
+    U.legendHTML(q('lgA'), [
+      { label: '標的 <i>p</i>(<i>x</i>)（正規化した密度）', color: col.ink, width: 2.6 },
+      { label: 'Laplace 近似 ▲', color: col.orange, dash: dash.dashed, width: 2.2, shape: 'triangle', kind: 'linemarker' },
+      { label: 'KL(<i>q</i>‖<i>p</i>) 最小 ◆', color: col.green, dash: dash.dashdot, width: 2.4, shape: 'diamond', kind: 'linemarker' },
+      { label: 'KL(<i>p</i>‖<i>q</i>) 最小 ■', color: col.purple, dash: dash.dotted, width: 2.6, shape: 'square', kind: 'linemarker' },
+      { label: '手で動かす <i>q</i> ●', color: col.gray, dash: dash.long, width: 2, shape: 'circle', kind: 'linemarker' }]);
+    U.legendHTML(q('lgB'), [
+      { label: 'ln <i>Z</i>', color: col.ink, width: 2 },
+      { label: 'ELBO(<i>q</i>)', color: col.accent, shape: 'circle' },
+      { label: '差 ＝ KL(<i>q</i>‖<i>p</i>)', color: col.accent, kind: 'band', hatch: true, alpha: 0.15 }]);
+
+    var cache = { key: null, R: null };
+    function compute(T) {
+      var modeIdx = S.mode === 'right' ? T.modes.length - 1 : 0;
+      var key = S.kind + JSON.stringify(paramsOf(S)) + '|' + modeIdx + '|' + S.init;
+      if (cache.key !== key) { cache.R = M.compareApprox(T, { modeIndex: modeIdx, init: M.klInit(T, S.init) }); cache.key = key; }
+      var R = cache.R;
+      R.manual = S.man ? M.evalQ(T, S.mm, S.ms) : null;
+      return R;
+    }
+    var SPECS = [
+      { key: 'laplace', name: 'Laplace', color: col.orange, dash: dash.dashed, width: 2.2, shape: 'triangle' },
+      { key: 'klqp', name: 'KL(q‖p) 最小', color: col.green, dash: dash.dashdot, width: 2.4, shape: 'diamond' },
+      { key: 'klpq', name: 'KL(p‖q) 最小', color: col.purple, dash: dash.dotted, width: 2.6, shape: 'square' },
+      { key: 'manual', name: '手で動かす q', color: col.gray, dash: dash.long, width: 2, shape: 'circle' }];
+    function qOf(R, key) {
+      if (key === 'laplace') return R.laplace && R.laplace.m !== undefined ? M.gaussQ(R.laplace.m, R.laplace.s, false) : null;
+      if (key === 'klqp') return M.gaussQ(R.klqp.m, R.klqp.s, R.klqp.trunc);
+      if (key === 'klpq') return M.gaussQ(R.moment.m, R.moment.s, false);
+      if (key === 'manual') return R.manual ? M.gaussQ(R.manual.m, R.manual.s, R.manual.trunc) : null;
+    }
+    /* ELBO・KL(q‖p) の表示用の値（Beta で切断しない q は ∞ と，切断した値） */
+    function entry(R, key) {
+      if (key === 'laplace') return R.laplace; if (key === 'klqp') return R.klqp; if (key === 'klpq') return R.moment; return R.manual;
+    }
+    function elboShown(T, e) { if (!e) return null; if (isFinite(e.elbo)) return { elbo: e.elbo, klqp: e.klqp, trunc: !!e.trunc && T.kind === 'beta' }; if (e.trunc && e.trunc.elbo !== undefined) return { elbo: e.trunc.elbo, klqp: e.trunc.klqp, trunc: true }; return null; }
+
+    function drawA(T, R) {
+      var F = U.fitCanvas(q('cvA'), { aspect: 0.58, minHeight: 250, maxHeight: 430 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 14, b: 40 });
+      var xr = T.plotRange.slice();
+      if (T.kind === 'beta') {
+        [R.laplace, R.moment, R.manual].forEach(function (e) { if (!e || e.m === undefined) return; xr[0] = Math.min(xr[0], e.m - 3 * e.s); xr[1] = Math.max(xr[1], e.m + 3 * e.s); });
+        xr[0] = Math.max(-0.35, xr[0]); xr[1] = Math.min(1.35, xr[1]);
+      }
+      var xs = C.linspace(xr[0], xr[1], 601), py = xs.map(T.pdf), curves = [], ymax = 0;
+      py.forEach(function (v) { if (isFinite(v)) ymax = Math.max(ymax, v); });
+      SPECS.forEach(function (sp) {
+        var qq = qOf(R, sp.key); if (!qq) return;
+        var f = M.qPdf(T, qq), ys = xs.map(f);
+        ys.forEach(function (v) { if (isFinite(v)) ymax = Math.max(ymax, v); });
+        curves.push({ sp: sp, q: qq, ys: ys, f: f });
+      });
+      ymax = ymax * 1.3;
+      var ax = U.axes(c, box, xr, [0, ymax], { xl: 'x（無次元）', yl: '確率密度' });
+      if (T.kind === 'beta') {   /* p = 0 の範囲 */
+        if (xr[0] < 0) U.band(c, ax, [xr[0], 0], [0, 0], [ymax, ymax], { color: col.gray, alpha: 0.08, hatch: true });
+        if (xr[1] > 1) U.band(c, ax, [1, xr[1]], [0, 0], [ymax, ymax], { color: col.gray, alpha: 0.08, hatch: true });
+      }
+      U.band(c, ax, xs, xs.map(function () { return 0; }), py, { color: col.ink, alpha: 0.07 });
+      U.line(c, ax, xs, py, { color: col.ink, width: 2.6 });
+      curves.forEach(function (cv) { U.line(c, ax, xs, cv.ys, { color: cv.sp.color, dash: cv.sp.dash, width: cv.sp.width }); });
+      var L = U.labeler(c, box);
+      if (T.kind === 'beta' && xr[0] < 0) L.add('p = 0', ax.X(xr[0] / 2), box[1] + 12, { color: col.sub, size: 10 });
+      /* 標的の文字はピークの近く */
+      var k = 0; py.forEach(function (v, i) { if (v > py[k]) k = i; });
+      curves.forEach(function (cv) {
+        var mx = cv.q.m, my = cv.f(Math.min(Math.max(mx, xr[0]), xr[1]));
+        if (cv.q.trunc && T.kind === 'beta' && !(mx > 0 && mx < 1)) { mx = Math.min(Math.max(mx, 0.01), 0.99); my = cv.f(mx); }
+        U.marker(c, ax.X(mx), ax.Y(my), cv.sp.shape, 10, cv.sp.color, true);
+        L.block(ax.X(mx) - 7, ax.Y(my) - 7, ax.X(mx) + 7, ax.Y(my) + 7);
+      });
+      L.add('p(x)', ax.X(xs[k]) + 6, ax.Y(py[k]) - 12, { color: col.ink, bold: true, size: 11.5 });
+      /* 曲線の脇の文字：Laplace と手で動かす q は左の肩，KL の 2 つは右の肩（高さ 0.55 倍の所）に，外側へ寄せて置く */
+      curves.forEach(function (cv, i) {
+        var side = (cv.sp.key === 'laplace' || cv.sp.key === 'manual') ? -1 : 1, frac = cv.sp.key === 'klpq' ? 0.35 : 0.6;
+        var xx = cv.q.m + side * cv.q.s * Math.sqrt(-2 * Math.log(frac));
+        xx = Math.min(Math.max(xx, xr[0] + 0.02 * (xr[1] - xr[0])), xr[1] - 0.02 * (xr[1] - xr[0]));
+        var yy = cv.f(xx); if (!(yy > 0)) yy = cv.f(cv.q.m) * frac;
+        L.add(cv.sp.name, ax.X(xx) + side * 10, ax.Y(yy), { color: cv.sp.color, size: 10.5, bold: true, align: side < 0 ? 'right' : 'left', dy: [0, -14, 14, -28, 28, -42, 42] });
+      });
+      U.setCanvasLabel(q('cvA'), '標的 ' + targetText(T) + ' の密度と近似．' + curves.map(function (cv) { return cv.sp.name + '：平均 ' + fx(cv.q.m, 3) + '，標準偏差 ' + fx(cv.q.s, 3); }).join('．') + '．');
+      q('capA').innerHTML = '横軸 <i>x</i>（無次元），縦軸は確率密度．標的 ' + targetHTML(T) + '（格子 4001 点の数値積分で正規化）．' + (T.kind === 'beta' ? '斜線の範囲は <i>p</i> = 0（0 &lt; <i>x</i> &lt; 1 の外）．KL(<i>q</i>‖<i>p</i>) 最小の <i>q</i> は 0 &lt; <i>x</i> &lt; 1 に切断して正規化した Gauss 分布です（切断しない Gauss 分布では KL(<i>q</i>‖<i>p</i>) = ∞）．' : '') + '印は各 <i>q</i> の中心 <i>m</i> の位置です．';
+    }
+    function drawB(T, R) {
+      var rows = [];
+      SPECS.forEach(function (sp) { var e = entry(R, sp.key); if (!e || (sp.key === 'laplace' && e.ok === false)) return; var v = elboShown(T, e); rows.push({ sp: sp, v: v }); });
+      var F = U.fitCanvas(q('cvB'), { aspect: 0.36, minHeight: 170, maxHeight: 250 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 96, r: 14, t: 22, b: 38 });
+      var lo = T.lnZ, hi = T.lnZ;
+      rows.forEach(function (r) { if (r.v) lo = Math.min(lo, r.v.elbo); });
+      var span = Math.max(hi - lo, 0.02);
+      var xr = [lo - 0.12 * span, hi + (F.W < 500 ? 0.75 : 0.5) * span];
+      var ax = U.axes(c, box, xr, [rows.length + 0.4, 0.4], { xl: '値 (nat)', yticks: [], grid: true, nx: 4 });
+      var L = U.labeler(c, box);
+      rows.forEach(function (r, i) {
+        var y = i + 1, Y = ax.Y(y);
+        U.label(c, r.sp.name, box[0] - 6, Y, { size: 10.5, color: r.sp.color, align: 'right', bold: true, halo: false });
+        if (!r.v) { U.label(c, 'ELBO = −∞（q が p = 0 の所に確率を置く）', box[0] + 6, Y, { size: 10, color: col.sub, align: 'left' }); return; }
+        U.band(c, ax, [r.v.elbo, T.lnZ], [y - 0.28, y - 0.28], [y + 0.28, y + 0.28], { color: r.sp.color, alpha: 0.15, hatch: true });
+        U.marker(c, ax.X(r.v.elbo), Y, 'circle', 10, r.sp.color, true);
+        U.label(c, 'KL ' + fmt(r.v.klqp, 3), ax.X(T.lnZ) + 6, Y, { size: 10, color: r.sp.color, align: 'left' });
+      });
+      U.vline(c, ax, T.lnZ, { color: col.ink, width: 2 });
+      U.label(c, 'ln Z = ' + fmt(T.lnZ, 5), ax.X(T.lnZ), box[1] - 9, { size: 10.5, color: col.ink, bold: true });
+      U.setCanvasLabel(q('cvB'), 'ELBO と ln Z の比較．ln Z = ' + fmt(T.lnZ, 5) + '．' + rows.map(function (r) { return r.sp.name + ' の ELBO ' + (r.v ? fmt(r.v.elbo, 5) + '，差 ' + fmt(r.v.klqp, 4) : '−∞'); }).join('．') + '．');
+    }
+    function cell(v) { return v === Infinity ? '<td class="inf">∞ ※</td>' : v === -Infinity ? '<td class="inf">−∞ ※</td>' : '<td>' + f4(v) + '</td>'; }
+    function readout(T, R) {
+      var cols = [{ h: '<i>p</i>（真）' }, { h: 'Laplace', e: R.laplace.ok === false ? null : R.laplace }, { h: 'KL(<i>q</i>‖<i>p</i>)<br>最小', e: R.klqp }, { h: 'KL(<i>p</i>‖<i>q</i>)<br>最小', e: R.moment }];
+      if (R.manual) cols.push({ h: '手で<br>動かす <i>q</i>', e: R.manual });
+      var h = '<table class="grid cmp"><thead><tr><th>量</th>' + cols.map(function (c) { return '<th>' + c.h + '</th>'; }).join('') + '</tr></thead><tbody>';
+      function meanOf(e) { return e.trunc && T.kind === 'beta' && e.qMean !== undefined ? e.qMean : e.m; }
+      function varOf(e) { return e.trunc && T.kind === 'beta' && e.qVar !== undefined ? e.qVar : e.var; }
+      h += '<tr><td>平均</td><td>' + f4(T.mean) + '</td>' + cols.slice(1).map(function (c) { return c.e ? '<td>' + f4(meanOf(c.e)) + '</td>' : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>分散</td><td>' + f4(T.var) + '</td>' + cols.slice(1).map(function (c) { return c.e ? '<td>' + f4(varOf(c.e)) + '</td>' : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>KL(<i>q</i>‖<i>p</i>)</td><td>0</td>' + cols.slice(1).map(function (c) { return c.e ? cell(c.e.klqp) : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>KL(<i>p</i>‖<i>q</i>)</td><td>0</td>' + cols.slice(1).map(function (c) { return c.e ? cell(c.e.klpq) : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>ELBO<br>（<i>p</i> は ln <i>Z</i>）</td><td>' + f4(T.lnZ) + '</td>' + cols.slice(1).map(function (c) { return c.e ? cell(c.e.elbo) : '<td>—</td>'; }).join('') + '</tr>';
+      h += '</tbody></table>';
+      q('cmp').innerHTML = h;
+      var notes = [];
+      if (T.kind === 'beta') {
+        [['Laplace', R.laplace], ['KL(p‖q) 最小', R.moment], ['手で動かす q', R.manual]].forEach(function (a) {
+          var e = a[1]; if (!e || e.ok === false) return;
+          if (e.klqp === Infinity) notes.push('※ ' + a[0] + '：q が 0 < x < 1 の外に確率 ' + fmt(e.outside, 3) + ' を置くので KL(q‖p) = ∞，ELBO = −∞．0 < x < 1 に切断して正規化すると KL(q‖p) = ' + fmt(e.trunc.klqp, 4) + '，ELBO = ' + fmt(e.trunc.elbo, 5) + '．');
+        });
+        notes.push('KL(q‖p) 最小と手で動かす q は 0 < x < 1 に切断した Gauss 分布です（平均・分散は切断後の値．切断前の m = ' + fmt(R.klqp.m, 4) + '，s = ' + fmt(R.klqp.s, 4) + '）．');
+      }
+      if (!R.klqp.converged) notes.push('Nelder–Mead 法が上限の ' + LIM.nmIter + ' 回で収束しませんでした．');
+      U.status(q('cmpNote'), notes.join(' '), notes.length ? '' : '');
+    }
+    function eq(T, R) {
+      var rows = [];
+      var e = entry(R, S.pick);
+      if (S.pick === 'laplace' && R.laplace.ok === false) e = null;
+      var name = { laplace: 'Laplace 近似', klqp: 'KL(q‖p) を最小にする q', klpq: 'KL(p‖q) を最小にする q', manual: '手で動かす q' }[S.pick];
+      rows.push(row(mt('標的 ' + targetText(T) + '：') + BR + mi('ln') + mi('Z') + mo('=') + mi('ln') + '<mo>∫</mo>' + ptl() + par(mi('x')) + '<mi mathvariant="normal">d</mi>' + mi('x') + mo('=') + mnum(U.mn(f5(T.lnZ)))));
+      if (e) {
+        var sh = elboShown(T, e), truncTxt = (sh && sh.trunc) ? '（0 < x < 1 に切断）' : '';
+        rows.push(row(mt('式に入れる q：' + name) + (truncTxt ? BR + mt(truncTxt) : '') + BR + mi('q') + mo('=') + '<mi>𝒩</mi>' + par(mi('x') + mo('∣') + mnum(U.mn(f5(e.m))) + mo(',') + '<msup>' + mnum(U.mn(f5(e.s))) + mnum(2) + '</msup>')));
+        if (sh) {
+          var Elp = isFinite(e.elbo) ? e.Elp : e.trunc.Elp, H = isFinite(e.elbo) ? e.H : e.trunc.H;
+          rows.push(row(mi('ELBO') + par(mi('q')) + mo('=') + '<msub><mi>𝔼</mi><mi>q</mi></msub>' + mo('[') + mi('ln') + ptl() + par(mi('x')) + mo(']') + mo('+') + mi('H') + mo('[') + mi('q') + mo(']') + BR + mo('=') + par(mnum(U.mn(f5(Elp)))) + mo('+') + par(mnum(U.mn(f5(H)))) + mo('=') + mnum(U.mn(f5(sh.elbo)))));
+          rows.push(row(KL('q', 'p') + mo('=') + '<mo>∫</mo>' + mi('q') + mi('ln') + frac(mi('q'), mi('p')) + '<mi mathvariant="normal">d</mi>' + mi('x') + mo('=') + mnum(U.mn(f5(sh.klqp))) + sp() + mt('（≥ 0）')));
+          rows.push(row(mi('ELBO') + mo('+') + KL('q', 'p') + BR + mo('=') + mnum(U.mn(f5(sh.elbo))) + mo('+') + mnum(U.mn(f5(sh.klqp))) + mo('=') + mnum(U.mn(f5(sh.elbo + sh.klqp))) + mo('=') + mi('ln') + mi('Z') + BR + mt('（ELBO ≤ ln Z）')));
+        } else rows.push(row(mi('ELBO') + mo('=') + mo('−') + mi('∞') + mo(',') + sp('0.3em') + KL('q', 'p') + mo('=') + mi('∞') + sp() + mt('（q が p = 0 の所に確率を置く）')));
+        rows.push(row(KL('p', 'q') + mo('=') + '<mo>∫</mo>' + mi('p') + mi('ln') + frac(mi('p'), mi('q')) + '<mi mathvariant="normal">d</mi>' + mi('x') + mo('=') + mnum(U.mn(f5(e.klpq))) + BR + mt(S.pick === 'klpq' ? '（m = 𝔼_p[x]，s² = Var_p[x] で最小）' : '')));
+      } else rows.push(row(mt('Laplace 近似：' + R.laplace.reason)));
+      if (R.laplace.ok !== false) {
+        var Lp = R.laplace, A, LAM = '<mi mathvariant="normal">Λ</mi>';
+        if (T.kind === 'beta') {
+          var a = T.params.a, b = T.params.b, x = Lp.mode;
+          A = mo('=') + frac(mnum(num(a - 1)), '<msup>' + mnum(U.mn(f5(x))) + mnum(2) + '</msup>') + mo('+') + frac(mnum(num(b - 1)), '<msup><mrow>' + par(mnum(1) + mo('−') + mnum(U.mn(f5(x)))) + '</mrow>' + mnum(2) + '</msup>') + mo('=') + mnum(U.mn(f5(Lp.A)));
+          rows.push(row(mt('Laplace：') + BR + mt('モード ') + '<msup><mi>x</mi><mo>*</mo></msup>' + mo('=') + frac(mi('a') + mo('−') + mnum(1), mi('a') + mo('+') + mi('b') + mo('−') + mnum(2)) + mo('=') + mnum(U.mn(f5(x))) + mo(',') + BR + LAM + A));
+        } else rows.push(row(mt('Laplace：') + BR + mt('モード ') + '<msup><mi>x</mi><mo>*</mo></msup>' + mo('=') + mnum(U.mn(f5(Lp.mode))) + mo(',') + BR + LAM + mo('=') + mo('−') + '<msup><mrow>' + par(mi('ln') + ptl()) + '</mrow>' + mo('″') + '</msup>' + par('<msup><mi>x</mi><mo>*</mo></msup>') + mo('=') + mnum(U.mn(f5(Lp.A)))));
+        rows.push(row(mi('q') + mo('=') + '<mi>𝒩</mi>' + par(mi('x') + mo('∣') + mnum(U.mn(f5(Lp.mode))) + mo(',') + sp('0.2em') + '<msup>' + LAM + '<mrow><mo>−</mo><mn>1</mn></mrow></msup>' + mo('=') + mnum(U.mn(f5(Lp.var))))));
+        rows.push(row(mi('ln') + mi('Z') + mo('≈') + mi('ln') + ptl() + par('<msup><mi>x</mi><mo>*</mo></msup>') + mo('+') + frac(mnum(1), mnum(2)) + mi('ln') + frac(mnum(2) + mi('π'), LAM) + BR + mo('=') + mnum(U.mn(f5(Lp.lpMode))) + mo('+') + frac(mnum(1), mnum(2)) + mi('ln') + frac(mnum(2) + mi('π'), mnum(U.mn(f5(Lp.A)))) + mo('=') + mnum(U.mn(f5(Lp.lnZL))) + sp() + BR + mt('（真の ln Z = ' + U.mn(f5(T.lnZ)) + '）')));
+      }
+      q('eqA').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        var T = getTarget(S);
+        if (!C.allFinite([T.lnZ, T.mean, T.var])) { U.status(msg, '計算を止めました：正規化定数や平均に NaN または無限大が出ました．パラメーターを変えてください．', 'warn'); return; }
+        var R = compute(T);
+        if (!C.allFinite([R.klqp.m, R.klqp.s, R.moment.klpq])) { U.status(msg, '計算を止めました：近似の計算で NaN が出ました．', 'warn'); return; }
+        U.status(msg, '');
+        modeHint.textContent = T.modes.length > 1 ? 'モードは ' + T.modes.length + ' つ（x = ' + T.modes.map(function (m) { return fx(m.x, 3); }).map(U.mn).join('，') + '）です．' : 'モードは 1 つ（x = ' + U.mn(fx(T.modes[0] ? T.modes[0].x : NaN, 3)) + '）なので，左右どちらを選んでも同じです．';
+        drawA(T, R); drawB(T, R); readout(T, R); eq(T, R);
+      },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② Metropolis–Hastings 法
+     ================================================================= */
+  function MHSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { kind: 'well', a: 3, b: 9, w: 0.6, d: 6, bw: 2, s: 0.3, K: 4, init: 'spread', burn: 0.1, seed: DEFAULT_SEED, speed: 10 };
+    var ctl = q('ctlM'), st = null, T = null, diag = null, lastDiagT = 0;
+    var CH = [{ color: col.accent, dash: dash.solid, shape: 'circle' }, { color: col.orange, dash: dash.dashed, shape: 'square' }, { color: col.green, dash: dash.dotted, shape: 'triangle' }, { color: col.purple, dash: dash.dashdot, shape: 'diamond' }];
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    function restart(text) { run.reset(); U.status(msg, text || '', ''); }
+    var tc = targetControls(ctl, S, function () { restart('条件を変えたので，同じ seed で最初からやり直しました．'); });
+    var rS = U.range({ label: '提案幅 <i>s</i>（<i>x</i>′ = <i>x</i> + <i>s</i><i>ε</i>）', min: LIM.s[0], max: LIM.s[1], value: S.s, log: true, step: 0.001, fmt: function (v) { return fmt(v, 3); }, onInput: function (v) { S.s = v; restart('提案幅を変えたので，同じ seed で最初からやり直しました．'); } });
+    var pK = U.pills({ label: '連鎖の数', options: [1, 2, 3, 4].map(function (k) { return { value: k, label: k + ' 本' }; }), value: S.K, onChange: function (v) { S.K = +v; restart(''); } });
+    var pI = U.pills({ label: '初期値', options: [{ value: 'spread', label: '散らす' }, { value: 'same', label: 'すべて同じ点' }], value: S.init, onChange: function (v) { S.init = v; restart(''); } });
+    var pB = U.pills({ label: '捨てる初期の標本（burn-in）', options: [{ value: 0, label: '0 %' }, { value: 0.1, label: '10 %' }, { value: 0.25, label: '25 %' }, { value: 0.5, label: '50 %' }], value: S.burn, onChange: function (v) { S.burn = +v; diag = null; self.update(); } });
+    ctl.appendChild(U.el('hr', 'sep'));
+    [rS, pK, pI, pB].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(U.el('hr', 'sep'));
+    var run = U.runner({
+      maxSteps: LIM.maxSteps,
+      isVisible: function () { return !panel.hidden; },
+      step: function () { var n = st.chains[0].n; var k = Math.min(run.isRunning() ? S.speed : 1, LIM.maxSteps - n); for (var i = 0; i < k; i++) M.mhStep(st, T, S.s); run.setSteps(st.chains[0].n - 1); return st.chains[0].n < LIM.maxSteps && finiteState(); },
+      stepsPerFrame: 1,
+      reset: function () { init(); },
+      draw: function () { run.setSteps(st.chains[0].n); self.update(); }
+    });
+    function finiteState() { return st.chains.every(function (c) { return isFinite(c.x); }); }
+    var b100 = U.button('100 ステップ進める', function () { advance(100); });
+    var b1000 = U.button('1000 ステップ進める', function () { advance(1000); });
+    function advance(k) {
+      run.stop();
+      var n = st.chains[0].n, m = Math.min(k, LIM.maxSteps - n);
+      if (m <= 0) { U.status(run.status, '1 本の連鎖の上限 ' + U.fmtInt(LIM.maxSteps) + ' ステップに達しています．「やり直す」で最初から．', 'warn'); return; }
+      for (var i = 0; i < m; i++) M.mhStep(st, T, S.s);
+      run.setSteps(st.chains[0].n); diag = null;
+      U.status(run.status, m + ' ステップ進めました（各連鎖 ' + U.fmtInt(st.chains[0].n) + ' ステップ）．' + (m < k ? '上限に達しました．' : ''), m < k ? 'warn' : '');
+      self.update();
+    }
+    var pSpeed = U.pills({ label: '「実行」の速さ（1 コマあたりのステップ数）', options: [{ value: 1, label: '1' }, { value: 10, label: '10' }, { value: 100, label: '100' }], value: S.speed, onChange: function (v) { S.speed = +v; } });
+    ctl.appendChild(U.el('div', 'ctlhead', '連鎖を進める（各連鎖 ' + U.fmtInt(LIM.maxSteps) + ' ステップまで）'));
+    ctl.appendChild(run.el); ctl.appendChild(U.buttonRow([b100, b1000])); ctl.appendChild(pSpeed.el);
+    var bPreset = U.button('障壁の例（b = 12）', function () { preset(); }, { title: '二重井戸 b = 12，s = 0.3，連鎖 4 本，散らした初期値，既定の seed，burn-in 10 % で 2000 ステップ進めます' });
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', '第21章 21.10 の例'));
+    ctl.appendChild(U.buttonRow([bPreset]));
+    ctl.appendChild(U.el('span', 'hint', '二重井戸 <i>b</i> = 12，<i>s</i> = 0.3，連鎖 4 本，散らした初期値，seed ' + DEFAULT_SEED + '，burn-in 10 % にして 2000 ステップ進めます．'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; restart('seed ' + s + ' で最初からやり直しました．'); } });
+    ctl.appendChild(seed.el); ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', '標的・提案幅・連鎖の数・初期値・seed を変えると，連鎖を最初からやり直します．burn-in の割合は標本を捨てる範囲だけを変えます．'));
+    function preset() {
+      S.kind = 'well'; tc.pills.set('well', true); tc.show(); S.bw = 12; tc.rE.set(12, true);
+      S.s = 0.3; rS.set(0.3, true); S.K = 4; pK.set(4, true); S.init = 'spread'; pI.set('spread', true); S.burn = 0.1; pB.set(0.1, true);
+      S.seed = DEFAULT_SEED; seed.set(DEFAULT_SEED, true);
+      run.reset(); advance(2000);
+      U.status(msg, '障壁の例：b = 12，s = 0.3，4 本，散らした初期値，seed ' + DEFAULT_SEED + '，2000 ステップ．', '');
+    }
+
+    function init() { T = getTarget(S); st = M.mhInit(T, { K: S.K, seed: S.seed, s: S.s, init: S.init }); diag = null; }
+    init();
+
+    U.legendHTML(q('lgH'), [
+      { label: '標本のヒストグラム（全連鎖，burn-in の後）', color: col.accent, kind: 'band', alpha: 0.3 },
+      { label: '真の密度 <i>p</i>(<i>x</i>)（数値積分で正規化）', color: col.ink, width: 2.4 }]);
+    function chainLegend(el) {
+      U.legendHTML(el, st.chains.map(function (c, k) { return { label: '連鎖 ' + (k + 1) + (el === q('lgT') ? '（初期値 ' + U.mn(fx(st.x0[k], 3)) + '）' : ''), color: CH[k].color, dash: CH[k].dash, width: 2, shape: CH[k].shape, kind: 'linemarker' }; }).concat(el === q('lgT') ? [{ label: '捨てる初期の標本（burn-in）', color: col.gray, kind: 'band', hatch: true, alpha: 0.12 }] : []));
+    }
+
+    function getDiag() {
+      var now = performance.now();
+      if (!diag || !run.isRunning() || now - lastDiagT > 300) { diag = M.diagnostics(st, S.burn, { maxLag: 200 }); lastDiagT = now; }
+      return diag;
+    }
+    function drawH(D) {
+      var F = U.fitCanvas(q('cvH'), { aspect: 0.5, minHeight: 220, maxHeight: 360 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 14, b: 40 });
+      var xr = T.plotRange, xs = C.linspace(xr[0], xr[1], 400), py = xs.map(T.pdf);
+      var bins = 50, H = D.all.length ? C.histogram(D.all, { bins: bins, range: xr }) : null;
+      var ymax = 0; py.forEach(function (v) { ymax = Math.max(ymax, v); }); if (H) H.density.forEach(function (v) { ymax = Math.max(ymax, v); });
+      ymax *= 1.25;
+      var ax = U.axes(c, box, xr, [0, ymax], { xl: 'x（無次元）', yl: '確率密度' });
+      if (H) {
+        c.save(); c.fillStyle = 'rgba(15,76,129,.28)'; c.strokeStyle = 'rgba(15,76,129,.75)'; c.lineWidth = 1;
+        for (var i = 0; i < bins; i++) { var X0 = ax.X(H.edges[i]), X1 = ax.X(H.edges[i + 1]), Y = ax.Y(H.density[i]); c.fillRect(X0, Y, X1 - X0, ax.Y(0) - Y); c.strokeRect(X0 + 0.5, Y + 0.5, X1 - X0 - 1, ax.Y(0) - Y); }
+        c.restore();
+      }
+      U.line(c, ax, xs, py, { color: col.ink, width: 2.4 });
+      var L = U.labeler(c, box), k = 0; py.forEach(function (v, i) { if (v > py[k]) k = i; });
+      L.add('真の p(x)', ax.X(xs[k]) + 8, ax.Y(py[k]) - 12, { color: col.ink, bold: true, size: 11 });
+      if (!D.all.length) U.text(c, ax, (xr[0] + xr[1]) / 2, ymax * 0.6, '「実行」か「1000 ステップ進める」を押すと標本がたまります', { color: col.sub, size: 11 });
+      var out = H ? H.outside : 0;
+      q('capH').innerHTML = '標的 ' + targetHTML(T) + '．標本 ' + U.fmtInt(D.all.length) + ' 個（' + st.K + ' 本 × ' + U.fmtInt(D.per[0] ? D.per[0].n : 0) + '，burn-in ' + Math.round(S.burn * 100) + ' % を除く），区間 ' + bins + ' 個．' + (out ? '図の範囲の外の標本 ' + out + ' 個．' : '') + '提案幅 <i>s</i> = ' + fmt(S.s, 3) + '，seed ' + S.seed + '．縦軸は「区間の個数 ÷（標本数 × 区間の幅）」で，密度と比べられるようにしています．';
+      U.setCanvasLabel(q('cvH'), 'ヒストグラムと真の密度．標本 ' + D.all.length + ' 個．' + (D.pooled ? '標本の平均 ' + fx(D.pooled.mean, 3) + '，真の平均 ' + fx(T.mean, 3) + '．' : ''));
+    }
+    function drawT(D) {
+      var F = U.fitCanvas(q('cvT'), { aspect: 0.45, minHeight: 200, maxHeight: 320 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 46, t: 12, b: 40 });
+      var n = st.chains[0].n, xr = [0, Math.max(100, n)], yr = T.plotRange;
+      var ax = U.axes(c, box, xr, yr, { xl: 'ステップ', yl: 'x' });
+      var nb = D.per[0] ? D.per[0].burned : 0;
+      if (nb > 0) U.band(c, ax, [0, nb], [yr[0], yr[0]], [yr[1], yr[1]], { color: col.gray, alpha: 0.12, hatch: true });
+      var stride = Math.max(1, Math.floor(n / 4000));
+      st.chains.forEach(function (ch, k) {
+        var xs = [], ys = [];
+        for (var i = 0; i < ch.xs.length; i += stride) { xs.push(i); ys.push(ch.xs[i]); }
+        if ((ch.xs.length - 1) % stride) { xs.push(ch.xs.length - 1); ys.push(ch.xs[ch.xs.length - 1]); }
+        U.line(c, ax, xs, ys, { color: CH[k].color, dash: CH[k].dash, width: st.K > 2 ? 1.3 : 1.6 });
+        U.marker(c, ax.X(0), ax.Y(ch.xs[0]), CH[k].shape, 9, CH[k].color, false);
+      });
+      var L = U.labeler(c, [box[0], box[1], box[2] + 44, box[3]]);
+      st.chains.forEach(function (ch, k) { var y = ch.xs[ch.xs.length - 1]; U.marker(c, box[2] + 8, ax.Y(y), CH[k].shape, 9, CH[k].color, true); L.add(String(k + 1), box[2] + 22, ax.Y(y), { color: CH[k].color, bold: true, size: 11, dy: [0, -12, 12, -24, 24] }); });
+      if (nb > 0) L.add('burn-in', ax.X(nb / 2), box[1] + 10, { color: col.sub, size: 10 });
+      if (n === 0) U.text(c, ax, xr[1] / 2, (yr[0] + yr[1]) / 2, '初期値（白抜きの印）だけです', { color: col.sub, size: 11 });
+      q('capT').innerHTML = '横軸はステップ（0 は初期値．白抜きの印），縦軸は <i>x</i>（無次元）．右端の塗った印と番号は各連鎖のいまの位置です．' + (stride > 1 ? '描画は ' + stride + ' ステップおき．' : '') + '斜線の範囲が burn-in として捨てる初期の標本です．';
+      U.setCanvasLabel(q('cvT'), 'トレース図．' + st.K + ' 本の連鎖，各 ' + n + ' ステップ．' + st.chains.map(function (ch, k) { return '連鎖 ' + (k + 1) + ' のいまの位置 ' + fx(ch.x, 3); }).join('，') + '．');
+    }
+    function drawR(D) {
+      var F = U.fitCanvas(q('cvR'), { aspect: 0.4, minHeight: 180, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 12, b: 40 });
+      var Lmax = 10; D.per.forEach(function (p) { if (p.rho) Lmax = Math.max(Lmax, p.rho.length - 1); });
+      var ymin = -0.3; D.per.forEach(function (p) { if (p.rho) p.rho.forEach(function (v) { if (v < ymin) ymin = v; }); }); ymin = Math.max(-1, Math.floor((ymin - 0.05) * 10) / 10);
+      var ax = U.axes(c, box, [0, Lmax], [ymin, 1.05], { xl: '遅れ k（ステップ）', yl: '自己相関 ρ' });
+      var any = false;
+      D.per.forEach(function (p, k) {
+        if (!p.rho) return; any = true;
+        var ks = p.rho.map(function (_, i) { return i; });
+        U.line(c, ax, ks, p.rho, { color: CH[k].color, dash: CH[k].dash, width: 1.8 });
+        if (p.window <= Lmax) U.marker(c, ax.X(p.window), ax.Y(p.rho[p.window] !== undefined ? p.rho[p.window] : 0), CH[k].shape, 9, CH[k].color, true);
+      });
+      if (!any) U.text(c, ax, Lmax / 2, 0.5, '標本が 4 個以上たまると描きます', { color: col.sub, size: 11 });
+      U.setCanvasLabel(q('cvR'), '自己相関関数．' + D.per.map(function (p, k) { return '連鎖 ' + (k + 1) + ' の積分自己相関時間 ' + (p.tau ? fx(p.tau, 2) : '—'); }).join('，') + '．');
+    }
+    function readout(D) {
+      var h = '<div class="tablewrap"><table class="grid chains"><thead><tr><th>連鎖</th><th>受理率</th><th>平均</th><th><i>τ</i><sub>int</sub></th><th>有効標本数</th></tr></thead><tbody>';
+      D.per.forEach(function (p, k) {
+        h += '<tr><td>' + (k + 1) + '</td><td>' + (p.accRate === null ? '—' : fmt(p.accRate, 3)) + '</td><td>' + (p.mean === null ? '—' : U.mn(fx(p.mean, 3))) + '</td><td>' + (p.tau ? fmt(p.tau, 3) + (p.ok ? '' : ' ※') : '—') + '</td><td>' + (p.ess ? fmt(p.ess, 3) : '—') + '</td></tr>';
+      });
+      h += '</tbody></table></div>';
+      var P = D.pooled, R = D.rhat;
+      h += kv([
+        ['各連鎖のステップ数', U.fmtInt(st.chains[0].n) + '（burn-in ' + U.fmtInt(D.per[0] ? D.per[0].burned : 0) + ' を除く）'],
+        ['全連鎖の平均 ± MCSE', P ? U.mn(fx(P.mean, 4)) + (P.mcse ? ' ± ' + fmt(P.mcse, 2) : '') : '—'],
+        ['真の平均 𝔼<sub><i>p</i></sub>[<i>x</i>]', U.mn(fx(T.mean, 4))],
+        ['全連鎖の分散（真の値）', P ? fx(P.var, 4) + '（' + fx(T.var, 4) + '）' : '—'],
+        ['有効標本数の合計', P && P.ess ? fmt(P.ess, 4) : '—'],
+        ['<i>R̂</i>（split）', st.K < 2 ? '連鎖 1 本では表示しません' : (R && R.rhat ? fx(R.rhat, 3) : '—')]]);
+      q('readM').innerHTML = h;
+      var notes = [];
+      if (D.per.some(function (p) { return p.tau && !p.ok; })) notes.push('※ 打ち切り k_c が系列長の半分に届きました（系列が短すぎます）．積分自己相関時間と有効標本数は過小評価のおそれがあります．');
+      if (R && R.rhat && R.rhat > 1.01) notes.push('R̂ = ' + fx(R.rhat, 3) + ' > 1.01：連鎖が同じ分布を見ていない疑いがあります．');
+      if (R && R.rhat === null && R.reason) notes.push(R.reason);
+      U.status(q('diagNote'), notes.join(' '), notes.length ? 'warn' : '');
+    }
+    function eq(D) {
+      var rows = [], c1 = st.chains[0], Ls = c1.last;
+      if (Ls) {
+        var ok = Ls.accepted;
+        rows.push(row(mt('連鎖 1 の直前の 1 ステップ：') + BR + mi('x') + mo('=') + mnum(U.mn(f5(Ls.x))) + mo(',') + sp('0.4em') + '<msup><mi>x</mi><mo>′</mo></msup>' + mo('=') + mi('x') + mo('+') + mi('s') + mi('ε') + mo('=') + mnum(U.mn(f5(Ls.xp)))));
+        var lnr = isFinite(Ls.lpp) ? '<mi>exp</mi>' + mo('[') + par(mnum(U.mn(f5(Ls.lpp)))) + mo('−') + par(mnum(U.mn(f5(Ls.lp)))) + mo(']') : mnum(0) + sp('0.3em') + mt('（x′ は p̃ = 0 の所）');
+        rows.push(row(mi('r') + mo('=') + frac(ptl() + par('<msup><mi>x</mi><mo>′</mo></msup>'), ptl() + par(mi('x'))) + BR + mo('=') + lnr + (isFinite(Ls.lpp) ? mo('=') + mnum(U.mn(f5(Ls.r))) : '') + BR + mi('min') + par(mnum(1) + mo(',') + mi('r')) + mo('=') + mnum(U.mn(f5(Ls.acc)))));
+        rows.push(row(mi('u') + mo('=') + mnum(f5(Ls.u)) + sp('0.4em') + (ok ? mo('&lt;') : mo('≥')) + sp('0.4em') + mnum(U.mn(f5(Ls.acc))) + BR + mt(ok ? '→ 受理（x ← x′）' : '→ 棄却（x のまま．同じ値をもう一度数える）')));
+      } else rows.push(row(mt('まだ 1 ステップも進めていません．')));
+      var p = D.per[0], TAUI = '<msub><mi>τ</mi><mi>int</mi></msub>';
+      if (p && p.tau) {
+        var s2 = 0; for (var k = 1; k <= p.window && p.rho && k < p.rho.length; k++) s2 += p.rho[k];
+        rows.push(row(mt('連鎖 1：') + BR + TAUI + mo('=') + mnum(1) + mo('+') + mnum(2) + '<munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><mrow><msub><mi>k</mi><mi mathvariant="normal">c</mi></msub><mo>=</mo><mn>' + p.window + '</mn></mrow></munderover><msub><mi>ρ</mi><mi>k</mi></msub>' + BR + mo('=') + mnum(1) + mo('+') + mnum(2) + mo('×') + par(mnum(U.mn(f5((p.tau - 1) / 2)))) + mo('=') + mnum(f5(p.tau)) + (p.ok ? '' : sp() + mt('（系列が短すぎる）'))));
+        rows.push(row('<msub><mi>S</mi><mi>eff</mi></msub>' + mo('=') + frac(mi('S'), TAUI) + mo('=') + frac(mnum(p.n), mnum(f5(p.tau))) + mo('=') + mnum(fmt(p.ess, 4)) + sp() + mt('（受理率 ' + fmt(p.accRate, 3) + '）')));
+      }
+      var R = D.rhat;
+      if (st.K >= 2 && R && R.rhat) {
+        rows.push(row('<mover><mi>R</mi><mo>^</mo></mover>' + mo('=') + '<msqrt>' + frac(frac(mi('n') + mo('−') + mnum(1), mi('n')) + mi('W') + mo('+') + frac(mi('B'), mi('n')), mi('W')) + '</msqrt>' + BR + mo('=') + '<msqrt>' + frac(frac(mnum(R.n - 1), mnum(R.n)) + mo('×') + mnum(fmt(R.W, 4)) + mo('+') + frac(mnum(fmt(R.B, 4)), mnum(R.n)), mnum(fmt(R.W, 4))) + '</msqrt>' + mo('=') + mnum(fx(R.rhat, 3)) + BR + mt('（M = ' + R.M + ' 本に分割）')));
+      } else if (st.K < 2) rows.push(row(mt('R̂ は連鎖が 2 本以上のときだけ計算します．')));
+      q('eqM').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        if (!st || T !== getTarget(S)) init();
+        if (!finiteState()) { run.stop(); U.status(msg, '計算を止めました：連鎖の値に NaN または無限大が出ました．提案幅を小さくして，やり直してください．', 'warn'); return; }
+        var D = getDiag();
+        chainLegend(q('lgT')); chainLegend(q('lgR'));
+        drawH(D); drawT(D); drawR(D); readout(D); eq(D);
+      },
+      hide: function () { run.stop(); },
+      state: S
+    };
+    /* ---- 3 状態の離散分布（第21章 21.7） ---- */
+    var tb = q('threeBody'), P3 = [2, 3, 5];
+    tb.innerHTML = '<p class="hint" style="margin:6px 0">非正規化の重み <i>p̃</i> = (<i>p̃</i><sub>1</sub>, <i>p̃</i><sub>2</sub>, <i>p̃</i><sub>3</sub>) を入れます．提案は「いまの状態以外の 2 状態を 1/2 ずつ」（対称）です．正規化定数 <i>Z</i> = <i>p̃</i><sub>1</sub> + <i>p̃</i><sub>2</sub> + <i>p̃</i><sub>3</sub> は遷移行列を作るのに使いません（<i>p̃</i><sub><i>j</i></sub>/<i>p̃</i><sub><i>i</i></sub> の比だけを使います）．</p>';
+    var inBox = U.el('div', 'threeIn'); tb.appendChild(inBox);
+    var outBox = U.el('div', ''); outBox.setAttribute('aria-live', 'polite'); tb.appendChild(outBox);
+    [0, 1, 2].forEach(function (i) {
+      var nb = U.number({ label: '<i>p̃</i><sub>' + (i + 1) + '</sub>', min: 0.1, max: 100, step: 0.1, value: P3[i], onChange: function (v) { P3[i] = v; three(); } });
+      inBox.appendChild(nb.el);
+    });
+    function three() {
+      var r = M.mhMatrix(P3), n = 3, i, j;
+      var h = '<p style="margin:8px 0 4px">正規化した <b><i>p</i></b> = (' + r.p.map(function (v) { return fracStr(v); }).join(', ') + ')．遷移行列 <i>T</i><sub><i>ij</i></sub>（行 <i>i</i>：いまの状態，列 <i>j</i>：次の状態）：</p>';
+      h += '<div class="tablewrap"><table class="grid"><thead><tr><th></th>' + [1, 2, 3].map(function (j) { return '<th>次 ' + j + '</th>'; }).join('') + '<th>行の和</th></tr></thead><tbody>';
+      for (i = 0; i < n; i++) { h += '<tr><th>いま ' + (i + 1) + '</th>'; for (j = 0; j < n; j++) h += '<td>' + fracStr(r.T[i][j]) + '</td>'; h += '<td>' + fracStr(r.rowsum[i]) + '</td></tr>'; }
+      h += '</tbody></table></div>';
+      h += '<p style="margin:8px 0 4px">詳細釣り合い <i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub> = <i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub>：</p><div class="tablewrap"><table class="grid"><thead><tr><th>組</th><th><i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub></th><th><i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub></th></tr></thead><tbody>';
+      r.flows.forEach(function (f) { h += '<tr><th>' + (f.i + 1) + ' ↔ ' + (f.j + 1) + '</th><td>' + fracStr(f.fwd) + '</td><td>' + fracStr(f.bwd) + '</td></tr>'; });
+      h += '</tbody></table></div>';
+      h += kv([
+        ['定常分布の確認 <b><i>p</i></b><i>T</i>', '(' + r.pT.map(function (v) { return fracStr(v); }).join(', ') + ')'],
+        ['|<b><i>p</i></b><i>T</i> − <b><i>p</i></b>| の最大', fmt(r.stationaryErr, 2)],
+        ['|<i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub> − <i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub>| の最大', fmt(r.detailedErr, 2)],
+        ['(<i>T</i><sup>⊤</sup> − <i>I</i>)<b><i>π</i></b> = 0，Σ<i>π</i> = 1 の解', r.pi ? '(' + r.pi.map(function (v) { return fx(v, 4); }).join(', ') + ')' : '—'],
+        ['一様な分布 (1/3, 1/3, 1/3) に <i>T</i> を 1 回掛ける', '(' + r.powers[1].map(function (v) { return fx(v, 4); }).join(', ') + ')'],
+        ['5 回', '(' + r.powers[5].map(function (v) { return fx(v, 4); }).join(', ') + ')'],
+        ['30 回', '(' + r.powers[30].map(function (v) { return fx(v, 4); }).join(', ') + ')']]);
+      h += '<p class="hint">誤差の欄は浮動小数点の丸め（10<sup>−16</sup> 程度）です．<i>T</i><sub><i>ij</i></sub>（<i>j</i> ≠ <i>i</i>）＝ 1/2 × min(1, <i>p̃</i><sub><i>j</i></sub>/<i>p̃</i><sub><i>i</i></sub>)．棄却された分が対角の <i>T</i><sub><i>ii</i></sub> に残ります．</p>';
+      outBox.innerHTML = h; U.postHeightLater();
+    }
+    three();
+    return self;
+  }
+
+  U.boot(app, { panels: { approx: ApproxSim, mh: MHSim }, initial: 'approx' });
+})();
+</script>
+</body>
+</html>

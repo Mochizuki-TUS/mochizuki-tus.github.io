@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系列モデルのシミュレーター — 隠れ Markov モデルと Kalman フィルター</title>
+<meta name="description" content="装置の正常・劣化の状態をセンサーの観測から推定する隠れ Markov モデル（forward–backward 法・Viterbi 法）と，1 次元の Kalman フィルターを，式と数値を見比べながら確かめるシミュレーターです．">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第22章のシミュレーター S09．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+  #qsim .tablewrap table.grid { margin: 4px 0 2px; }
+  #qsim .tablewrap table.grid th, #qsim .tablewrap table.grid td { white-space: nowrap; }
+  #qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+  #qsim table.grid tr.best td { font-weight: 700; background: rgba(0,135,108,.10); }
+  #qsim table.grid tr.sum td { font-weight: 700; border-top: 2px solid var(--line); }
+  #qsim .xsel { display: flex; gap: 8px; flex-wrap: wrap; }
+  #qsim .xsel .ctl { flex: 1 1 90px; min-width: 0; }
+  #qsim .bnote { font-size: .78rem; color: var(--sub); margin: 2px 0 6px; }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>系列モデル — 隠れ Markov モデルと Kalman フィルター</h1>
+  <p class="lead">装置が「正常」か「劣化」か（隠れ状態）は直接見えず，センサーの値（観測）だけが時刻ごとに得られる，という場面で，観測の列から隠れ状態を推定します．forward 算法で求めるフィルタリング（その時刻までの観測を使う）と，backward 算法も使う平滑化 <i>γ</i><sub><i>t</i></sub>（全時刻の観測を使う）の違い，最も確からしい状態の列（Viterbi 法）が各時刻の最も確からしい状態を並べたものと一致しないことがあること，連続の隠れ状態では Kalman フィルターになることを，式に数値を入れながら確かめてください．</p>
+
+  <div class="tabs" role="tablist" aria-label="シミュレーターの切り替え">
+    <button class="tab is-active" data-tab="hmm" role="tab" type="button">① 隠れ Markov モデル</button>
+    <button class="tab" data-tab="kalman" role="tab" type="button">② Kalman フィルター</button>
+  </div>
+
+  <!-- ① 隠れ Markov モデル -->
+  <section class="panel" data-panel="hmm">
+    <div class="layout">
+      <div class="col-main">
+        <div data-role="genView">
+          <p class="ptitle">観測の列と真の状態</p>
+          <p class="psub">「時刻を進める」で調べる時刻 <i>t</i>（縦の破線）が動き，下の「いまの数値を式に入れると」がその時刻の forward 算法の 1 段になります．</p>
+          <div class="stage">
+            <canvas data-role="cvObs"></canvas>
+            <div data-role="lgObs"></div>
+            <p class="cap" data-role="capObs"></p>
+          </div>
+          <p class="ptitle">劣化である確率：フィルタリングと平滑化</p>
+          <div class="stage">
+            <canvas data-role="cvProb"></canvas>
+            <div data-role="lgProb"></div>
+            <p class="cap">破線はフィルタリング <i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>t</i></sub>)（時刻 <i>t</i> までの観測だけを使う），実線は平滑化 <i>γ</i><sub><i>t</i></sub>(2) = <i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>T</i></sub>)（全時刻の観測を使う）．斜線の帯は真の状態が劣化の時刻です．状態の番号は 1 = 正常，2 = 劣化．</p>
+          </div>
+          <p class="ptitle">状態の列（推定と真の状態）</p>
+          <div class="stage">
+            <canvas data-role="cvSeq"></canvas>
+            <p class="cap">各行の塗ったます目は「劣化」，白います目は「正常」と推定した時刻です．ます目の下の小さな ▲ は真の状態と違う時刻です．「γ 最大」は各時刻で <i>γ</i><sub><i>t</i></sub>(<i>j</i>) が最大の状態を並べた列，「フィルター」はフィルタリングの確率が最大の状態の列，Viterbi は同時確率 <i>p</i>(<i>x</i><sub>1:<i>T</i></sub>, <i>z</i><sub>1:<i>T</i></sub>) が最大の状態の列です．</p>
+          </div>
+          <div class="info">
+            <h3>いまの数値を式に入れると（調べる時刻 <span data-role="tNow">t</span>，状態 2 = 劣化）</h3>
+            <div class="eq left" data-role="eqGen" aria-live="polite"></div>
+            <p class="hint"><i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>t</i>−1</sub>) は 1 時刻前までの観測から見た予測，<i>c</i><sub><i>t</i></sub> = <i>p</i>(<i>x</i><sub><i>t</i></sub> | <i>x</i><sub>1:<i>t</i>−1</sub>) は正規化の係数です．状態 1（正常）の値は 1 から引いた値です（2 状態なので）．<i>α̂</i><sub><i>t</i></sub>(<i>j</i>) は規格化した forward 変数で，フィルタリングの確率そのものです．</p>
+          </div>
+        </div>
+
+        <div data-role="handView" hidden>
+          <p class="ptitle">手計算（状態 2 個，時刻 3 個）の格子図</p>
+          <p class="psub">各ます目に <i>α</i><sub><i>t</i></sub>(<i>j</i>)，<i>β</i><sub><i>t</i></sub>(<i>j</i>)，<i>γ</i><sub><i>t</i></sub>(<i>j</i>) を書きました．太い緑の矢印が Viterbi の経路，二重の枠が各時刻で <i>γ</i><sub><i>t</i></sub> が最大の状態です．</p>
+          <div class="stage">
+            <canvas data-role="cvTrellis"></canvas>
+            <div data-role="lgTrellis"></div>
+            <p class="cap" data-role="capTrellis"></p>
+          </div>
+          <div class="info">
+            <h3>forward・backward・平滑化の表</h3>
+            <div data-role="tblFB"></div>
+          </div>
+          <div class="info">
+            <h3>8 通りの状態の列の全列挙</h3>
+            <div data-role="tblEnum"></div>
+          </div>
+          <div class="info">
+            <h3>Viterbi 法の表</h3>
+            <div data-role="tblVit"></div>
+          </div>
+          <div class="info">
+            <h3>いまの数値を式に入れると</h3>
+            <div data-role="eqPick"></div>
+            <div class="eq left" data-role="eqHand" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlHmm"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readHmm" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② Kalman フィルター -->
+  <section class="panel" data-panel="kalman" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">真の状態，観測，Kalman フィルターの推定</p>
+        <p class="psub">隠れ状態 <i>z</i><sub><i>t</i></sub> がランダムウォークで動き，観測 <i>x</i><sub><i>t</i></sub> にはノイズが乗ります．推定の平均 <i>μ</i><sub><i>t</i></sub> と ±2√<i>P</i><sub><i>t</i></sub> の帯を描きます．</p>
+        <div class="stage">
+          <canvas data-role="cvK"></canvas>
+          <div data-role="lgK"></div>
+          <p class="cap" data-role="capK"></p>
+        </div>
+        <p class="ptitle">Kalman ゲイン <i>K</i><sub><i>t</i></sub> と推定の分散 <i>P</i><sub><i>t</i></sub> の推移</p>
+        <div class="stage">
+          <canvas data-role="cvG"></canvas>
+          <div data-role="lgG"></div>
+          <p class="cap">点線の横線は定常値 <i>K</i><sub>∞</sub> と <i>P</i><sub>∞</sub>．観測が欠けた時刻（斜線の帯）では更新ができないので <i>K</i><sub><i>t</i></sub> = 0 となり，<i>P</i><sub><i>t</i></sub> は毎時刻 <i>q</i> ずつ増えます．観測のある時刻では <i>P</i><sub><i>t</i></sub> = <i>K</i><sub><i>t</i></sub><i>r</i> なので，<i>r</i> = 1 では 2 本の線が重なります（太い実線の上に破線）．</p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると（調べる時刻 <span data-role="tNowK">t</span>）</h3>
+          <div class="eq left" data-role="eqK" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlK"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readK" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>最初の 3 時刻（予測と更新）</h3>
+          <div data-role="first3"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">このページの操作部分は JavaScript で動きます．JavaScript が無効なので，図と操作は表示されません．下の説明（操作手順・式・条件・問い）は読めます．本文は<a href="../ch22_sequences_hmm.html#sec22-5" target="_top">第22章 22.5 節</a>から読めます．</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>このシミュレーターの説明（操作手順・式・条件・問い）</summary>
+
+      <h2>操作手順と観察する点</h2>
+      <ol>
+        <li>①で既定のまま図を見ます（離散 3 値，<i>π</i><sub>1</sub> = 0.95，<i>A</i><sub>11</sub> = 0.97，<i>A</i><sub>22</sub> = 0.95，離れ具合 <i>s</i> = 0.7，<i>T</i> = 100．真の状態は時刻 69〜86 が劣化）．<span class="look">見る点：破線（フィルタリング）は観測が来るたびにぎざぎざに動き，正常の区間でも「高」が続くと誤って 0.5 を超えること．実線（平滑化 <i>γ</i><sub><i>t</i></sub>）は後の観測も使うので滑らかで，劣化の始まりを早めに捉えること．読み出しの正答率はフィルタリング 0.90，平滑化 0.99，Viterbi 0.98．</span></li>
+        <li>「時刻を進める」を押すか「1 時刻進める」を繰り返します．<span class="look">見る点：「いまの数値を式に入れると」で，前の時刻のフィルタリングの確率に遷移確率 <i>A</i><sub><i>ij</i></sub> を掛けて足した「予測」に，出力確率を掛けて正規化すると，その時刻のフィルタリングの確率になること．</span></li>
+        <li>離れ具合 <i>s</i> を 0 にし，次に 1 にします．<span class="look">見る点：<i>s</i> = 0 では観測が状態について何も語らないので，<i>γ</i><sub><i>t</i></sub> は遷移だけで決まる事前の確率になり，正答率は下がること．<i>s</i> を大きくすると推定が真の状態に近づくこと．</span></li>
+        <li>「Gauss 型」に切り替え，劣化の平均 <i>Δ</i> を変えます．<span class="look">見る点：<i>Δ</i> が小さい（2 つの分布が重なる）と推定があいまいになり，<i>Δ</i> が 3 以上ではほぼ確実に当たること．</span></li>
+        <li>「手計算（<i>T</i> = 3）」に切り替えます．<span class="look">見る点：<i>α</i><sub>3</sub>(1) + <i>α</i><sub>3</sub>(2) と，8 通りの状態の列の確率 <i>p</i>(<i>x</i><sub>1:3</sub>, <i>z</i><sub>1:3</sub>) の和が同じ値 <i>p</i>(<i>x</i><sub>1:3</sub>) = 0.036280 になること．<i>γ</i><sub><i>t</i></sub> が全列挙から周辺化した値と一致すること．</span></li>
+        <li>手計算モードで「食い違う例（低・高・中）」を押します．<span class="look">見る点：Viterbi の経路は 正常 → 劣化 → 劣化 なのに，各時刻で <i>γ</i><sub><i>t</i></sub> が最大の状態を並べると 正常 → 劣化 → 正常 になること．全列挙の表で，その 2 つの列の確率を比べること．</span></li>
+        <li>②で「観測の欠けを入れる」をオンにします．<span class="look">見る点：観測の無い時刻では予測だけになり，帯（±2√<i>P</i><sub><i>t</i></sub>）が広がっていき，観測が戻ると急に狭くなること．下の図で <i>K</i><sub><i>t</i></sub> = 0，<i>P</i><sub><i>t</i></sub> が毎時刻 <i>q</i> ずつ増えること．</span></li>
+        <li>②で「データと同じ q, r を使う」を外し，フィルターの <i>q</i> を小さく，または大きくします．<span class="look">見る点：<i>q</i> を小さく仮定すると推定は鈍くなり（<i>K</i><sub>∞</sub> が小さい），大きく仮定すると観測のノイズに振り回されること．±2√<i>P</i><sub><i>t</i></sub> の帯に真値が入る割合（被覆率）が 95 % からずれること．</span></li>
+      </ol>
+      <p>キーボードでは Tab でボタンとスライダーへ移り，Enter（または Space）で押し，矢印キーでスライダーを動かせます．タブは ←→ で切り替えられます．埋め込みでは <code>?only=hmm&amp;mode=hand</code> で手計算モードから始まります．</p>
+
+      <h2>計算している式とアルゴリズム</h2>
+      <p>隠れ状態 <i>z</i><sub><i>t</i></sub> ∈ {1, 2}（1 = 正常，2 = 劣化），初期分布 <i>π</i><sub><i>i</i></sub> = <i>p</i>(<i>z</i><sub>1</sub> = <i>i</i>)，遷移行列 <i>A</i><sub><i>ij</i></sub> = <i>p</i>(<i>z</i><sub><i>t</i></sub> = <i>j</i> | <i>z</i><sub><i>t</i>−1</sub> = <i>i</i>)（<i>i</i> から <i>j</i> へ．各行の和が 1），出力確率 <i>B</i><sub><i>jv</i></sub> = <i>p</i>(<i>x</i><sub><i>t</i></sub> = <i>v</i> | <i>z</i><sub><i>t</i></sub> = <i>j</i>) とすると，同時分布は</p>
+      <div class="eq"><math display="block"><mrow><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo>,</mo><msub><mi>z</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><msub><mi>π</mi><msub><mi>z</mi><mn>1</mn></msub></msub><munderover><mo>∏</mo><mrow><mi>t</mi><mo>=</mo><mn>2</mn></mrow><mi>T</mi></munderover><msub><mi>A</mi><mrow><msub><mi>z</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><msub><mi>z</mi><mi>t</mi></msub></mrow></msub><munderover><mo>∏</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>T</mi></munderover><msub><mi>B</mi><mrow><msub><mi>z</mi><mi>t</mi></msub><msub><mi>x</mi><mi>t</mi></msub></mrow></msub></mrow></math></div>
+      <p>forward 算法（<i>α</i><sub><i>t</i></sub>(<i>j</i>) = <i>p</i>(<i>x</i><sub>1:<i>t</i></sub>, <i>z</i><sub><i>t</i></sub> = <i>j</i>)）と backward 算法（<i>β</i><sub><i>t</i></sub>(<i>j</i>) = <i>p</i>(<i>x</i><sub><i>t</i>+1:<i>T</i></sub> | <i>z</i><sub><i>t</i></sub> = <i>j</i>)）：</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><msub><mi>α</mi><mn>1</mn></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>π</mi><mi>j</mi></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mn>1</mn></msub></mrow></msub><mo>,</mo><mspace width="1em"/><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><munder><mo>∑</mo><mi>i</mi></munder><msub><mi>α</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="1em"/><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>α</mi><mi>T</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><msub><mi>β</mi><mi>T</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>,</mo><mspace width="1em"/><msub><mi>β</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow></msub><msub><mi>β</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><msub><mi>γ</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><mi>p</mi><mo stretchy="false">(</mo><msub><mi>z</mi><mi>t</mi></msub><mo>=</mo><mi>j</mi><mo>∣</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><msub><mi>β</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mrow><mrow><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"/><mi>p</mi><mo stretchy="false">(</mo><msub><mi>z</mi><mi>t</mi></msub><mo>=</mo><mi>j</mi><mo>∣</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>t</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mrow><mrow><msub><mo>∑</mo><mi>k</mi></msub><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>k</mi><mo stretchy="false">)</mo></mrow></mfrac><mspace width="0.5em"/><mtext>（フィルタリング）</mtext></mtd></mtr></mtable></math></div>
+      <p><i>α</i><sub><i>t</i></sub>(<i>j</i>) は確率の積なので，<i>T</i> が大きいと指数関数的に小さくなり，やがて浮動小数点数で 0 に丸まります（この装置の試験では <i>T</i> = 2000 で 0 に丸まりました）．そこで次の<strong>スケーリング</strong>を使います．各時刻で正規化の係数 <i>c</i><sub><i>t</i></sub> = <i>p</i>(<i>x</i><sub><i>t</i></sub> | <i>x</i><sub>1:<i>t</i>−1</sub>) で割り，規格化した <i>α̂</i><sub><i>t</i></sub>(<i>j</i>) = <i>p</i>(<i>z</i><sub><i>t</i></sub> = <i>j</i> | <i>x</i><sub>1:<i>t</i></sub>) を順に求めます．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><msub><mi>c</mi><mi>t</mi></msub><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><munder><mo>∑</mo><mi>i</mi></munder><msub><mover><mi>α</mi><mo>^</mo></mover><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mover><mi>α</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><msub><mo>∑</mo><mi>i</mi></msub><msub><mover><mi>α</mi><mo>^</mo></mover><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow><msub><mi>c</mi><mi>t</mi></msub></mfrac><mo>,</mo><mspace width="0.8em"/><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>T</mi></munderover><mi>ln</mi><msub><mi>c</mi><mi>t</mi></msub></mtd></mtr><mtr><mtd><msub><mover><mi>β</mi><mo>^</mo></mover><mi>T</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>,</mo><mspace width="0.8em"/><msub><mover><mi>β</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><msub><mi>c</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mfrac><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow></msub><msub><mover><mi>β</mi><mo>^</mo></mover><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.8em"/><msub><mi>γ</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mover><mi>α</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><msub><mover><mi>β</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mtd></mtr></mtable></math></div>
+      <p>計算の中では，同じ量を<strong>対数</strong>で求める版（ln <i>α</i><sub><i>t</i></sub> を log-sum-exp で更新する）も並べて計算し，読み出しに両者の対数尤度の差を表示します（丸め誤差の大きさ）．Gauss 型の観測では <i>B</i><sub><i>jx</i><sub><i>t</i></sub></sub> の代わりに密度 𝒩(<i>x</i><sub><i>t</i></sub> | <i>μ</i><sub><i>j</i></sub>, <i>σ</i><sup>2</sup>) を使い，各時刻で 2 つの密度の大きい方で割ってから計算します（割った分は対数尤度に足し戻します）．</p>
+      <p>Viterbi 法は，和の代わりに最大値を取ります．<i>ω</i><sub><i>t</i></sub>(<i>j</i>) は「時刻 <i>t</i> に状態 <i>j</i> で終わる状態の列のうち最も確からしいものの同時確率」，<i>ψ</i><sub><i>t</i></sub>(<i>j</i>) はそのときの 1 つ前の状態（バックポインター）です．計算は対数で行います．</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>ω</mi><mn>1</mn></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>π</mi><mi>j</mi></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mn>1</mn></msub></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>ω</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><munder><mo movablelimits="false">max</mo><mi>i</mi></munder><msub><mi>ω</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>ψ</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo movablelimits="false">argmax</mo><mi>i</mi></munder><msub><mi>ω</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow></math></div>
+      <p>②の Kalman フィルターは，連続の隠れ状態 <i>z</i><sub><i>t</i></sub> がランダムウォーク <i>z</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i>−1</sub> + <i>w</i><sub><i>t</i></sub>（<i>w</i><sub><i>t</i></sub> ~ 𝒩(0, <i>q</i>)）をし，観測が <i>x</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i></sub> + <i>v</i><sub><i>t</i></sub>（<i>v</i><sub><i>t</i></sub> ~ 𝒩(0, <i>r</i>)）のときの forward 算法です．分布がずっと Gauss 分布のままなので，平均と分散だけを更新すれば済みます（更新は第4章の「Gauss 分布の平均のベイズ推定」と同じ計算）．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mtext>予測：</mtext><msub><mi>μ</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>μ</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>P</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>q</mi><mspace width="0.8em"/><mtext>（</mtext><mi>t</mi><mo>=</mo><mn>1</mn><mtext> では </mtext><msub><mi>μ</mi><mn>0</mn></msub><mtext>，</mtext><msub><mi>P</mi><mn>0</mn></msub><mtext>）</mtext></mtd></mtr><mtr><mtd><mtext>ゲイン：</mtext><msub><mi>K</mi><mi>t</mi></msub><mo>=</mo><mfrac><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mrow><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>r</mi></mrow></mfrac></mtd></mtr><mtr><mtd><mtext>更新：</mtext><msub><mi>μ</mi><mi>t</mi></msub><mo>=</mo><msub><mi>μ</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><msub><mi>K</mi><mi>t</mi></msub><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo>−</mo><msub><mi>μ</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.8em"/><msub><mi>P</mi><mi>t</mi></msub><mo>=</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><msub><mi>K</mi><mi>t</mi></msub><mo stretchy="false">)</mo><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>=</mo><mfrac><mrow><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mi>r</mi></mrow><mrow><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>r</mi></mrow></mfrac></mtd></mtr><mtr><mtd><mtext>定常値：</mtext><msubsup><mi>P</mi><mi>∞</mi><mo>−</mo></msubsup><mo>=</mo><mfrac><mrow><mi>q</mi><mo>+</mo><msqrt><mrow><msup><mi>q</mi><mn>2</mn></msup><mo>+</mo><mn>4</mn><mi>q</mi><mi>r</mi></mrow></msqrt></mrow><mn>2</mn></mfrac><mo>,</mo><mspace width="0.8em"/><msub><mi>K</mi><mi>∞</mi></msub><mo>=</mo><mfrac><msubsup><mi>P</mi><mi>∞</mi><mo>−</mo></msubsup><mrow><msubsup><mi>P</mi><mi>∞</mi><mo>−</mo></msubsup><mo>+</mo><mi>r</mi></mrow></mfrac><mo>,</mo><mspace width="0.8em"/><msub><mi>P</mi><mi>∞</mi></msub><mo>=</mo><msub><mi>K</mi><mi>∞</mi></msub><mi>r</mi></mtd></mtr></mtable></math></div>
+      <p><i>μ</i><sub><i>t</i></sub>，<i>P</i><sub><i>t</i></sub> は <i>p</i>(<i>z</i><sub><i>t</i></sub> | <i>x</i><sub>1:<i>t</i></sub>) = 𝒩(<i>z</i><sub><i>t</i></sub> | <i>μ</i><sub><i>t</i></sub>, <i>P</i><sub><i>t</i></sub>) の平均と分散，<i>μ</i><sub><i>t</i>|<i>t</i>−1</sub>，<i>P</i><sub><i>t</i>|<i>t</i>−1</sub> は 1 つ前までの観測から見た予測の平均と分散です．観測が欠けた時刻は更新をせず，<i>μ</i><sub><i>t</i></sub> = <i>μ</i><sub><i>t</i>|<i>t</i>−1</sub>，<i>P</i><sub><i>t</i></sub> = <i>P</i><sub><i>t</i>|<i>t</i>−1</sub> とします．分散の更新は引き算をしない形 <i>P</i><sub><i>t</i>|<i>t</i>−1</sub><i>r</i>/(<i>P</i><sub><i>t</i>|<i>t</i>−1</sub> + <i>r</i>) で計算するので，丸めで負になりません．</p>
+
+      <h2>データと乱数の条件</h2>
+      <ul>
+        <li>①の系列は<strong>教育用の合成データ</strong>です（実在の装置の記録ではありません）．状態 1 = 正常，2 = 劣化．<i>z</i><sub>1</sub> ~ <i>π</i>，<i>z</i><sub><i>t</i></sub> | <i>z</i><sub><i>t</i>−1</sub> = <i>i</i> ~ (<i>A</i><sub><i>i</i>1</sub>, <i>A</i><sub><i>i</i>2</sub>)．<i>A</i><sub>12</sub> = 1 − <i>A</i><sub>11</sub>，<i>A</i><sub>21</sub> = 1 − <i>A</i><sub>22</sub>．既定は <i>π</i> = (0.95, 0.05)，<i>A</i><sub>11</sub> = 0.97，<i>A</i><sub>22</sub> = 0.95，<i>T</i> = 100．</li>
+        <li>離散 3 値の観測（センサーの値を 低・中・高 の 3 段階に分けたもの．<i>v</i> = 1, 2, 3）：離れ具合 <i>s</i> ∈ [0, 1] で <i>B</i><sub>1·</sub> = ((1 + <i>s</i>)/3, 1/3, (1 − <i>s</i>)/3)（正常は「低」が出やすい），<i>B</i><sub>2·</sub> = ((1 − <i>s</i>)/3, 1/3, (1 + <i>s</i>)/3)（劣化は「高」が出やすい）．既定 <i>s</i> = 0.7．</li>
+        <li>Gauss 型の観測：<i>x</i><sub><i>t</i></sub> = <i>μ</i><sub><i>z</i><sub><i>t</i></sub></sub> + <i>σ</i> <i>ε</i><sub><i>t</i></sub>，<i>ε</i><sub><i>t</i></sub> ~ 𝒩(0, 1)，<i>μ</i><sub>1</sub> = 0，<i>μ</i><sub>2</sub> = <i>Δ</i>，<i>σ</i> = 1．センサー値は無次元です（正常時の平均を 0，ばらつきの標準偏差を 1 にとった値）．既定 <i>Δ</i> = 1.5．</li>
+        <li>推定には，データを作ったのと同じ <i>π</i>，<i>A</i>，<i>B</i>（または <i>μ</i><sub><i>j</i></sub>，<i>σ</i>）を使います．</li>
+        <li>②の系列も<strong>教育用の合成データ</strong>です：<i>z</i><sub>1</sub> = <i>μ</i><sub>0</sub> + √<i>P</i><sub>0</sub> <i>ε</i><sub>1</sub>，<i>z</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i>−1</sub> + √<i>q</i> <i>ε</i><sub><i>t</i></sub>，<i>x</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i></sub> + √<i>r</i> <i>η</i><sub><i>t</i></sub>（<i>ε</i><sub><i>t</i></sub>，<i>η</i><sub><i>t</i></sub> ~ 𝒩(0, 1) は独立）．たとえば装置の状態を表す量（無次元）がゆっくりずれていき，センサーはそれにノイズが乗った値を返す，という状況です．既定は <i>q</i> = 0.2，<i>r</i> = 1.0，<i>μ</i><sub>0</sub> = 0，<i>P</i><sub>0</sub> = 1，<i>T</i> = 100．観測の欠けは時刻 <i>t</i> が (0.3<i>T</i>, 0.45<i>T</i>] と (0.7<i>T</i>, 0.8<i>T</i>] の範囲（<i>T</i> = 100 なら 31〜45 と 71〜80）．欠けを入れても観測の値そのものは変わりません．</li>
+        <li>乱数は seed つきの生成器（mulberry32）です．既定の seed は ①，② とも 20261112．同じ seed でやり直すと同じ系列になります．①でパラメーターを変えると同じ seed で系列を作り直します（乱数の列は同じでも，遷移・出力の確率が変わるので状態と観測は変わります）．<i>T</i> だけを変えたときは，短い系列は長い系列の先頭と同じです．</li>
+        <li>上限：系列長 <i>T</i> は 10〜200．手計算モードは <i>T</i> = 3（全列挙は 2<sup>3</sup> = 8 通り）．</li>
+      </ul>
+
+      <h2>簡略化している点</h2>
+      <ul>
+        <li>状態は 2 つだけで，遷移確率・出力確率は時刻によらず一定です．実際の劣化は進むだけで戻らない（<i>A</i><sub>21</sub> = 0）ことが多いですが，ここでは補修などで正常に戻ることも許しています（<i>A</i><sub>22</sub> = 1 にすれば戻らないモデルになります）．</li>
+        <li>パラメーター <i>π</i>，<i>A</i>，<i>B</i> は既知としています．データから学習する Baum–Welch 法（EM 法）は扱いません（本文 22.4 で紹介）．</li>
+        <li>Gauss 型の観測の標準偏差は両状態で共通の <i>σ</i> = 1 に固定しています．</li>
+        <li>Kalman フィルターは 1 次元のランダムウォーク（状態の遷移の係数 1）に限り，後ろ向きの平滑化（RTS 平滑化）は扱いません．初期の平均と分散は <i>μ</i><sub>0</sub> = 0，<i>P</i><sub>0</sub> = 1 に固定しています．</li>
+      </ul>
+
+      <h2>結果が不安定になる条件</h2>
+      <ul>
+        <li>規格化しない <i>α</i><sub><i>t</i></sub>(<i>j</i>) は <i>T</i> とともに指数関数的に小さくなり，<i>T</i> が数百〜数千で 0 に丸まります．この装置はスケーリング版（と対数版）で計算するので，<i>T</i> = 200 でも桁落ちしません．</li>
+        <li>確率 0 の遷移（<i>A</i><sub><i>ij</i></sub> = 0）と確率 0 の出力（<i>s</i> = 1 のとき <i>B</i><sub>1,高</sub> = <i>B</i><sub>2,低</sub> = 0）が重なると，観測列そのものの確率が 0 になることがあります（手計算モードで起こせます）．このときは計算を止めて理由を表示します．</li>
+        <li><i>s</i> = 0 や <i>Δ</i> = 0 では観測が状態について何も語らないので，推定は遷移だけで決まります．同じ確率の状態が並ぶと Viterbi 法の経路は一つに決まらず，この装置は番号の小さい状態（正常）を選びます．</li>
+        <li>Kalman フィルターで <i>q</i> を真の値より極端に小さく仮定すると，推定の分散 <i>P</i><sub><i>t</i></sub> が小さくなりすぎ，真値が帯の外に出続けます（フィルターが観測を信じなくなる）．</li>
+      </ul>
+
+      <h2>本文の対応節</h2>
+      <ul>
+        <li><a href="../ch22_sequences_hmm.html#sec22-3" target="_top">第22章 22.3 隠れ Markov モデル</a></li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-5" target="_top">第22章 22.5 forward 算法</a>（スケーリングと対数）</li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-6" target="_top">第22章 22.6 backward 算法と平滑化</a>（フィルタリングとの違い）</li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-7" target="_top">第22章 22.7 手計算</a>（<i>T</i> = 3 と 8 通りの全列挙）</li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-8" target="_top">第22章 22.8 Viterbi 法</a></li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-9" target="_top">第22章 22.9 状態空間モデルと Kalman フィルターの入口</a></li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-11" target="_top">第22章 22.11 材料工学・物性物理学との接点</a>（製造プロセスの監視）</li>
+      </ul>
+
+      <h2>操作後に答える短い問い</h2>
+      <ol>
+        <li>手計算モードの既定（<i>π</i> = (0.6, 0.4)，<i>A</i><sub>11</sub> = 0.7，<i>A</i><sub>22</sub> = 0.6，観測 低・中・高）で，<i>α</i><sub>1</sub>(1)，<i>α</i><sub>2</sub>(1)，<i>p</i>(<i>x</i><sub>1:3</sub>) を手で計算してください．
+          <details class="ans"><summary>答えの例</summary><p><i>α</i><sub>1</sub>(1) = 0.6 × 0.5 = 0.30000，<i>α</i><sub>1</sub>(2) = 0.4 × 0.1 = 0.040000．<i>α</i><sub>2</sub>(1) = <i>B</i><sub>1,中</sub>(0.3 × 0.7 + 0.04 × 0.4) = 0.4 × 0.226 = 0.090400．同様に <i>α</i><sub>2</sub>(2) = 0.3 × (0.3 × 0.3 + 0.04 × 0.6) = 0.034200，<i>α</i><sub>3</sub>(1) = 0.1 × (0.0904 × 0.7 + 0.0342 × 0.4) = 0.0076960，<i>α</i><sub>3</sub>(2) = 0.6 × (0.0904 × 0.3 + 0.0342 × 0.6) = 0.028584．<i>p</i>(<i>x</i><sub>1:3</sub>) = 0.0076960 + 0.028584 = 0.036280．8 通りの全列挙の和と一致します．</p></details></li>
+        <li>「食い違う例（低・高・中）」で，各時刻の <i>γ</i><sub><i>t</i></sub> が最大の状態を並べた列（正常・劣化・正常）が Viterbi の経路（正常・劣化・劣化）と違うのはなぜですか．
+          <details class="ans"><summary>答えの例</summary><p><i>γ</i><sub>3</sub> = (0.54627, 0.45373) は，<i>z</i><sub>2</sub> が正常の列も劣化の列も足し合わせた（周辺化した）確率です．最後の観測「中」は <i>B</i><sub>1,中</sub> = 0.4 と <i>B</i><sub>2,中</sub> = 0.3 で区別しにくく，<i>z</i><sub>2</sub> = 正常 を経る列の分まで含めると <i>z</i><sub>3</sub> = 正常 がわずかに多くなります．一方，最も確からしい 1 本の列 正常・劣化・劣化（確率 0.0097200）は，劣化にとどまる確率 <i>A</i><sub>22</sub> = 0.6 が劣化から戻る確率 <i>A</i><sub>21</sub> = 0.4 より大きいので，正常・劣化・正常（0.0086400）より確からしくなります．「各時刻で最も確からしい状態」と「最も確からしい状態の列」は別の問いです．</p></details></li>
+        <li>①の既定で，フィルタリングと平滑化の正答率はいくつですか．平滑化の方が高くなりやすいのはなぜですか．実時間の監視で使えるのはどちらですか．
+          <details class="ans"><summary>答えの例</summary><p>既定（seed 20261112）ではフィルタリング 0.90，平滑化（γ 最大）0.99，Viterbi 0.98 です．平滑化は時刻 <i>t</i> より後の観測も使うので，状態が切り替わった直後の判断を後から修正できます．ただし後の観測が届くまで計算できないので，その時刻に判断を下す実時間の監視ではフィルタリングしか使えません（後から記録を解析するときは平滑化が使えます）．</p></details></li>
+        <li>②の既定（<i>q</i> = 0.2，<i>r</i> = 1，<i>P</i><sub>0</sub> = 1）で，<i>K</i><sub>1</sub>，<i>K</i><sub>2</sub>，<i>K</i><sub>∞</sub> を求めてください．観測が欠けた区間で <i>P</i><sub><i>t</i></sub> はどう変わりますか．
+          <details class="ans"><summary>答えの例</summary><p><i>K</i><sub>1</sub> = 1/(1 + 1) = 0.5，<i>P</i><sub>1</sub> = 0.5．<i>P</i><sub>2|1</sub> = 0.5 + 0.2 = 0.7，<i>K</i><sub>2</sub> = 0.7/1.7 = 0.41176．定常値は <i>P</i><sub>∞</sub><sup>−</sup> = (0.2 + √(0.04 + 0.8))/2 = 0.55826，<i>K</i><sub>∞</sub> = 0.55826/1.55826 = 0.35826．観測が欠けると更新ができず，<i>P</i><sub><i>t</i></sub> = <i>P</i><sub><i>t</i>−1</sub> + <i>q</i> で毎時刻 0.2 ずつ増え（15 時刻で 3.0 増える），観測が戻った時刻のゲインは大きくなります．</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">機械学習 — 確率から GPT まで（目次）へ戻る</a>　｜　本文：<a href="../ch22_sequences_hmm.html#sec22-5" target="_top">第22章 22.5 節</a>　｜　数式はブラウザ標準の MathML で組んでいます（外部ライブラリ不使用）．</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="hmm.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.Hmm;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var ST = M.STATES, SY = M.SYMBOLS;
+
+  /* ---- MathML の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  function mn(s) { return '<mn>' + U.mn(String(s)) + '</mn>'; }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function sub(b, s) { return '<msub><mrow>' + b + '</mrow><mrow>' + s + '</mrow></msub>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function par(s) { return mo('(') + s + mo(')'); }
+  var BR = '<!--br-->';   /* 長い行を 2 行に分ける位置（2 行目は字下げ） */
+  function row(s) { return s.split(BR).map(function (part, i) { return '<mtr><mtd>' + (i ? '<mspace width="2em"/>' : '') + part + '</mtd></mtr>'; }).join(''); }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.55em">' + rows.join('') + '</mtable></math>'; }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function f5(v) { return fmt(v, 5); }
+  function pn(v) { var t = mn(fx(v, 4)); return v < 0 ? mo('(') + t + mo(')') : t; }   /* 負の数は括弧で（− − を避ける） */
+  function f4(v) { return fmt(v, 4); }
+  function d1(v) { return U.mn((Math.round(v * 10) / 10).toFixed(1)); }
+  function r10(v) { return Math.round(v * 1e10) / 1e10; }
+  var mT = '<mi>t</mi>';
+  function alphaHat(t, j) { return sub('<mover><mi>α</mi><mo>^</mo></mover>', t) + par(j); }
+  function betaHat(t, j) { return sub('<mover><mi>β</mi><mo>^</mo></mover>', t) + par(j); }
+  function Aij(i, j) { return sub(mi('A'), mn(i) + mn(j)); }
+  function Bj(j, v) { return sub(mi('B'), mn(j) + mo(',') + mt(SY[v])); }
+  function pzx(j, cond) { return mi('p') + par(sub(mi('z'), mT) + mo('=') + mn(j) + mo('∣') + cond); }
+  function x1to(s) { return sub(mi('x'), mn(1) + mo(':') + s); }
+
+  /* =================================================================
+     ① 隠れ Markov モデル
+     ================================================================= */
+  function HmmSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var startHand = /[?&]mode=hand/.test(location.search);
+    var S = { mode: startHand ? 'hand' : 'gen', type: 'discrete', pi1: 0.95, a11: 0.97, a22: 0.95, s: 0.7, delta: 1.5, T: 100, showTrue: true, tSel: 70, seed: DEFAULT_SEED };
+    var H = { pi1: 0.6, a11: 0.7, a22: 0.6, B: [[0.5, 0.4, 0.1], [0.1, 0.3, 0.6]], x: [0, 1, 2], eq: 'alpha', preset: 'base' };
+    var data = null, res = null;
+    var ctl = q('ctlHmm'), msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var redraw = function () { self.update(); };
+
+    /* ---- 共通：モードの切り替え ---- */
+    var pMode = U.pills({ label: '表示', options: [{ value: 'gen', label: '生成した系列' }, { value: 'hand', label: '手計算（T = 3）' }], value: S.mode,
+      onChange: function (v) { S.mode = v; run.stop(); syncMode(); redraw(); U.postHeightLater(); } });
+    ctl.appendChild(pMode.el);
+    var genCtl = U.el('div', ''), handCtl = U.el('div', '');
+    ctl.appendChild(genCtl); ctl.appendChild(handCtl); ctl.appendChild(msg);
+
+    /* ---- 生成した系列の操作部品 ---- */
+    function regen() {
+      var pi = [S.pi1, r10(1 - S.pi1)], A = M.makeA(S.a11, S.a22);
+      var obs = S.type === 'discrete' ? { type: 'discrete', B: M.discreteB(S.s) } : { type: 'gauss', mu: M.gaussMeans(S.delta), sigma: 1 };
+      data = M.sampleHMM(C.rng(S.seed), pi, A, S.T, obs);
+      var logE = S.type === 'discrete' ? M.logEmissionDiscrete(obs.B, data.x) : M.logEmissionGauss(obs.mu, 1, data.x);
+      data.pi = pi; data.A = A; data.obs = obs; data.logE = logE;
+      res = M.analyze(pi, A, logE, data.z);
+    }
+    var pType = U.pills({ label: '観測の型', options: [{ value: 'discrete', label: '離散 3 値（低・中・高）' }, { value: 'gauss', label: 'Gauss 型（センサー値）' }], value: S.type,
+      onChange: function (v) { S.type = v; rS.el.hidden = v !== 'discrete'; rD.el.hidden = v !== 'gauss'; regen(); redraw(); } });
+    var rPi = U.range({ label: '最初が正常である確率 <i>π</i><sub>1</sub>（<i>π</i><sub>2</sub> = 1 − <i>π</i><sub>1</sub>）', min: 0, max: 1, step: 0.05, value: S.pi1, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.pi1 = r10(v); regen(); redraw(); } });
+    var rA1 = U.range({ label: '正常にとどまる確率 <i>A</i><sub>11</sub>', min: 0, max: 1, step: 0.01, value: S.a11, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.a11 = r10(v); regen(); redraw(); }, hint: '正常 → 劣化 は <i>A</i><sub>12</sub> = 1 − <i>A</i><sub>11</sub>．' });
+    var rA2 = U.range({ label: '劣化にとどまる確率 <i>A</i><sub>22</sub>', min: 0, max: 1, step: 0.01, value: S.a22, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.a22 = r10(v); regen(); redraw(); }, hint: '劣化 → 正常（補修など）は <i>A</i><sub>21</sub> = 1 − <i>A</i><sub>22</sub>．' });
+    var rS = U.range({ label: '出力分布の離れ具合 <i>s</i>', min: 0, max: 1, step: 0.05, value: S.s, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.s = r10(v); regen(); redraw(); }, hint: '<i>s</i> = 0 で両状態の出力確率が同じ（観測から区別できない）．' });
+    var rD = U.range({ label: '劣化の平均 <i>Δ</i>（正常の平均 0，<i>σ</i> = 1）', min: 0, max: 4, step: 0.1, value: S.delta, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.delta = r10(v); regen(); redraw(); } });
+    rD.el.hidden = true;
+    var rT = U.range({ label: '系列長 <i>T</i>', min: M.LIMITS.Tmin, max: M.LIMITS.Tmax, step: 1, value: S.T, fmt: function (v) { return String(v); }, onInput: function (v) { S.T = v; rTs.setRange({ max: v }, true); S.tSel = rTs.get(); regen(); redraw(); } });
+    var ckTrue = U.check({ label: '真の状態を表示する', checked: true, onChange: function (v) { S.showTrue = v; redraw(); } });
+    var rTs = U.range({ label: '調べる時刻 <i>t</i>', min: 1, max: S.T, step: 1, value: S.tSel, fmt: function (v) { return String(v); }, onInput: function (v) { S.tSel = v; redraw(); } });
+    var run = U.runner({
+      labels: { run: '時刻を進める', stop: '止める', step: '1 時刻進める', reset: '時刻 1 に戻す' },
+      stepsPerFrame: 1, budgetMs: 12,
+      isVisible: function () { return !panel.hidden && S.mode === 'gen'; },
+      step: function () { if (S.tSel >= S.T) return false; S.tSel++; rTs.set(S.tSel, true); return S.tSel < S.T; },
+      reset: function () { S.tSel = 1; rTs.set(1, true); },
+      draw: function () { self.update(); }
+    });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; regen(); U.status(msg, 'seed ' + s + ' で系列を作り直しました．', ''); redraw(); } });
+    genCtl.appendChild(pType.el); genCtl.appendChild(rPi.el); genCtl.appendChild(rA1.el); genCtl.appendChild(rA2.el);
+    genCtl.appendChild(rS.el); genCtl.appendChild(rD.el); genCtl.appendChild(rT.el); genCtl.appendChild(ckTrue.el);
+    genCtl.appendChild(U.el('hr', 'sep'));
+    genCtl.appendChild(rTs.el); genCtl.appendChild(run.el);
+    genCtl.appendChild(U.el('hr', 'sep'));
+    genCtl.appendChild(seed.el);
+
+    /* ---- 手計算モードの操作部品 ---- */
+    var pPre = U.pills({ label: 'プリセット', options: [{ value: 'base', label: M.HAND_PRESETS.base.label }, { value: 'mismatch', label: M.HAND_PRESETS.mismatch.label }], value: 'base',
+      onChange: function (v) { loadPreset(v); } });
+    function hr(label, key, min, max) {
+      return U.range({ label: label, min: min, max: max, step: 0.1, value: 0, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { setH(key, r10(v)); } });
+    }
+    var hPi = hr('<i>π</i><sub>1</sub>（最初が正常）', 'pi1', 0, 1);
+    var hA1 = hr('<i>A</i><sub>11</sub>（正常 → 正常）', 'a11', 0, 1);
+    var hA2 = hr('<i>A</i><sub>22</sub>（劣化 → 劣化）', 'a22', 0, 1);
+    var hB = [[hr('<i>B</i><sub>1,低</sub>', 'b10', 0, 1), hr('<i>B</i><sub>1,高</sub>', 'b12', 0, 1)], [hr('<i>B</i><sub>2,低</sub>', 'b20', 0, 1), hr('<i>B</i><sub>2,高</sub>', 'b22', 0, 1)]];
+    var bNote = [U.el('p', 'bnote'), U.el('p', 'bnote')];
+    var xSel = [0, 1, 2].map(function (t) {
+      return U.select({ label: '<i>x</i><sub>' + (t + 1) + '</sub>', options: SY.map(function (s, v) { return { value: v, label: s }; }), value: H.x[t], onChange: function (v) { H.x[t] = +v; H.preset = null; pPre.set(null, true); redraw(); } });
+    });
+    var xRow = U.el('div', 'xsel'); xSel.forEach(function (s) { xRow.appendChild(s.el); });
+    handCtl.appendChild(pPre.el);
+    handCtl.appendChild(hPi.el); handCtl.appendChild(hA1.el); handCtl.appendChild(hA2.el);
+    handCtl.appendChild(U.el('div', 'ctlhead', '出力確率（中 = 1 − 低 − 高）'));
+    for (var j0 = 0; j0 < 2; j0++) { handCtl.appendChild(hB[j0][0].el); handCtl.appendChild(hB[j0][1].el); handCtl.appendChild(bNote[j0]); }
+    handCtl.appendChild(U.el('div', 'ctlhead', '観測の列'));
+    handCtl.appendChild(xRow);
+    var pEq = U.pills({ label: '式を表示する量', options: [{ value: 'alpha', label: 'α（forward）' }, { value: 'beta', label: 'β（backward）' }, { value: 'gamma', label: 'γ と尤度' }, { value: 'vit', label: 'ω（Viterbi）' }], value: H.eq,
+      onChange: function (v) { H.eq = v; redraw(); } });
+    q('eqPick').appendChild(pEq.el);
+
+    function setH(key, v) {
+      if (key === 'pi1') H.pi1 = v; else if (key === 'a11') H.a11 = v; else if (key === 'a22') H.a22 = v;
+      else { var j = +key[1] - 1, k = +key[2]; H.B[j][k] = v; H.B[j][1] = r10(1 - H.B[j][0] - H.B[j][2]); syncBRange(j); }
+      H.preset = null; pPre.set(null, true); redraw();
+    }
+    function syncBRange(j) {
+      /* 低 + 高 ≤ 1 を保つ（中 = 1 − 低 − 高 ≥ 0） */
+      hB[j][1].setRange({ max: r10(1 - H.B[j][0]) }, true); H.B[j][2] = r10(hB[j][1].get());
+      hB[j][0].setRange({ max: r10(1 - H.B[j][2]) }, true); H.B[j][0] = r10(hB[j][0].get());
+      H.B[j][1] = r10(1 - H.B[j][0] - H.B[j][2]);
+      bNote[j].innerHTML = '→ <i>B</i><sub>' + (j + 1) + ',中</sub> = ' + U.mn(H.B[j][1].toFixed(1)) + '（状態 ' + (j + 1) + '：' + ST[j] + '）';
+    }
+    function loadPreset(name) {
+      var P = M.HAND_PRESETS[name]; H.preset = name;
+      H.pi1 = P.pi1; H.a11 = P.a11; H.a22 = P.a22; H.B = P.B.map(function (r) { return r.slice(); }); H.x = P.x.slice();
+      syncHandControls(); redraw();
+    }
+    function syncHandControls() {
+      hPi.set(H.pi1, true); hA1.set(H.a11, true); hA2.set(H.a22, true);
+      for (var j = 0; j < 2; j++) { hB[j][0].setRange({ max: 1 }, true); hB[j][1].setRange({ max: 1 }, true); hB[j][0].set(H.B[j][0], true); hB[j][1].set(H.B[j][2], true); syncBRange(j); }
+      xSel.forEach(function (s, t) { s.set(H.x[t], true); });
+      pPre.set(H.preset, true);
+    }
+    syncHandControls();
+
+    function syncMode() {
+      genCtl.hidden = S.mode !== 'gen'; handCtl.hidden = S.mode !== 'hand';
+      q('genView').hidden = S.mode !== 'gen'; q('handView').hidden = S.mode !== 'hand';
+      U.status(msg, '');
+    }
+    syncMode();
+
+    U.legendHTML(q('lgProb'), [
+      { label: 'フィルタリング <i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>t</i></sub>)', color: col.orange, dash: dash.dashed, width: 2 },
+      { label: '平滑化 <i>γ</i><sub><i>t</i></sub>(2)', color: col.accent, width: 2.4 },
+      { label: '真の状態が劣化（斜線）', color: col.purple, kind: 'band', hatch: true, alpha: 0.12 }]);
+    U.legendHTML(q('lgTrellis'), [
+      { label: 'Viterbi の経路', color: col.green, width: 3.5 },
+      { label: '遷移（すべての組）', color: '#b8c0c8', width: 1.2 },
+      { label: '各時刻で γ が最大の状態（二重の枠）', color: col.orange, kind: 'marker', shape: 'square', fill: false }]);
+
+    /* ---- 生成した系列：描画 ---- */
+    var BOXL = 70;
+    function degBands(c, ax, z, yr) {
+      var T = z.length;
+      for (var t = 0; t < T; t++) {
+        if (z[t] !== 1) continue;
+        var t1 = t; while (t1 + 1 < T && z[t1 + 1] === 1) t1++;
+        U.band(c, ax, [t + 0.5, t1 + 1.5], [yr[0], yr[0]], [yr[1], yr[1]], { color: col.purple, alpha: 0.10, hatch: true });
+        t = t1;
+      }
+    }
+    function drawObs() {
+      var F = U.fitCanvas(q('cvObs'), { aspect: 0.36, minHeight: 190, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: BOXL, r: 12, t: 12, b: 38 }), T = S.T, ax, yr;
+      var ts = data.x.map(function (_, i) { return i + 1; });
+      if (S.type === 'discrete') {
+        yr = [0.5, 3.5];
+        ax = U.axes(c, box, [0.5, T + 0.5], yr, { xl: '時刻 t', yl: '観測', yticks: [1, 2, 3], yf: function (v) { return SY[Math.round(v) - 1] || ''; }, ylOff: 46 });
+        if (S.showTrue) degBands(c, ax, data.z, yr);
+        U.points(c, ax, ts, data.x.map(function (v) { return v + 1; }), { shape: 'circle', color: col.ink, size: T > 120 ? 4.5 : 6 });
+      } else {
+        var lo = Math.min(-3, Math.min.apply(null, data.x)), hi = Math.max(S.delta + 3, Math.max.apply(null, data.x));
+        yr = [Math.floor(lo), Math.ceil(hi)];
+        ax = U.axes(c, box, [0.5, T + 0.5], yr, { xl: '時刻 t', yl: 'センサー値（無次元）' });
+        if (S.showTrue) degBands(c, ax, data.z, yr);
+        U.hline(c, ax, 0, { color: col.gray, dash: dash.dotted, width: 1.3 });
+        U.hline(c, ax, S.delta, { color: col.purple, dash: dash.dotted, width: 1.3 });
+        U.points(c, ax, ts, data.x, { shape: 'circle', color: col.ink, size: T > 120 ? 4.5 : 6 });
+        var L = U.labeler(c, box);
+        L.add('正常の平均 0', box[2] - 46, ax.Y(0) + 10, { color: col.gray, size: 10 });
+        L.add('劣化の平均 ' + fx(S.delta, 1), box[2] - 46, ax.Y(S.delta) - 10, { color: col.purple, size: 10 });
+      }
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      U.setCanvasLabel(q('cvObs'), '観測の列（' + (S.type === 'discrete' ? '離散 3 値' : 'Gauss 型のセンサー値') + '）．T = ' + T + '，seed ' + S.seed + '．真の状態が劣化の時刻は ' + data.z.filter(function (v) { return v === 1; }).length + ' 個' + (S.showTrue ? '（斜線の帯）' : '（表示していません）') + '．');
+      q('capObs').innerHTML = '<strong>教育用の合成データ</strong>（seed ' + S.seed + '，<i>T</i> = ' + T + '，<i>π</i> = (' + fx(S.pi1, 2) + ', ' + fx(1 - S.pi1, 2) + ')，<i>A</i><sub>11</sub> = ' + fx(S.a11, 2) + '，<i>A</i><sub>22</sub> = ' + fx(S.a22, 2) + '，' +
+        (S.type === 'discrete' ? '離散 3 値，<i>s</i> = ' + fx(S.s, 2) + '：<i>B</i><sub>1·</sub> = (' + [0, 1, 2].map(function (v) { return fx(data.obs.B[0][v], 3); }).join(', ') + ')，<i>B</i><sub>2·</sub> = (' + [0, 1, 2].map(function (v) { return fx(data.obs.B[1][v], 3); }).join(', ') + ')'
+          : 'Gauss 型 <i>x</i><sub><i>t</i></sub> = <i>μ</i><sub><i>z</i><sub><i>t</i></sub></sub> + <i>ε</i><sub><i>t</i></sub>，<i>μ</i><sub>1</sub> = 0，<i>μ</i><sub>2</sub> = ' + fx(S.delta, 1) + '，<i>σ</i> = 1（無次元）') +
+        '）．● が観測，斜線の帯が真の状態が劣化の時刻，縦の破線が調べる時刻 <i>t</i> = ' + S.tSel + ' です．';
+    }
+    function drawProb() {
+      var F = U.fitCanvas(q('cvProb'), { aspect: 0.36, minHeight: 190, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: BOXL, r: 12, t: 12, b: 38 }), T = S.T;
+      var ax = U.axes(c, box, [0.5, T + 0.5], [0, 1.08], { xl: '時刻 t', yl: '劣化である確率', yticks: [0, 0.25, 0.5, 0.75, 1], ylOff: 46 });
+      if (S.showTrue) degBands(c, ax, data.z, [0, 1.08]);
+      U.hline(c, ax, 0.5, { color: col.gray, dash: dash.dotted, width: 1 });
+      var ts = data.x.map(function (_, i) { return i + 1; });
+      var fl = res.scaled.filter.map(function (p) { return p[1]; }), gm = res.scaled.gamma.map(function (p) { return p[1]; });
+      U.line(c, ax, ts.slice(0, S.tSel), fl.slice(0, S.tSel), { color: col.orange, dash: dash.dashed, width: 2 });
+      U.line(c, ax, ts.slice(S.tSel - 1), fl.slice(S.tSel - 1), { color: col.orange, dash: dash.dashed, width: 1.6, alpha: 0.35 });
+      U.line(c, ax, ts, gm, { color: col.accent, width: 2.4 });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      var k = S.tSel - 1;
+      U.marker(c, ax.X(S.tSel), ax.Y(fl[k]), 'triangle', 9, col.orange, true);
+      U.marker(c, ax.X(S.tSel), ax.Y(gm[k]), 'circle', 8, col.accent, true);
+      U.setCanvasLabel(q('cvProb'), '劣化である確率．時刻 ' + S.tSel + ' でフィルタリング ' + fx(fl[k], 3) + '，平滑化 ' + fx(gm[k], 3) + '．');
+    }
+    function drawSeq() {
+      var rows = [], T = S.T;
+      if (S.showTrue) rows.push(['真の状態', data.z, false]);
+      rows.push(['Viterbi', res.viterbi.path, true]); rows.push(['γ 最大', res.zSmooth, true]); rows.push(['フィルター', res.zFilter, true]);
+      var rh = 22, F = U.fitCanvas(q('cvSeq'), { height: 26 + rows.length * (rh + 8) + 34 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: BOXL, r: 12, t: 10, b: 34 });
+      var ax = U.axes(c, box, [0.5, T + 0.5], [0, rows.length], { xl: '時刻 t', yticks: [], grid: false });
+      var cw = (box[2] - box[0]) / T;
+      rows.forEach(function (r, k) {
+        var y0 = box[1] + 4 + k * (rh + 8);
+        MLUI.label(c, r[0], box[0] - 6, y0 + rh / 2, { size: 10.5, align: 'right', color: col.ink, halo: false });
+        c.save();
+        for (var t = 0; t < T; t++) {
+          var x0 = box[0] + t * cw;
+          if (r[1][t] === 1) { c.fillStyle = k === 0 && S.showTrue ? col.purple : col.accent; c.fillRect(x0, y0, Math.max(1, cw - (cw > 3 ? 0.6 : 0)), rh); }
+          if (r[2] && r[1][t] !== data.z[t] && S.showTrue) { U.marker(c, x0 + cw / 2, y0 + rh + 4, 'triangle', Math.min(7, Math.max(4, cw)), col.red, true); }
+        }
+        c.strokeStyle = 'rgba(31,35,40,.35)'; c.lineWidth = 1; c.strokeRect(box[0] + 0.5, y0 + 0.5, box[2] - box[0] - 1, rh);
+        c.restore();
+      });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      U.setCanvasLabel(q('cvSeq'), '状態の列．' + (S.showTrue ? '真の状態と比べた正答率は Viterbi ' + U.fmtPct(res.accViterbi, 0) + '，γ 最大 ' + U.fmtPct(res.accSmooth, 0) + '，フィルター ' + U.fmtPct(res.accFilter, 0) + '．' : ''));
+    }
+    function eqGen() {
+      var k = S.tSel - 1, sc = res.scaled, pred = sc.pred[k], e = data.logE[k].map(Math.exp), cReal = sc.c[k] * Math.exp(sc.m[k]);
+      var x = data.x[k], rows = [];
+      q('tNow').textContent = 't = ' + S.tSel;
+      var emis = function (j) { return S.type === 'discrete' ? Bj(j, x) : mi('𝒩') + par(sub(mi('x'), mT) + mo('∣') + sub(mi('μ'), mn(j)) + mo(',') + mn(1)); };
+      var xt = S.type === 'discrete' ? mt(SY[x]) : mn(fx(x, 3));
+      rows.push(row(sub(mi('x'), mT) + mo('=') + xt + '<mspace width="1em"/>' + mt('（時刻 ' + S.tSel + ' の観測）')));
+      if (k === 0) rows.push(row(mt('予測：') + mi('p') + par(sub(mi('z'), mn(1)) + mo('=') + mn(2)) + mo('=') + sub(mi('π'), mn(2)) + mo('=') + mn(f4(pred[1]))));
+      else rows.push(row(pzx(2, x1to(mi('t') + mo('−') + mn(1))) + mo('=') + alphaHat(mi('t') + mo('−') + mn(1), mn(1)) + Aij(1, 2) + mo('+') + alphaHat(mi('t') + mo('−') + mn(1), mn(2)) + Aij(2, 2) +
+        BR + mo('=') + mn(f4(sc.alphaHat[k - 1][0])) + mo('×') + mn(f4(data.A[0][1])) + mo('+') + mn(f4(sc.alphaHat[k - 1][1])) + mo('×') + mn(f4(data.A[1][1])) + mo('=') + mn(f4(pred[1]))));
+      rows.push(row(sub(mi('c'), mT) + mo('=') + emis(1) + mo('·') + mn(f4(pred[0])) + mo('+') + emis(2) + mo('·') + mn(f4(pred[1])) + BR + mo('=') + mn(f4(e[0])) + mo('×') + mn(f4(pred[0])) + mo('+') + mn(f4(e[1])) + mo('×') + mn(f4(pred[1])) + mo('=') + mn(f4(cReal))));
+      rows.push(row(mt('フィルタリング：') + alphaHat(mT, mn(2)) + mo('=') + pzx(2, x1to(mT)) + BR + mo('=') + frac(mn(f4(e[1])) + mo('×') + mn(f4(pred[1])), mn(f4(cReal))) + mo('=') + mn(f4(sc.alphaHat[k][1]))));
+      rows.push(row(mt('平滑化：') + sub(mi('γ'), mT) + par(mn(2)) + mo('=') + alphaHat(mT, mn(2)) + betaHat(mT, mn(2)) + BR + mo('=') + mn(f4(sc.alphaHat[k][1])) + mo('×') + mn(f4(sc.betaHat[k][1])) + mo('=') + mn(f4(sc.gamma[k][1]))));
+      rows.push(row(mi('ln') + mi('p') + par(x1to(mi('T'))) + mo('=') + '<munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>' + S.T + '</mn></munderover>' + mi('ln') + sub(mi('c'), mT) + mo('=') + mn(fx(res.logLik, 4))));
+      q('eqGen').innerHTML = table(rows);
+    }
+    function readGen() {
+      var nDeg = data.z.filter(function (v) { return v === 1; }).length;
+      var r = [
+        ['系列長 <i>T</i>，seed', S.T + '，' + S.seed],
+        ['対数尤度 ln <i>p</i>(<i>x</i><sub>1:<i>T</i></sub>)（スケーリング版）', fx(res.logLik, 4)],
+        ['同（対数版）との差', fmt(res.diffLogLik, 2)],
+        ['γ の差（スケーリング版 − 対数版）の最大', fmt(res.diffGamma, 2)]];
+      if (S.showTrue) r = r.concat([
+        ['真の状態が劣化の時刻', nDeg + ' 個'],
+        ['正答率：フィルタリング（最大の状態）', fx(res.accFilter, 2)],
+        ['正答率：γ 最大（平滑化）', fx(res.accSmooth, 2)],
+        ['正答率：Viterbi', fx(res.accViterbi, 2)],
+        ['ln <i>p</i>(<i>x</i>, <i>z</i>)：真の状態の列', fx(res.logJointTrue, 3)]]);
+      r = r.concat([
+        ['ln <i>p</i>(<i>x</i>, <i>z</i>)：Viterbi の経路（最大）', fx(res.logJointViterbi, 3)],
+        ['ln <i>p</i>(<i>x</i>, <i>z</i>)：γ 最大の列', res.logJointSmoothSeq === -Infinity ? '−∞（起こりえない列）' : fx(res.logJointSmoothSeq, 3)]]);
+      q('readHmm').innerHTML = kv(r) + (S.showTrue ? '' : '<p class="hint">真の状態を隠しているので正答率は表示しません．</p>');
+    }
+
+    /* ---- 手計算モード：描画 ---- */
+    var HR = null;
+    function drawTrellis() {
+      var F = U.fitCanvas(q('cvTrellis'), { aspect: 0.62, minHeight: 280, maxHeight: 380 }), c = F.c, W = F.W, Hh = F.H;
+      var L0 = 56, R0 = 8, top = 34, cwid = (W - L0 - R0) / 3, nodeW = Math.min(104, cwid - 14), nodeH = 58;
+      var cx = function (t) { return L0 + cwid * (t + 0.5); }, cy = function (j) { return j === 0 ? top + 30 + nodeH / 2 : Hh - 22 - nodeH / 2; };
+      c.save(); c.fillStyle = '#fff'; c.fillRect(0, 0, W, Hh); c.restore();
+      /* 見出し */
+      for (var t = 0; t < 3; t++) MLUI.label(c, 't = ' + (t + 1) + '：' + SY[H.x[t]], cx(t), 14, { size: 11.5, bold: true, color: col.ink, halo: false });
+      MLUI.label(c, '正常', 8, cy(0) - 7, { size: 11, bold: true, align: 'left', color: col.ink, halo: false });
+      MLUI.label(c, '(1)', 8, cy(0) + 8, { size: 10, align: 'left', color: col.sub, halo: false });
+      MLUI.label(c, '劣化', 8, cy(1) - 7, { size: 11, bold: true, align: 'left', color: col.ink, halo: false });
+      MLUI.label(c, '(2)', 8, cy(1) + 8, { size: 10, align: 'left', color: col.sub, halo: false });
+      if (!HR || HR.error) { MLUI.label(c, HR ? HR.error : '', W / 2, Hh / 2, { size: 11, color: col.red }); return; }
+      /* 遷移の線（すべて） */
+      c.save(); c.strokeStyle = '#b8c0c8'; c.lineWidth = 1.2;
+      for (t = 0; t < 2; t++) for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) { c.beginPath(); c.moveTo(cx(t) + nodeW / 2, cy(i)); c.lineTo(cx(t + 1) - nodeW / 2, cy(j)); c.stroke(); }
+      c.restore();
+      /* Viterbi の経路 */
+      var p = HR.viterbi.path;
+      for (t = 0; t < 2; t++) U.arrow(c, cx(t) + nodeW / 2, cy(p[t]), cx(t + 1) - nodeW / 2 - 2, cy(p[t + 1]), col.green, 3.5, 9);
+      /* ます目 */
+      for (t = 0; t < 3; t++) for (j = 0; j < 2; j++) {
+        var x0 = cx(t) - nodeW / 2, y0 = cy(j) - nodeH / 2, onV = p[t] === j, onG = HR.zGamma[t] === j;
+        c.save();
+        c.fillStyle = onV ? 'rgba(0,135,108,.10)' : '#f7f9fb'; c.fillRect(x0, y0, nodeW, nodeH);
+        c.strokeStyle = onV ? col.green : 'rgba(31,35,40,.45)'; c.lineWidth = onV ? 2.2 : 1; c.strokeRect(x0 + 0.5, y0 + 0.5, nodeW - 1, nodeH - 1);
+        if (onG) { c.strokeStyle = col.orange; c.lineWidth = 1.6; c.setLineDash([]); c.strokeRect(x0 - 3.5, y0 - 3.5, nodeW + 7, nodeH + 7); }
+        c.restore();
+        var sz = nodeW < 90 ? 9.5 : 10.5;
+        MLUI.label(c, 'α ' + f5(HR.raw.alpha[t][j]), x0 + 5, y0 + 11, { size: sz, align: 'left', color: col.ink, halo: false });
+        MLUI.label(c, 'β ' + f5(HR.raw.beta[t][j]), x0 + 5, y0 + 28, { size: sz, align: 'left', color: col.ink, halo: false });
+        MLUI.label(c, 'γ ' + f5(HR.raw.gamma[t][j]), x0 + 5, y0 + 45, { size: sz, align: 'left', bold: true, color: col.accent, halo: false });
+      }
+      U.setCanvasLabel(q('cvTrellis'), '手計算の格子図．観測 ' + H.x.map(function (v) { return SY[v]; }).join('・') + '．Viterbi の経路 ' + p.map(function (v) { return ST[v]; }).join('・') + '，各時刻で γ が最大の状態 ' + HR.zGamma.map(function (v) { return ST[v]; }).join('・') + '．p(x) = ' + f5(HR.raw.lik) + '．');
+      q('capTrellis').innerHTML = '<i>π</i> = (' + d1(H.pi1) + ', ' + d1(1 - H.pi1) + ')，<i>A</i> = ((' + d1(H.a11) + ', ' + d1(1 - H.a11) + '), (' + d1(1 - H.a22) + ', ' + d1(H.a22) + '))，<i>B</i><sub>1·</sub> = (' + H.B[0].map(d1).join(', ') + ')，<i>B</i><sub>2·</sub> = (' + H.B[1].map(d1).join(', ') + ')（低・中・高の順）．数値は有効数字 5 桁．' +
+        (HR.agree ? 'この例では Viterbi の経路と γ 最大の列が一致しています．' : '<strong>この例では Viterbi の経路と γ 最大の列が違います．</strong>');
+    }
+    function tablesHand() {
+      var R = HR.raw, h = '<div class="tablewrap"><table class="grid"><thead><tr><th><i>t</i></th><th><i>x</i><sub><i>t</i></sub></th><th><i>α</i><sub><i>t</i></sub>(1)</th><th><i>α</i><sub><i>t</i></sub>(2)</th><th><i>β</i><sub><i>t</i></sub>(1)</th><th><i>β</i><sub><i>t</i></sub>(2)</th><th><i>γ</i><sub><i>t</i></sub>(1)</th><th><i>γ</i><sub><i>t</i></sub>(2)</th><th>フィルタリング<br><i>p</i>(<i>z</i><sub><i>t</i></sub>=2 | <i>x</i><sub>1:<i>t</i></sub>)</th></tr></thead><tbody>';
+      for (var t = 0; t < 3; t++) h += '<tr><td>' + (t + 1) + '</td><td class="l">' + SY[H.x[t]] + '</td><td>' + f5(R.alpha[t][0]) + '</td><td>' + f5(R.alpha[t][1]) + '</td><td>' + f5(R.beta[t][0]) + '</td><td>' + f5(R.beta[t][1]) + '</td><td>' + f5(R.gamma[t][0]) + '</td><td>' + f5(R.gamma[t][1]) + '</td><td>' + f5(R.filter[t][1]) + '</td></tr>';
+      h += '</tbody></table></div><p class="hint">どの時刻でも Σ<sub><i>j</i></sub> <i>α</i><sub><i>t</i></sub>(<i>j</i>)<i>β</i><sub><i>t</i></sub>(<i>j</i>) = ' + R.sumAB.map(f5).join('，') + ' ＝ <i>p</i>(<i>x</i><sub>1:3</sub>) です．最後の時刻ではフィルタリングと平滑化が同じ値になります（<i>β</i><sub>3</sub> = 1）．</p>';
+      q('tblFB').innerHTML = h;
+      var E = HR.enumr, best = HR.viterbi.path.join(''), gseq = HR.zGamma.join('');
+      var e = '<div class="tablewrap"><table class="grid"><thead><tr><th class="l">状態の列 <i>z</i><sub>1</sub><i>z</i><sub>2</sub><i>z</i><sub>3</sub></th><th class="l"><i>π</i>·<i>B</i>·<i>A</i>·<i>B</i>·<i>A</i>·<i>B</i></th><th><i>p</i>(<i>x</i>, <i>z</i>)</th><th><i>p</i>(<i>z</i> | <i>x</i>)</th></tr></thead><tbody>';
+      var pi = [H.pi1, 1 - H.pi1], A = M.makeA(H.a11, H.a22);
+      E.rows.forEach(function (w) {
+        var z = w.z, k = z.join(''), terms = [pi[z[0]], H.B[z[0]][H.x[0]], A[z[0]][z[1]], H.B[z[1]][H.x[1]], A[z[1]][z[2]], H.B[z[2]][H.x[2]]].map(d1).join('·');
+        var tag = (k === best ? ' ★Viterbi' : '') + (k === gseq ? ' ◇γ 最大' : '');
+        e += '<tr' + (k === best ? ' class="best"' : '') + '><td class="l">' + z.map(function (v) { return ST[v]; }).join('・') + tag + '</td><td class="l">' + terms + '</td><td>' + f5(w.p) + '</td><td>' + f5(w.post) + '</td></tr>';
+      });
+      e += '<tr class="sum"><td class="l" colspan="2">和 ＝ <i>p</i>(<i>x</i><sub>1:3</sub>)</td><td>' + f5(E.lik) + '</td><td>' + f5(1) + '</td></tr></tbody></table></div>';
+      e += '<p class="hint">全列挙の和 ' + f5(E.lik) + ' と forward 算法の Σ<sub><i>j</i></sub> <i>α</i><sub>3</sub>(<i>j</i>) = ' + f5(HR.raw.lik) + ' の差は ' + fmt(Math.abs(E.lik - HR.raw.lik), 2) + '，全列挙から周辺化した <i>γ</i> と <i>αβ</i>/<i>p</i>(<i>x</i>) の差の最大は ' + fmt(maxDiff(E.gamma, HR.raw.gamma), 2) + ' です（丸め誤差）．★ が Viterbi の経路，◇ が各時刻で γ が最大の状態を並べた列です．</p>';
+      q('tblEnum').innerHTML = e;
+      var V = HR.viterbi, v = '<div class="tablewrap"><table class="grid"><thead><tr><th><i>t</i></th><th><i>ω</i><sub><i>t</i></sub>(1)</th><th><i>ω</i><sub><i>t</i></sub>(2)</th><th><i>ψ</i><sub><i>t</i></sub>(1)</th><th><i>ψ</i><sub><i>t</i></sub>(2)</th></tr></thead><tbody>';
+      for (t = 0; t < 3; t++) v += '<tr><td>' + (t + 1) + '</td><td>' + f5(Math.exp(V.logOmega[t][0])) + '</td><td>' + f5(Math.exp(V.logOmega[t][1])) + '</td><td>' + (t ? ST[V.psi[t][0]] : '—') + '</td><td>' + (t ? ST[V.psi[t][1]] : '—') + '</td></tr>';
+      v += '</tbody></table></div><p class="hint">最後に <i>ω</i><sub>3</sub>(<i>j</i>) が大きい方（' + ST[V.path[2]] + '）から <i>ψ</i> を逆にたどると，経路 ' + V.path.map(function (s) { return ST[s]; }).join(' → ') + '（同時確率 ' + f5(Math.exp(V.logPmax)) + '）になります．計算は対数で行い，表には確率に戻した値を出しています．</p>';
+      q('tblVit').innerHTML = v;
+    }
+    function maxDiff(P, Q) { var d = 0; for (var t = 0; t < P.length; t++) for (var j = 0; j < P[t].length; j++) d = Math.max(d, Math.abs(P[t][j] - Q[t][j])); return d; }
+    function eqHand() {
+      var R = HR.raw, pi = [H.pi1, 1 - H.pi1], A = M.makeA(H.a11, H.a22), x = H.x, rows = [], t, j;
+      var a = function (t, j) { return sub(mi('α'), mn(t)) + par(mn(j)); }, b = function (t, j) { return sub(mi('β'), mn(t)) + par(mn(j)); };
+      var om = function (t, j) { return sub(mi('ω'), mn(t)) + par(mn(j)); };
+      if (H.eq === 'alpha') {
+        for (j = 0; j < 2; j++) rows.push(row(a(1, j + 1) + mo('=') + sub(mi('π'), mn(j + 1)) + Bj(j + 1, x[0]) + BR + mo('=') + mn(d1(pi[j])) + mo('×') + mn(d1(H.B[j][x[0]])) + mo('=') + mn(f5(R.alpha[0][j]))));
+        for (t = 1; t < 3; t++) for (j = 0; j < 2; j++) rows.push(row(a(t + 1, j + 1) + mo('=') + Bj(j + 1, x[t]) + par(a(t, 1) + Aij(1, j + 1) + mo('+') + a(t, 2) + Aij(2, j + 1)) + BR + mo('=') +
+          mn(d1(H.B[j][x[t]])) + mo('×') + par(mn(f5(R.alpha[t - 1][0])) + mo('×') + mn(d1(A[0][j])) + mo('+') + mn(f5(R.alpha[t - 1][1])) + mo('×') + mn(d1(A[1][j]))) + mo('=') + mn(f5(R.alpha[t][j]))));
+        rows.push(row(mi('p') + par(x1to(mn(3))) + mo('=') + a(3, 1) + mo('+') + a(3, 2) + mo('=') + mn(f5(R.alpha[2][0])) + mo('+') + mn(f5(R.alpha[2][1])) + mo('=') + mn(f5(R.lik))));
+      } else if (H.eq === 'beta') {
+        rows.push(row(b(3, 1) + mo('=') + b(3, 2) + mo('=') + mn(1)));
+        for (t = 1; t >= 0; t--) for (var i = 0; i < 2; i++) rows.push(row(b(t + 1, i + 1) + mo('=') + Aij(i + 1, 1) + Bj(1, x[t + 1]) + b(t + 2, 1) + mo('+') + Aij(i + 1, 2) + Bj(2, x[t + 1]) + b(t + 2, 2) + BR + mo('=') +
+          mn(d1(A[i][0])) + mo('×') + mn(d1(H.B[0][x[t + 1]])) + mo('×') + mn(f5(R.beta[t + 1][0])) + mo('+') + mn(d1(A[i][1])) + mo('×') + mn(d1(H.B[1][x[t + 1]])) + mo('×') + mn(f5(R.beta[t + 1][1])) + mo('=') + mn(f5(R.beta[t][i]))));
+        rows.push(row(mi('p') + par(x1to(mn(3))) + mo('=') + sub(mi('π'), mn(1)) + Bj(1, x[0]) + b(1, 1) + mo('+') + sub(mi('π'), mn(2)) + Bj(2, x[0]) + b(1, 2) + BR + mo('=') + mn(f5(pi[0] * H.B[0][x[0]] * R.beta[0][0] + pi[1] * H.B[1][x[0]] * R.beta[0][1]))));
+      } else if (H.eq === 'gamma') {
+        for (t = 0; t < 3; t++) for (j = 0; j < 2; j++) rows.push(row(sub(mi('γ'), mn(t + 1)) + par(mn(j + 1)) + mo('=') + frac(a(t + 1, j + 1) + b(t + 1, j + 1), mi('p') + par(x1to(mn(3)))) + BR + mo('=') + frac(mn(f5(R.alpha[t][j])) + mo('×') + mn(f5(R.beta[t][j])), mn(f5(R.lik))) + mo('=') + mn(f5(R.gamma[t][j]))));
+      } else {
+        var V = HR.viterbi, w = function (t, j) { return Math.exp(V.logOmega[t][j]); };
+        for (j = 0; j < 2; j++) rows.push(row(om(1, j + 1) + mo('=') + sub(mi('π'), mn(j + 1)) + Bj(j + 1, x[0]) + BR + mo('=') + mn(d1(pi[j])) + mo('×') + mn(d1(H.B[j][x[0]])) + mo('=') + mn(f5(w(0, j)))));
+        for (t = 1; t < 3; t++) for (j = 0; j < 2; j++) rows.push(row(om(t + 1, j + 1) + mo('=') + Bj(j + 1, x[t]) + mi('max') + par(mn(f5(w(t - 1, 0))) + mo('×') + mn(d1(A[0][j])) + mo(',') + mn(f5(w(t - 1, 1))) + mo('×') + mn(d1(A[1][j]))) + BR + mo('=') + mn(f5(w(t, j))) +
+          '<mspace width="0.6em"/>' + sub(mi('ψ'), mn(t + 1)) + par(mn(j + 1)) + mo('=') + mt(ST[V.psi[t][j]])));
+      }
+      q('eqHand').innerHTML = table(rows);
+    }
+    function readHand() {
+      var r = [['<i>p</i>(<i>x</i><sub>1:3</sub>)（forward）', f5(HR.raw.lik)], ['<i>p</i>(<i>x</i><sub>1:3</sub>)（8 通りの和）', f5(HR.enumr.lik)],
+        ['Viterbi の経路', HR.viterbi.path.map(function (v) { return ST[v]; }).join('・')], ['その同時確率', f5(HR.pViterbi)],
+        ['各時刻で γ 最大の状態', HR.zGamma.map(function (v) { return ST[v]; }).join('・')], ['その列の同時確率', f5(HR.pGammaSeq)],
+        ['一致するか', HR.agree ? '一致' : '<span style="color:#b2182b">一致しない</span>']];
+      q('readHmm').innerHTML = kv(r);
+    }
+
+    regen();
+    var self = {
+      update: function () {
+        if (S.mode === 'gen') {
+          if (!data) regen();
+          if (res.error) { U.status(msg, '計算を止めました：' + res.error, 'warn'); return; }
+          if (!C.allFinite([res.logLik]) || !U.guardFinite(res.scaled.gamma, msg, '平滑化の確率')) { U.status(msg, '計算を止めました：対数尤度に NaN または無限大が出ました．', 'warn'); return; }
+          U.status(msg, '');
+          drawObs(); drawProb(); drawSeq(); eqGen(); readGen();
+        } else {
+          HR = M.handAll([H.pi1, r10(1 - H.pi1)], M.makeA(H.a11, H.a22), H.B, H.x);
+          if (HR.error) { U.status(msg, '計算を止めました：' + HR.error, 'warn'); drawTrellis(); q('tblFB').innerHTML = ''; q('tblEnum').innerHTML = ''; q('tblVit').innerHTML = ''; q('eqHand').innerHTML = ''; q('readHmm').innerHTML = ''; return; }
+          U.status(msg, '');
+          drawTrellis(); tablesHand(); eqHand(); readHand();
+        }
+      },
+      hide: function () { run.stop(); },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② Kalman フィルター
+     ================================================================= */
+  function KalmanSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { qT: 0.2, rT: 1.0, qF: 0.2, rF: 1.0, same: true, T: 100, miss: false, tSel: 3, seed: DEFAULT_SEED, mu0: 0, P0: 1 };
+    var raw = null, x = null, kf = null, sm = null, st = null, mask = null;
+    var ctl = q('ctlK'), msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var redraw = function () { self.update(); };
+    function regen() { raw = M.sampleRW(C.rng(S.seed), S.T, S.qT, S.rT, S.mu0, S.P0); }
+    function compute() {
+      mask = S.miss ? M.missingMask(S.T) : raw.x.map(function () { return false; });
+      x = M.applyMask(raw.x, mask);
+      kf = M.kalman(x, S.qF, S.rF, S.mu0, S.P0);
+      if (!kf.error) { sm = M.kalmanSummary(raw.z, x, kf); st = M.kalmanSteady(S.qF, S.rF); }
+    }
+    var lfmt = function (v) { return fmt(v, 3); };
+    ctl.appendChild(U.el('div', 'ctlhead', '合成データ（教育用）'));
+    var rq = U.range({ label: '過程ノイズの分散 <i>q</i>（データ）', min: 0.001, max: 1, step: 0.01, log: true, value: S.qT, fmt: lfmt, onInput: function (v) { S.qT = v; if (S.same) { S.qF = v; rqF.set(v, true); } regen(); redraw(); } });
+    var rr = U.range({ label: '観測ノイズの分散 <i>r</i>（データ）', min: 0.01, max: 4, step: 0.01, log: true, value: S.rT, fmt: lfmt, onInput: function (v) { S.rT = v; if (S.same) { S.rF = v; rrF.set(v, true); } regen(); redraw(); } });
+    var rTT = U.range({ label: '系列長 <i>T</i>', min: M.LIMITS.KalmanTmin, max: M.LIMITS.KalmanTmax, step: 1, value: S.T, fmt: function (v) { return String(v); }, onInput: function (v) { S.T = v; rTs.setRange({ max: v }, true); S.tSel = rTs.get(); regen(); syncMissLabel(); redraw(); } });
+    var ckM = U.check({ label: '観測の欠けを入れる', checked: false, onChange: function (v) { S.miss = v; redraw(); } });
+    var missHint = U.el('span', 'hint', '');
+    function syncMissLabel() { var m = M.missingMask(S.T), a = [], st0 = -1; for (var t = 0; t <= S.T; t++) { var on = t < S.T && m[t]; if (on && st0 < 0) st0 = t + 1; if (!on && st0 > 0) { a.push(st0 + '〜' + t); st0 = -1; } } missHint.textContent = '欠ける時刻：t = ' + a.join('，') + '（観測の値そのものは変わりません）．'; }
+    syncMissLabel();
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; regen(); U.status(msg, 'seed ' + s + ' で系列を作り直しました．', ''); redraw(); } });
+    [rq, rr, rTT].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(ckM.el); ctl.appendChild(missHint); ctl.appendChild(seed.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', 'フィルターが仮定する値'));
+    var ckS = U.check({ label: 'データと同じ q, r を使う', checked: true, onChange: function (v) { S.same = v; rqF.input.disabled = v; rrF.input.disabled = v; if (v) { S.qF = S.qT; S.rF = S.rT; rqF.set(S.qF, true); rrF.set(S.rF, true); } redraw(); } });
+    var rqF = U.range({ label: 'フィルターの <i>q</i>', min: 0.001, max: 1, step: 0.01, log: true, value: S.qF, fmt: lfmt, onInput: function (v) { S.qF = v; redraw(); } });
+    var rrF = U.range({ label: 'フィルターの <i>r</i>', min: 0.01, max: 4, step: 0.01, log: true, value: S.rF, fmt: lfmt, onInput: function (v) { S.rF = v; redraw(); } });
+    rqF.input.disabled = true; rrF.input.disabled = true;
+    ctl.appendChild(ckS.el); ctl.appendChild(rqF.el); ctl.appendChild(rrF.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var rTs = U.range({ label: '調べる時刻 <i>t</i>', min: 1, max: S.T, step: 1, value: S.tSel, fmt: function (v) { return String(v); }, onInput: function (v) { S.tSel = v; redraw(); } });
+    var run = U.runner({
+      labels: { run: '時刻を進める', stop: '止める', step: '1 時刻進める', reset: '時刻 1 に戻す' },
+      stepsPerFrame: 1,
+      isVisible: function () { return !panel.hidden; },
+      step: function () { if (S.tSel >= S.T) return false; S.tSel++; rTs.set(S.tSel, true); return S.tSel < S.T; },
+      reset: function () { S.tSel = 1; rTs.set(1, true); },
+      draw: function () { self.update(); }
+    });
+    ctl.appendChild(rTs.el); ctl.appendChild(run.el); ctl.appendChild(msg);
+
+    U.legendHTML(q('lgK'), [
+      { label: '真の状態 <i>z</i><sub><i>t</i></sub>', color: col.gray, dash: dash.dashed, width: 2 },
+      { label: '観測 <i>x</i><sub><i>t</i></sub>', color: col.orange, shape: 'cross', kind: 'marker' },
+      { label: '推定の平均 <i>μ</i><sub><i>t</i></sub>', color: col.accent, width: 2.4 },
+      { label: '±2√<i>P</i><sub><i>t</i></sub>（推定の不確かさ）', color: col.accent, kind: 'band', alpha: 0.2 },
+      { label: '観測なし（斜線）', color: col.gray, kind: 'band', hatch: true, alpha: 0.1 }]);
+    U.legendHTML(q('lgG'), [
+      { label: 'Kalman ゲイン <i>K</i><sub><i>t</i></sub>', color: col.green, width: 3.6 },
+      { label: '推定の分散 <i>P</i><sub><i>t</i></sub>', color: col.purple, dash: dash.dashed, width: 2 },
+      { label: '定常値 <i>K</i><sub>∞</sub>，<i>P</i><sub>∞</sub>', color: col.gray, dash: dash.dotted, width: 1.4 }]);
+
+    function missBands(c, ax, yr) {
+      for (var t = 0; t < S.T; t++) {
+        if (!mask[t]) continue;
+        var t1 = t; while (t1 + 1 < S.T && mask[t1 + 1]) t1++;
+        U.band(c, ax, [t + 0.5, t1 + 1.5], [yr[0], yr[0]], [yr[1], yr[1]], { color: col.gray, alpha: 0.08, hatch: true });
+        t = t1;
+      }
+    }
+    function drawK() {
+      var F = U.fitCanvas(q('cvK'), { aspect: 0.5, minHeight: 230, maxHeight: 360 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 14, b: 38 }), T = S.T;
+      var ts = raw.z.map(function (_, i) { return i + 1; });
+      var lo = Infinity, hi = -Infinity;
+      for (var t = 0; t < T; t++) { var s2 = 2 * Math.sqrt(kf.P[t]); lo = Math.min(lo, raw.z[t], kf.mu[t] - s2, x[t] === null ? Infinity : x[t]); hi = Math.max(hi, raw.z[t], kf.mu[t] + s2, x[t] === null ? -Infinity : x[t]); }
+      var pad = 0.08 * (hi - lo || 1), yr = [lo - pad, hi + pad * 2.2];
+      var ax = U.axes(c, box, [0.5, T + 0.5], yr, { xl: '時刻 t', yl: '状態と観測（無次元）' });
+      missBands(c, ax, yr);
+      U.band(c, ax, ts, kf.mu.map(function (m, i) { return m - 2 * Math.sqrt(kf.P[i]); }), kf.mu.map(function (m, i) { return m + 2 * Math.sqrt(kf.P[i]); }), { color: col.accent, alpha: 0.2 });
+      U.line(c, ax, ts, raw.z, { color: col.gray, dash: dash.dashed, width: 2 });
+      var ox = [], oy = []; x.forEach(function (v, i) { if (v !== null) { ox.push(i + 1); oy.push(v); } });
+      U.points(c, ax, ox, oy, { shape: 'cross', color: col.orange, size: T > 120 ? 5 : 6.5 });
+      U.line(c, ax, ts, kf.mu, { color: col.accent, width: 2.4 });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      U.marker(c, ax.X(S.tSel), ax.Y(kf.mu[S.tSel - 1]), 'circle', 8, col.accent, true);
+      if (S.miss) { var m0 = mask.indexOf(true); if (m0 >= 0) MLUI.label(c, '観測なし', ax.X(m0 + 1), box[1] + 9, { size: 10, color: col.sub, align: 'left' }); }
+      U.setCanvasLabel(q('cvK'), 'Kalman フィルターの推定．T = ' + T + '，seed ' + S.seed + '，データの q = ' + fmt(S.qT, 3) + '，r = ' + fmt(S.rT, 3) + '．推定の誤差の二乗平均平方根 ' + fx(sm.rmseEst, 3) + '，観測そのものの誤差 ' + (sm.rmseObs === null ? '—' : fx(sm.rmseObs, 3)) + '．');
+      q('capK').innerHTML = '<strong>教育用の合成データ</strong>（seed ' + S.seed + '，<i>T</i> = ' + T + '，<i>z</i><sub>1</sub> ~ 𝒩(0, 1)，<i>z</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i>−1</sub> + √<i>q</i> <i>ε</i><sub><i>t</i></sub>，<i>x</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i></sub> + √<i>r</i> <i>η</i><sub><i>t</i></sub>，データの <i>q</i> = ' + fmt(S.qT, 3) + '，<i>r</i> = ' + fmt(S.rT, 3) + '，無次元）．フィルターは <i>q</i> = ' + fmt(S.qF, 3) + '，<i>r</i> = ' + fmt(S.rF, 3) + '，<i>μ</i><sub>0</sub> = 0，<i>P</i><sub>0</sub> = 1 を仮定しています．帯は潜在状態 <i>z</i><sub><i>t</i></sub> の推定の不確かさ（±2√<i>P</i><sub><i>t</i></sub>）で，観測値の予測の幅ではありません．';
+    }
+    function drawG() {
+      var F = U.fitCanvas(q('cvG'), { aspect: 0.34, minHeight: 180, maxHeight: 260 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 12, b: 38 }), T = S.T;
+      var ts = kf.K.map(function (_, i) { return i + 1; });
+      var ymax = Math.max(1, Math.max.apply(null, kf.P)) * 1.12;
+      var ax = U.axes(c, box, [0.5, T + 0.5], [0, ymax], { xl: '時刻 t', yl: 'ゲイン・分散' });
+      missBands(c, ax, [0, ymax]);
+      U.hline(c, ax, st.K, { color: col.gray, dash: dash.dotted, width: 1.4 });
+      U.hline(c, ax, st.P, { color: col.gray, dash: dash.dotted, width: 1.4 });
+      U.line(c, ax, ts, kf.K, { color: col.green, width: 3.6 });
+      U.line(c, ax, ts, kf.P, { color: col.purple, dash: dash.dashed, width: 2 });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      var L = U.labeler(c, box), tl = Math.min(T, Math.max(4, Math.round(T * 0.12)));
+      L.add('K', ax.X(tl), ax.Y(kf.K[tl - 1]) - 10, { color: col.green, bold: true, size: 11 });
+      L.add('P', ax.X(tl), ax.Y(kf.P[tl - 1]) + 12, { color: col.purple, bold: true, size: 11 });
+      L.add('K∞ = ' + fx(st.K, 3), box[2] - 50, ax.Y(st.K) - 9, { color: col.sub, size: 10 });
+      L.add('P∞ = ' + fx(st.P, 3), box[2] - 50, ax.Y(st.P) + 10, { color: col.sub, size: 10 });
+      U.setCanvasLabel(q('cvG'), 'Kalman ゲインと推定の分散の推移．定常値 K∞ = ' + fx(st.K, 3) + '，P∞ = ' + fx(st.P, 3) + '．');
+    }
+    function eqK() {
+      var k = S.tSel - 1, rows = [], t = S.tSel;
+      q('tNowK').textContent = 't = ' + t;
+      var muP = sub(mi('μ'), mi('t') + mo('∣') + mi('t') + mo('−') + mn(1)), PP = sub(mi('P'), mi('t') + mo('∣') + mi('t') + mo('−') + mn(1));
+      if (k === 0) rows.push(row(mt('予測：') + muP + mo('=') + sub(mi('μ'), mn(0)) + mo('=') + mn(fx(kf.muPred[0], 4)) + BR + PP + mo('=') + sub(mi('P'), mn(0)) + mo('=') + mn(fmt(kf.PPred[0], 5))));
+      else rows.push(row(mt('予測：') + muP + mo('=') + sub(mi('μ'), mi('t') + mo('−') + mn(1)) + mo('=') + mn(fx(kf.muPred[k], 4)) + BR + PP + mo('=') + sub(mi('P'), mi('t') + mo('−') + mn(1)) + mo('+') + mi('q') + mo('=') + mn(fmt(kf.P[k - 1], 5)) + mo('+') + mn(fmt(S.qF, 3)) + mo('=') + mn(fmt(kf.PPred[k], 5))));
+      if (x[k] === null) {
+        rows.push(row(mt('観測なし（欠け）：') + sub(mi('K'), mi('t')) + mo('=') + mn(0) + BR + sub(mi('μ'), mi('t')) + mo('=') + muP + mo('=') + mn(fx(kf.mu[k], 4)) + mo(',') + '<mspace width="0.4em"/>' + sub(mi('P'), mi('t')) + mo('=') + PP + mo('=') + mn(fmt(kf.P[k], 5))));
+      } else {
+        rows.push(row(mt('ゲイン：') + sub(mi('K'), mi('t')) + mo('=') + frac(PP, PP + mo('+') + mi('r')) + BR + mo('=') + frac(mn(fmt(kf.PPred[k], 5)), mn(fmt(kf.PPred[k], 5)) + mo('+') + mn(fmt(S.rF, 3))) + mo('=') + mn(fmt(kf.K[k], 5))));
+        rows.push(row(mt('更新：') + sub(mi('μ'), mi('t')) + mo('=') + muP + mo('+') + sub(mi('K'), mi('t')) + par(sub(mi('x'), mi('t')) + mo('−') + muP) + BR + mo('=') + mn(fx(kf.muPred[k], 4)) + mo('+') + mn(fmt(kf.K[k], 5)) + mo('×') + par(mn(fx(x[k], 4)) + mo('−') + pn(kf.muPred[k])) + BR + mo('=') + mn(fx(kf.mu[k], 4))));
+        rows.push(row(sub(mi('P'), mi('t')) + mo('=') + par(mn(1) + mo('−') + sub(mi('K'), mi('t'))) + PP + BR + mo('=') + par(mn(1) + mo('−') + mn(fmt(kf.K[k], 5))) + mo('×') + mn(fmt(kf.PPred[k], 5)) + mo('=') + mn(fmt(kf.P[k], 5))));
+      }
+      rows.push(row(mt('定常値：') + sub(mi('K'), mi('∞')) + mo('=') + mn(fmt(st.K, 5)) + BR + sub(mi('P'), mi('∞')) + mo('=') + mn(fmt(st.P, 5)) + mt('（フィルターの q，r から）')));
+      q('eqK').innerHTML = table(rows);
+    }
+    function readK() {
+      q('readK').innerHTML = kv([
+        ['推定の誤差 √(平均 (<i>μ</i><sub><i>t</i></sub> − <i>z</i><sub><i>t</i></sub>)<sup>2</sup>)', fx(sm.rmseEst, 3)],
+        ['観測そのものの誤差 √(平均 (<i>x</i><sub><i>t</i></sub> − <i>z</i><sub><i>t</i></sub>)<sup>2</sup>)', sm.rmseObs === null ? '—' : fx(sm.rmseObs, 3)],
+        ['真値が ±2√<i>P</i><sub><i>t</i></sub> に入る割合', U.fmtPct(sm.coverage, 1)],
+        ['観測のある時刻', sm.nObs + ' / ' + S.T],
+        ['定常値 <i>K</i><sub>∞</sub>，<i>P</i><sub>∞</sub>', fx(st.K, 4) + '，' + fx(st.P, 4)],
+        ['対数尤度 ln <i>p</i>(観測のある <i>x</i><sub><i>t</i></sub>)', fx(kf.logLik, 3)]]);
+      var h = '<div class="tablewrap"><table class="grid"><thead><tr><th><i>t</i></th><th><i>x</i><sub><i>t</i></sub></th><th><i>μ</i><sub><i>t</i>|<i>t</i>−1</sub></th><th><i>P</i><sub><i>t</i>|<i>t</i>−1</sub></th><th><i>K</i><sub><i>t</i></sub></th><th><i>μ</i><sub><i>t</i></sub></th><th><i>P</i><sub><i>t</i></sub></th></tr></thead><tbody>';
+      for (var t = 0; t < Math.min(3, S.T); t++) h += '<tr><td>' + (t + 1) + '</td><td>' + (x[t] === null ? '欠け' : fmt(x[t], 5)) + '</td><td>' + fmt(kf.muPred[t], 5) + '</td><td>' + fmt(kf.PPred[t], 5) + '</td><td>' + fmt(kf.K[t], 5) + '</td><td>' + fmt(kf.mu[t], 5) + '</td><td>' + fmt(kf.P[t], 5) + '</td></tr>';
+      h += '</tbody></table></div><p class="hint">有効数字 5 桁．<i>K</i><sub><i>t</i></sub> と <i>P</i><sub><i>t</i></sub> は観測の値によらず，<i>q</i>，<i>r</i>，<i>P</i><sub>0</sub> と欠けの有無だけで決まります．</p>';
+      q('first3').innerHTML = h;
+    }
+    regen();
+    var self = {
+      update: function () {
+        if (!raw) regen();
+        compute();
+        if (kf.error) { U.status(msg, '計算を止めました：' + kf.error, 'warn'); return; }
+        if (!U.guardFinite([kf.mu, kf.P], msg, '推定')) return;
+        U.status(msg, '');
+        drawK(); drawG(); eqK(); readK();
+      },
+      hide: function () { run.stop(); },
+      state: S
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { hmm: HmmSim, kalman: KalmanSim }, initial: 'hmm' });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>第28章 材料探索の総合演習 — データ確認から追加実験の提案まで — 機械学習</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => '28.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">機械学習 — 目次</a>
+  <span class="series">第VIII部 材料科学への接続と総合演習 / 第28章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第28章</span>材料探索の総合演習 — データ確認から追加実験の提案まで</h1>
+
+<div class="lead">
+<div class="question">
+<strong>この章で答える問い</strong>
+<ul>
+  <li>手元にある 40 点の実験データから，次に試すべき 5 つの条件を，根拠とともに提案できるか．</li>
+  <li>その提案と，それに添える「予測の誤差」「予測の幅」は，どこまで信用してよいか．</li>
+  <li>同じデータ・同じモデルでも，分け方や前処理の順番しだいで誤差が半分に見えることがある．何を確かめれば，自分をだまさずに済むか．</li>
+</ul>
+</div>
+<p>研究室に，ある酸化物固体電解質のデータが 40 点たまったとしよう．添加量と焼成温度を変えて焼いた試料のイオン伝導度である．先輩は「ガウス過程で当てはめたら誤差は 0.1 桁だった．予測が一番高い条件を次に焼けばよい」と言う．ところが試料は 5 回の合成（バッチ）に分けて作られていて，バッチごとに試した条件が偏っている．誤差 0.1 桁という数字は，新しいバッチで焼く次の試料にも当てはまるのだろうか．</p>
+<p>本章は，これまでの章で学んだ道具を<strong>一続きの作業</strong>としてつなぐ総合演習である．教育用の合成データを 1 組決め，<strong>データの確認</strong>（単位・欠測・重複・外れ値・バッチの偏り），<strong>分割の設計</strong>（漏洩の点検），<strong>基準モデル</strong>，<strong>モデルの比較</strong>（多項式＋Ridge，カーネル Ridge，ガウス過程），<strong>評価と不確かさ</strong>（予測区間の被覆率），<strong>ベイズ最適化による追加 5 点の提案</strong>，<strong>失敗例</strong>，<strong>再現できる報告</strong>の順に進める．本文の数値・表は，すべて公開した台本（Python，numpy と scipy だけで動く）を実行して得たもの（図はその出力から描いたもの）であり，読者は同じ数値を自分の計算機で再現できる．</p>
+<div class="goals">
+  <strong>この章で学ぶこと</strong>
+  <ul>
+    <li>表形式の材料データを，単位・範囲・欠測・重複・外れ値・バッチの偏りの順に点検し，直した内容を記録できる．</li>
+    <li>データの集め方（バッチ）に合わせて分割を設計し，ランダムな分割がどれだけ楽観的な誤差を出すかを数値で示せる．</li>
+    <li>平均で答えるモデルと線形回帰を基準に置き，それより良いかどうかでモデルを判断できる．</li>
+    <li>入れ子の交差検証で，ハイパーパラメーターの選択と性能の評価を分けられる．</li>
+    <li>ガウス過程の 95 % 予測区間の被覆率を調べ，バッチのずれを共分散に入れる式を導いて使える．</li>
+    <li>期待改善量（EI）で追加の実験条件を逐次に選び，その理由を数で説明できる．方法の良し悪しを多数の seed の中央値と四分位範囲で比べられる．</li>
+    <li>前処理の漏洩・分割の誤り・外挿・ノイズの過小評価が，それぞれ何を引き起こすかを数値で示し，直し方を言える．</li>
+    <li>他人が再現できる形（seed，版，分割，ハイパーパラメーター）で結果を報告できる．</li>
+  </ul>
+</div>
+<div class="prereq"><strong>前提：</strong>本書の<a href="ch06_generalization.html">第6章</a>（交差検証 <a href="ch06_generalization.html#sec6-5">6.5</a>，データ漏洩 <a href="ch06_generalization.html#sec6-7">6.7</a>，材料データの分割 <a href="ch06_generalization.html#sec6-8">6.8</a>，評価指標 <a href="ch06_generalization.html#sec6-10">6.10</a>），<a href="ch08_linear_regression.html">第8章</a>（Ridge 回帰 <a href="ch08_linear_regression.html#sec8-6">8.6</a>），<a href="ch10_kernel_methods.html">第10章</a>（カーネル Ridge 回帰 <a href="ch10_kernel_methods.html#sec10-6">10.6</a>），<a href="ch12_gaussian_process.html">第12章</a>（予測分布 <a href="ch12_gaussian_process.html#sec12-4">12.4</a>，周辺尤度 <a href="ch12_gaussian_process.html#sec12-7">12.7</a>，Cholesky 分解 <a href="ch12_gaussian_process.html#sec12-8">12.8</a>），<a href="ch13_bayesian_optimization.html">第13章</a>（EI <a href="ch13_bayesian_optimization.html#sec13-4">13.4</a>，ノイズ <a href="ch13_bayesian_optimization.html#sec13-7">13.7</a>，単純後悔 <a href="ch13_bayesian_optimization.html#sec13-8">13.8</a>）．統計力学は使わない．</div>
+<p class="route"><strong>入門ルートで読む節：</strong>この章は詳しいルートの章である．入門ルートでは <a href="#sec28-11">28.11</a>（まとめ）だけを読めばよい．</p>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec28-1">28.1 材料探索の問題設定とデータの確認</a></li>
+    <li><a href="#sec28-2">28.2 分割の設計 — バッチをまたがせない</a></li>
+    <li><a href="#sec28-3">28.3 基準モデル — これより良くなければ意味がない</a></li>
+    <li><a href="#sec28-4">28.4 モデルを育てる — 多項式・カーネル Ridge・ガウス過程</a></li>
+    <li><a href="#sec28-5">28.5 評価と不確かさ — 予測区間は何 % 当たるか</a></li>
+    <li><a href="#sec28-6">28.6 候補の選択 — ベイズ最適化で追加 5 点を選ぶ</a></li>
+    <li><a href="#sec28-7">28.7 失敗例と改善</a></li>
+    <li><a href="#sec28-8">28.8 再現できる条件と報告の書き方</a></li>
+    <li><a href="#sec28-9">28.9 結果の解釈と限界</a></li>
+    <li><a href="#sec28-10">28.10 誤解しやすい点と適用限界</a></li>
+    <li><a href="#sec28-11">28.11 まとめ・次章への接続・演習・参考文献</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="sec28-1">28.1 材料探索の問題設定とデータの確認<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.1.1 作業の全体像</h3>
+
+<p>本章の作業は <a href="#fig28-1">図28.1</a> の 7 段階からなる．大切なのは順番である．たとえば分割（段階 2）より前に標準化や外れ値の除去を全データで行うと，評価に使うはずのデータの情報が学習に流れ込む（第6章 <a href="ch06_generalization.html#sec6-7">6.7</a>）．また，追加実験の提案（段階 6）は，評価（段階 5）で予測の幅が信用できるかを確かめてからでないと，根拠にならない．</p>
+
+<figure id="fig28-1">
+<svg role="img" aria-label="材料探索の作業の流れ．1 データの確認，2 分割の設計，3 基準モデル，4 モデルを育てる，5 評価と不確かさ，6 候補の選択，7 報告，の順に進み，6 で選んだ追加実験の結果をデータに加えて 1 に戻る．" viewBox="0 0 600 305" style="max-width:600px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図28.1　材料探索の作業の流れ</title>
+<defs>
+<marker id="arr-fig28-1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker>
+</defs>
+<rect x="10" y="20" width="126" height="64" rx="9" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="73" y="46" font-size="15" text-anchor="middle" fill="#1a1a1a">1 データの確認</text>
+<text x="73" y="70" font-size="13" text-anchor="middle" fill="#4a5568">単位・欠測・重複</text>
+<rect x="160" y="20" width="126" height="64" rx="9" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="223" y="46" font-size="15" text-anchor="middle" fill="#1a1a1a">2 分割の設計</text>
+<text x="223" y="70" font-size="13" text-anchor="middle" fill="#4a5568">バッチ単位・漏洩</text>
+<rect x="310" y="20" width="126" height="64" rx="9" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="373" y="46" font-size="15" text-anchor="middle" fill="#1a1a1a">3 基準モデル</text>
+<text x="373" y="70" font-size="13" text-anchor="middle" fill="#4a5568">平均・線形回帰</text>
+<rect x="460" y="20" width="126" height="64" rx="9" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="523" y="46" font-size="15" text-anchor="middle" fill="#1a1a1a">4 モデルを育てる</text>
+<text x="523" y="70" font-size="13" text-anchor="middle" fill="#4a5568">入れ子の交差検証</text>
+<rect x="460" y="150" width="126" height="64" rx="9" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="523" y="176" font-size="15" text-anchor="middle" fill="#1a1a1a">5 評価と不確かさ</text>
+<text x="523" y="200" font-size="13" text-anchor="middle" fill="#4a5568">残差・被覆率</text>
+<rect x="310" y="150" width="126" height="64" rx="9" fill="#5b2a5e" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="373" y="176" font-size="15" text-anchor="middle" fill="#fff">6 候補の選択</text>
+<text x="373" y="200" font-size="13" text-anchor="middle" fill="#fff">EI で 1 点ずつ</text>
+<rect x="160" y="150" width="126" height="64" rx="9" fill="#fff" stroke="#1a1a1a" stroke-width="1.6" stroke-dasharray="6 4"></rect>
+<text x="223" y="176" font-size="15" text-anchor="middle" fill="#1a1a1a">7 報告</text>
+<text x="223" y="200" font-size="13" text-anchor="middle" fill="#4a5568">seed・版・分割</text>
+<line x1="138" y1="52" x2="156" y2="52" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig28-1)"></line>
+<line x1="288" y1="52" x2="306" y2="52" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig28-1)"></line>
+<line x1="438" y1="52" x2="456" y2="52" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig28-1)"></line>
+<line x1="523" y1="86" x2="523" y2="146" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig28-1)"></line>
+<line x1="458" y1="182" x2="440" y2="182" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig28-1)"></line>
+<line x1="308" y1="182" x2="290" y2="182" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig28-1)"></line>
+<path d="M 373 216 C 373 285, 73 285, 73 88" fill="none" stroke="#5b2a5e" stroke-width="1.6" stroke-dasharray="7 4" marker-end="url(#arr-fig28-1)"></path>
+<text x="223" y="290" font-size="13" text-anchor="middle" fill="#5b2a5e">追加実験の結果を加えて繰り返す</text>
+</svg>
+<figcaption>図28.1　本章の作業の流れ（模式図）．実線の矢印は 1 回の解析の順番，破線の矢印は追加実験の結果をデータに加えて次の回へ進むことを表す．塗りつぶした枠（6）が本章の最終的な出力，破線の枠（7）は各段階の記録をまとめる作業である．</figcaption>
+</figure>
+
+<h3>28.1.2 データと記号</h3>
+
+<p>題材は，架空の酸化物固体電解質である．固体電解質の多くは，価数の違うイオンを添加して空孔などの欠陥を作り，イオンを動きやすくしている．添加量が少なすぎると動く欠陥が足りず，多すぎると欠陥どうしが結びついて動きにくくなるので，伝導度は添加量に対して極大を持ちうる．また焼成温度は，緻密化（気孔が減ること）や粒の成長，揮発しやすい成分の損失を通して伝導度を変えるので，最適な温度があり，それは組成によって変わりうる．第12・13章のデータ C（添加量だけの 1 次元）を，この温度依存性を加えて 2 次元にしたのが本章のデータである．</p>
+
+<p>記号を決める．第12・13章のデータ C では添加量を $x$ と書いたが，本章では入力ベクトル $\bm{x}$ と区別するため，<strong>添加量を $c$</strong>（mol%）と書く．</p>
+<ul>
+  <li>添加量 $c\in[0,10]$ mol%，焼成温度 $T\in[1000,1400]$ °C．入力ベクトルは $\bm{x}=(c,T)^{\tp}\in\R^{2}$（$D=2$）．</li>
+  <li>目標値 $y=\log_{10}(\sigma_{\mathrm{ion}}/\mathrm{S\,cm^{-1}})$（無次元．伝導度 $\sigma_{\mathrm{ion}}$ を S cm$^{-1}$ で測った値の常用対数）．$y$ の差 0.1 は伝導度の比 $10^{0.1}=1.26$ 倍に当たる．以下，$y$ の単位を「桁」と呼ぶことがある．</li>
+  <li>データ $\data=\{(\bm{x}_n,y_n)\}_{n=1}^{N}$，$N=40$．試料 $n$ を合成したバッチの番号を $j(n)\in\{1,\dots,5\}$ と書く．</li>
+</ul>
+
+<p>データは次の式で作った<strong>教育用の合成データ</strong>であり，実在の物質のデータではない．真の関数（実際の研究では分からない関数）を</p>
+\begin{equation}
+\begin{aligned}
+g(c,T)&=-5.0+A(c)\,\psi(c,T),\\
+A(c)&=1.0\,e^{-(c-2.2)^{2}/(2\cdot0.7^{2})}\\
+&\quad+1.6\,e^{-(c-7.0)^{2}/(2\cdot1.1^{2})},\\
+\psi(c,T)&=e^{-(T-T_{\mathrm{opt}}(c))^{2}/(2\cdot150^{2})},\\
+T_{\mathrm{opt}}(c)&=1150+25c
+\end{aligned} \label{eq:28-true}
+\end{equation}
+<p>とする（$T$ と $T_{\mathrm{opt}}$ は °C，$c$ は mol%）．$A(c)$ はデータ C の添加量依存性そのもの，$\psi(c,T)$ は最適温度 $T_{\mathrm{opt}}(c)$ のまわりの幅 150 °C の山（$0\lt\psi\le1$）で，最適温度は添加量 1 mol% あたり 25 °C 上がる．山の頂上 $T=T_{\mathrm{opt}}(c)$ では $\psi=1$ になるので，大域的な最大は $g=-5.0+1.6=-3.400$（$c=7.0$ mol%，$T=1325$ °C），局所的な極大は $g=-4.000$（$c=2.2$ mol%，$T=1205$ °C）である（2 つの山の裾の重なりによる 0.0001 程度のずれを除く）．観測値は</p>
+\begin{equation}
+\begin{aligned}
+y_n&=g(\bm{x}_n)+u_{j(n)}+\varepsilon_n,\\
+u_j&\sim\Normal(0,\,0.08^{2}),\\
+\varepsilon_n&\sim\Normal(0,\,0.05^{2})
+\end{aligned} \label{eq:28-obs}
+\end{equation}
+<p>とした．$u_j$ は<strong>バッチ $j$ に共通のずれ</strong>（原料のロット，炉の温度の校正，雰囲気の違いなど，記録された入力では表せない要因をまとめたもの），$\varepsilon_n$ は試料ごとの測定のノイズで，すべて互いに独立とする．バッチは 5 つ，1 バッチ 8 点で，バッチごとに試した条件の範囲が偏っている（<a href="#fig28-2">図28.2</a>(a)）．$c$ は 0.1 mol%，$T$ は 10 °C 単位に丸めた．乱数は <code>numpy.random.default_rng(20261112)</code> で，引く順番まで生成の台本に書いてある．</p>
+
+<p>データと台本は次の 3 つのファイルとして公開している．</p>
+<ul>
+  <li><a href="data/ch28_capstone_data.csv">ch28_capstone_data.csv</a>：データ（列は <code>sample_id, batch, c_molpct, T_C, y_log10_sigma</code>）．</li>
+  <li><a href="data/ch28_make_data.py">ch28_make_data.py</a>：上の式でデータを作る台本．</li>
+  <li><a href="data/ch28_capstone.py">ch28_capstone.py</a>：本章の計算をすべて行う台本（numpy と scipy だけを使う．本文の数値は Python 3.12.13，numpy 2.5.4，scipy 1.18.1 で得た）．</li>
+</ul>
+<p>動かし方：3 つのファイルを同じフォルダーに置き（<code>ch28_capstone.py</code> は同じフォルダーの <code>ch28_make_data.py</code> から真の関数とデータの作り方を読み込む），そのフォルダーで <code>python ch28_capstone.py</code> を実行する．28.1〜28.7 節の数値が順に表示される（多数の seed の比較を含めて約 2 分）．<code>--quick</code> を付けると繰り返しの回数を 20 回に減らして試せ，<code>--json 名前.json</code> を付けると結果を JSON にも保存する．<code>python ch28_make_data.py</code> は CSV を作り直す（同じ seed なので同じ内容になる）．図は，この台本の出力を matplotlib で描いたものである（描画の部分は台本に含めていない）．</p>
+<p>CSV には，点検の練習のために<strong>不備を 3 つわざと入れてある</strong>（生成の台本の冒頭に書いてある）．以下では，それを知らないつもりで点検する．</p>
+
+<h3>28.1.3 点検の順番</h3>
+
+<div class="box note">
+<p class="box-title">手順：表形式のデータを点検する</p>
+<ol>
+  <li><strong>単位と意味</strong>：各列が何の量で，どの単位か（°C か K か，mol% か wt% か，$\sigma$ か $\log_{10}\sigma$ か）．</li>
+  <li><strong>範囲</strong>：実験の計画した範囲・物理的にありうる範囲に収まるか．</li>
+  <li><strong>欠測</strong>：空欄はないか．空欄の理由（測定の失敗，未測定）は何か．</li>
+  <li><strong>重複</strong>：同じ試料が 2 回入っていないか．同じ条件の繰り返し測定（これは重複ではなく大事な情報）と区別する．</li>
+  <li><strong>外れ値</strong>：他と比べて極端な値はないか．<strong>極端なだけで除いてはいけない</strong>．除くのは，記録の誤りなど理由が分かったときだけにする．</li>
+  <li><strong>グループの構造</strong>：バッチ・試料・測定日などのまとまりと，まとまりごとの条件の偏り．</li>
+</ol>
+<p>直した内容は，元のファイルを上書きせずに記録として残す．</p>
+</div>
+
+<p>台本の関数 <code>inspect_and_clean</code> がこの順に点検した結果を <a href="#tab28-1">表28.1</a> に示す．</p>
+
+<div class="tablewrap">
+<table id="tab28-1">
+<caption>表28.1　ch28_capstone_data.csv（42 行）の点検の結果と処置</caption>
+<thead><tr><th>点検</th><th>見つかったこと</th><th>処置</th></tr></thead>
+<tbody>
+<tr><td>重複</td><td>B2-05 の行が最後にもう一度ある（内容も同じ）</td><td>2 行目を除く</td></tr>
+<tr><td>欠測</td><td>B3-09 の $y$ が空欄（バッチ 3 だけ 9 試料目がある）</td><td>除く（バッチ 3 は 8 点になる）</td></tr>
+<tr><td>範囲</td><td>B3-02 の $T=1583$（計画は 1000〜1400 °C）</td><td>K で記録したと判断し $1583-273=1310$ °C に直す</td></tr>
+<tr><td>外れ値の目安</td><td>$y$ の中央値 $-4.838$，MAD $0.185$，頑健な $z$ の絶対値の最大は 3.37（B5-08，$y=-3.912$）</td><td>記録の誤りの根拠がないので残す</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>外れ値の目安には，平均と標準偏差ではなく<strong>中央値と MAD</strong>（median absolute deviation．中央値からの絶対偏差の中央値）を使った．頑健な $z$ は $(y_n-\mathrm{中央値})/(1.4826\times\mathrm{MAD})$ で，係数 1.4826 は Gauss 分布なら MAD を標準偏差に換算する数である．平均と標準偏差は外れ値そのものに引っ張られるので，外れ値を探す道具としては鈍い．B5-08 は頑健な $z$ が 3.37 と大きいが，これは<strong>伝導度の高い条件を測った</strong>からかもしれず，まさに探している「良い試料」の候補である．ここで除けば，探索の手がかりを自分で捨てることになる．</p>
+
+<p>点検後の 40 点のバッチごとの要約を <a href="#tab28-2">表28.2</a>，散布図を <a href="#fig28-2">図28.2</a> に示す．</p>
+
+<div class="tablewrap">
+<table id="tab28-2">
+<caption>表28.2　点検後のデータのバッチごとの要約（各 8 点）</caption>
+<thead><tr><th>バッチ</th><th>$c$ / mol%</th><th>$T$ / °C</th><th>$y$ の平均</th><th>$y$ の最大</th></tr></thead>
+<tbody>
+<tr><td>B1</td><td>0.7〜2.8</td><td>1020〜1160</td><td>$-4.525$</td><td>$-4.218$</td></tr>
+<tr><td>B2</td><td>3.4〜5.6</td><td>1090〜1250</td><td>$-4.909$</td><td>$-4.658$</td></tr>
+<tr><td>B3</td><td>1.5〜4.9</td><td>1240〜1310</td><td>$-4.585$</td><td>$-4.070$</td></tr>
+<tr><td>B4</td><td>6.4〜9.3</td><td>1000〜1120</td><td>$-4.891$</td><td>$-4.408$</td></tr>
+<tr><td>B5</td><td>7.8〜9.9</td><td>1250〜1380</td><td>$-4.702$</td><td>$-3.912$</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure id="fig28-2">
+<img src="figs/ch28_fig28-2.svg" alt="上下 2 段の図．上の図は横軸に添加量 c，縦軸に焼成温度 T をとり，40 点の条件をバッチごとに違う記号で描いた散布図．破線は真の関数の等高線で，星印の真の最大 c=7.0 mol%，T=1325 °C の近くには点がない．下の図はバッチごとの観測値 y を並べたもので，横棒はバッチの平均．" style="max-width:440px;width:100%">
+<figcaption>図28.2　(a) 点検後の 40 点の条件．記号はバッチ（B1 ●，B2 □，B3 ▲，B4 ◇，B5 ▼）．破線は真の関数 \eqref{eq:28-true} の等高線（数字は $g$ の値），★ は大域的な最大，＋ は局所的な極大．(b) バッチごとの観測値 $y$（横方向のずらしは見やすさのためだけ）と平均（横棒）．教育用の合成データ（式 \eqref{eq:28-true}，\eqref{eq:28-obs}，seed 20261112）．</figcaption>
+</figure>
+
+<p><a href="#fig28-2">図28.2</a> から次のことが分かる．第一に，<strong>バッチと条件が強く結びついている</strong>．B4 は低温・高添加，B5 は高温・高添加というように，各バッチは条件の空間の一部しか測っていない．このため，ある条件の $y$ が高いのが「条件のおかげ」か「そのバッチのずれ $u_j$ のおかげ」かを，データだけから切り分けるのは難しい（交絡．第6章 <a href="ch06_generalization.html#sec6-11">6.11</a>）．第二に，真の最大の近く（$c\approx7$ mol%，$T\approx1300$ °C）には点が 1 つもない．最良の観測値 $-3.912$ は B5-08（$c=7.8$ mol%，$T=1340$ °C）で，その条件の真の値は $g=-3.772$ である（真の最大との差 0.372．この B5 はずれ $u_5$ が負のバッチだった）．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.1　単位の点検と伝導度への換算</p>
+<p>(1) B3-02 の $T=1583$ を K で記録したものとみなすと，°C では何度か．0 °C を 273 K としてよいとき（表28.1 の処置）と，273.15 K とするときの両方を答え，台本が 273 を引いた理由を述べよ．(2) 最良の観測値 $y=-3.912$ と真の最大 $y=-3.400$ を伝導度 $\sigma_{\mathrm{ion}}$（S cm$^{-1}$）に直し，比を求めよ．(3) 重複した行を除かずに 41 行を 5 分割すると，B2-05 の 2 つの行が別々の組に入る確率はおよそいくらか．別々に入ると何が起こるか．</p>
+<p><strong>解答</strong>　(1) $1583-273=1310$ °C，$1583-273.15=1309.85$ °C．このデータの温度は 10 °C 単位に丸めて記録されている（他の 39 点はすべて 10 の倍数）ので，K で書いたときも整数に丸めたと考えると，273 を引いて 1310 °C とするのが記録の形と合う．どちらにしても 1 °C 未満の違いで，解析への影響は無視できる．</p>
+<p>(2) $\sigma_{\mathrm{ion}}=10^{y}\ \mathrm{S\,cm^{-1}}$ なので，$10^{-3.912}=1.22\times10^{-4}\ \mathrm{S\,cm^{-1}}$，$10^{-3.400}=3.98\times10^{-4}\ \mathrm{S\,cm^{-1}}$．比は $10^{-3.400-(-3.912)}=10^{0.512}=3.25$ 倍である．対数の差 0.5 は伝導度で約 3 倍に当たる．</p>
+<p>(3) 一方の行がある組に入ったとき，もう一方の行は残り 40 行のどれかの位置に入る．同じ組の残りの席はおよそ 8 なので，同じ組に入る確率は約 $8/40=0.2$，別々の組に入る確率は約 $0.8$ である．別々に入ると，検証する行とまったく同じ行が訓練データにあることになり，その行の予測は「覚えている値を答える」だけで当たる．検証誤差は小さく見えるが，新しい試料の予測力とは関係がない（第6章 <a href="ch06_generalization.html#sec6-7">6.7</a>）．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-2">28.2 分割の設計 — バッチをまたがせない<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.2.1 何を予測したいのかを先に決める</h3>
+
+<p>分割の単位は，モデルを使う場面で「何が新しいか」で決まる（第6章 <a href="ch06_generalization.html#sec6-8">6.8</a>）．本章の目的は，<strong>次のバッチで焼く試料の伝導度</strong>を予測し，次に試す条件を決めることである．次のバッチのずれ $u_j$ はまだ誰も見ていない．したがって評価も「訓練に使ったバッチとは別のバッチ」で行うのが正直である．</p>
+
+<p>本章では二つの分け方を並べて使う．</p>
+<ul>
+  <li><strong>ランダム 5 分割</strong>：40 点を乱数で並べ替え，8 点ずつの 5 組に分ける（seed 20261112）．各回で 32 点で学習し，8 点で検証する．</li>
+  <li><strong>バッチ単位の分割</strong>（leave-one-batch-out．第6章 <a href="ch06_generalization.html#sec6-8">6.8</a> の定義6.7 の leave-one-group-out で，グループをバッチにしたもの）：バッチを 1 つずつ丸ごと検証に回す 5 分割．各回で 4 バッチ 32 点で学習し，残りの 1 バッチ 8 点で検証する．</li>
+</ul>
+<p>どちらも 32 点で学習して 8 点で検証する点は同じである．違うのは，検証する点の<strong>同じバッチの仲間が訓練データにいるかどうか</strong>だけである．ランダム 5 分割では，検証する 8 点のそれぞれについて，同じバッチの仲間が平均して約 6 点訓練データにいる．</p>
+
+<h3>28.2.2 バッチのずれが誤差の下限を決める</h3>
+
+<p>どんなに良いモデルでも，まだ見ていないバッチのずれ $u_j$ は予測できない．真の関数 $g$ を完全に知っているモデルでも，新しいバッチの観測値に対する誤差は $y-g=u_j+\varepsilon$ で，その分散は $0.08^{2}+0.05^{2}$ である．よって，新しいバッチでの RMSE の下限は</p>
+$$
+\sqrt{0.08^{2}+0.05^{2}}=\sqrt{0.0089}=0.094
+$$
+<p>である．一方，同じバッチの仲間が訓練データにいれば，モデルはその仲間の値を通してずれ $u_j$ をある程度「覚える」ことができ，誤差はこの下限より小さくなりうる（例題28.2）．ランダム分割の誤差がこの 0.094 を下回ったら，それは新しいバッチの予測力ではありえない，という目安になる．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.2　仲間がいるときの誤差の下限</p>
+<p>真の関数 $g$ を知っていて，さらに検証する点と同じバッチの観測が訓練データに $n$ 点あるモデルを考える．このモデルはバッチのずれを $\hat{u}=\frac1n\sum_{i=1}^{n}(y_i-g(\bm{x}_i))$ と見積もり，$\hat{y}=g(\bm{x})+\hat{u}$ と予測する．(1) 検証点の二乗誤差の期待値を求めよ．(2) $n=6$ と $n=7$ のときの RMSE を求め，新しいバッチの下限 0.094 と比べよ．</p>
+<p><strong>解答</strong>　(1) 訓練の $n$ 点は $y_i-g(\bm{x}_i)=u+\varepsilon_i$ なので $\hat{u}=u+\bar{\varepsilon}$（$\bar{\varepsilon}=\frac1n\sum_i\varepsilon_i$）．検証点は $y=g(\bm{x})+u+\varepsilon$ だから</p>
+$$
+\begin{aligned}
+y-\hat{y}&=(g+u+\varepsilon)-(g+u+\bar{\varepsilon})\\
+&=\varepsilon-\bar{\varepsilon}.
+\end{aligned}
+$$
+<p>$u$ は打ち消し合って消える．$\varepsilon$ と $\bar{\varepsilon}$ は独立で，$\Var[\bar{\varepsilon}]=\sigma^{2}/n$（第2章 <a href="ch02_probability.html#sec2-8">2.8</a>）なので，二乗誤差の期待値は $\sigma^{2}+\sigma^{2}/n=\sigma^{2}(1+1/n)$ である（$\sigma=0.05$）．</p>
+<p>(2) $n=6$：$0.05\sqrt{1+1/6}=0.054$．$n=7$：$0.05\sqrt{1+1/7}=0.053$．新しいバッチの下限 0.094 の約 0.57 倍である．同じバッチの仲間がいるかどうかだけで，誤差の下限がほぼ半分になる．</p>
+</div>
+
+<h3>28.2.3 漏洩の点検表</h3>
+
+<p>分割の前後に確かめることを <a href="#tab28-3">表28.3</a> にまとめる．第6章の 6.7〜6.8 節の内容を，この題材に当てはめたものである．</p>
+
+<div class="tablewrap">
+<table id="tab28-3">
+<caption>表28.3　漏洩の点検表（本章のデータでの答え）</caption>
+<thead><tr><th>問い</th><th>本章での答えと処置</th></tr></thead>
+<tbody>
+<tr><td>同じ試料・重複が訓練と検証にまたがっていないか</td><td>重複行を除いた（表28.1）．1 試料 1 行</td></tr>
+<tr><td>同じバッチが訓練と検証にまたがっていないか</td><td>正直な評価はバッチ単位の分割．ランダム分割は比較のためだけに使う</td></tr>
+<tr><td>前処理（標準化・補完・外れ値の除去）の量を訓練データだけで決めたか</td><td>標準化の平均・標準偏差は各回の訓練データだけで計算する（28.4 節）．補完はせず，欠測行は除いた</td></tr>
+<tr><td>ハイパーパラメーターを検証データを見て選んでいないか</td><td>入れ子の交差検証：内側（訓練データの中だけ）で選び，外側で評価する</td></tr>
+<tr><td>入力に，予測する時点で手に入らない量が入っていないか</td><td>入力は計画時に決まる $c$ と $T$ だけ．焼結後の密度などは入れない</td></tr>
+<tr><td>テストに使うデータを何度も見ていないか</td><td>本章では最終的な判断は追加実験の結果で行う（28.6 節）．評価の数値は交差検証のもの</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-3">28.3 基準モデル — これより良くなければ意味がない<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.3.1 二つの基準</h3>
+
+<p>モデルを作り込む前に，<strong>最も単純な答え方</strong>の誤差を測っておく．これが「これより良くなければ，モデルを使う意味がない」という基準線になる．</p>
+<ul>
+  <li><strong>平均で答えるモデル</strong>：入力を見ずに，訓練データの $y$ の平均 $\bar{y}_{\mathrm{tr}}$ をいつも答える．決定係数 $R^{2}$ はこのモデルを 0 とする目盛りである（第6章 <a href="ch06_generalization.html#sec6-10">6.10</a>）．</li>
+  <li><strong>線形回帰</strong>：$f(\bm{x};\bm{w})=w_0+w_1\tilde{c}+w_2\tilde{T}$ を最小二乗法で当てはめる（$\tilde{c},\tilde{T}$ は 28.4 節で定義する標準化した入力）．</li>
+</ul>
+<p>評価には MAE と RMSE（第6章 6.10 節の定義．$\mathrm{MAE}=\frac1N\sum_n\abs{y_n-\hat{y}_n}$，$\mathrm{RMSE}=\sqrt{\frac1N\sum_n(y_n-\hat{y}_n)^{2}}$）を使う．交差検証では，5 回の検証の予測値 $\hat{y}_n$ を 40 点ぶん集めてから，40 点全体で MAE と RMSE を計算する．単位は $y$ と同じ「桁」である．</p>
+
+<p>基準モデルの結果（<a href="#tab28-4">表28.4</a> の上の 2 行）は，バッチ単位の分割で平均が RMSE 0.326，線形回帰が 0.334 である．線形回帰は平均より<strong>悪い</strong>．$y$ は $c$ にも $T$ にも山形に依存しているので，平面では表せず，しかも新しいバッチの条件の範囲は訓練データの範囲から外れがち（図28.2(a)）なので，平面を外へ延ばした予測が外れるからである．一方，ランダム 5 分割では線形回帰（0.279）の方が平均（0.309）より良い．分割の仕方で基準モデルどうしの順位まで入れ替わる．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.3　平均で答えるモデルの誤差を手で計算する</p>
+<p>バッチ単位の分割で B5 を検証に回すと，訓練データ（B1〜B4 の 32 点）の $y$ の平均は $-4.727$ である．B5 の 4 試料 B5-01，B5-02，B5-08，B5-04 の観測値 $y=(-4.647,\ -4.935,\ -3.912,\ -4.209)$ に対して，平均 $-4.73$（小数第 2 位に丸めた値）で答えたときの MAE と RMSE を求めよ．</p>
+<p><strong>解答</strong>　誤差 $y-\hat{y}$ は</p>
+$$
+\begin{aligned}
+&-4.647+4.73=0.083,\\
+&-4.935+4.73=-0.205,\\
+&-3.912+4.73=0.818,\\
+&-4.209+4.73=0.521.
+\end{aligned}
+$$
+<p>MAE は $(0.083+0.205+0.818+0.521)/4$ $=1.627/4=0.407$．二乗和は $0.00689+0.04203$ $+0.66912+0.27144=0.98948$ なので，RMSE は $\sqrt{0.98948/4}$ $=\sqrt{0.24737}=0.497$．B5 の高い値（$-3.912$）を平均では説明できず，RMSE は MAE よりかなり大きい（大きな誤差を二乗で強く数えるため）．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-4">28.4 モデルを育てる — 多項式・カーネル Ridge・ガウス過程<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.4.1 標準化は訓練データだけで</h3>
+
+<p>$c$（0〜10 mol%）と $T$（1000〜1400 °C）は桁の違う量なので，そのまま距離や多項式に入れると $T$ だけが効いてしまう．そこで各回の<strong>訓練データだけ</strong>から平均と標準偏差を求め，</p>
+\begin{equation}
+\tilde{c}=\frac{c-\bar{c}_{\mathrm{tr}}}{s_{c,\mathrm{tr}}},\qquad \tilde{T}=\frac{T-\bar{T}_{\mathrm{tr}}}{s_{T,\mathrm{tr}}} \label{eq:28-std}
+\end{equation}
+<p>と標準化する（$s$ は $N$ で割る標準偏差）．検証データには，訓練データで求めたこの 4 つの数を<strong>当てはめるだけ</strong>にする．標準化した入力を $\tilde{\bm{x}}=(\tilde{c},\tilde{T})^{\tp}$ と書く．40 点全部では $\bar{c}=5.19$ mol%，$s_c=2.91$ mol%，$\bar{T}=1173.75$ °C，$s_T=111.8$ °C である．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.4　訓練データの量で標準化する</p>
+<p>訓練データの温度が $(1020,\ 1150,\ 1250,\ 1310)$ °C の 4 点，検証データが $1380$ °C の 1 点だとする．(1) 訓練データの平均と標準偏差（$N$ で割る）を求め，検証点の $\tilde{T}$ を計算せよ．(2) 誤って 5 点全部で平均と標準偏差を求めると，検証点の $\tilde{T}$ はいくらになるか．何が漏れているか．</p>
+<p><strong>解答</strong>　(1) 平均は $(1020+1150+1250+1310)/4$ $=4730/4=1182.5$ °C．偏差は $(-162.5,\ -32.5,\ 67.5,\ 127.5)$，二乗は $(26406.25,\ 1056.25,$ $4556.25,\ 16256.25)$ で，和は $48275$．分散は $48275/4=12068.75$，標準偏差は $\sqrt{12068.75}=109.86$ °C．検証点は $\tilde{T}=(1380-1182.5)/109.86=1.798$．</p>
+<p>(2) 5 点の平均は $(4730+1380)/5=1222.0$ °C，偏差の二乗の和は $(-202)^{2}+(-72)^{2}+28^{2}$ $+88^{2}+158^{2}=79480$ で，標準偏差は $\sqrt{79480/5}=126.08$ °C．検証点は $\tilde{T}=(1380-1222)/126.08=1.253$．検証点の値 1380 °C が平均と標準偏差を通して訓練側の目盛りに入り込み，「検証点は訓練範囲から 1.8 標準偏差離れている」という外挿の度合いが「1.25 標準偏差」に縮んで見える．</p>
+</div>
+
+<h3>28.4.2 三つのモデル</h3>
+
+<p><strong>(1) 多項式＋Ridge</strong>．次数 $d$ 以下の $\tilde{c}^{a}\tilde{T}^{b}$（$a+b\le d$）をすべて基底関数にする．基底の数は $M=(d+1)(d+2)/2$ で，$d=2$ なら $M=6$（$1,\tilde{c},\tilde{T},\tilde{c}^{2},\tilde{c}\tilde{T},\tilde{T}^{2}$）．計画行列を $\bm{\Phi}\in\R^{N\times M}$ とし，第8章 <a href="ch08_linear_regression.html#sec8-6">8.6</a> の Ridge 回帰の損失から切片 $w_0$ だけを罰則の外に出した</p>
+\begin{equation}
+\begin{aligned}
+L(\bm{w})&=\frac12\norm{\bm{y}-\bm{\Phi}\bm{w}}^{2}\\
+&\quad+\frac{\lambda}{2}\sum_{j=1}^{M-1}w_j^{2}
+\end{aligned} \label{eq:28-ridge}
+\end{equation}
+<p>を最小にする（$\bm{w}\in\R^{M}$，$w_0$ が切片）．勾配を 0 とおくと $(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{P})\bm{w}$ $=\bm{\Phi}^{\tp}\bm{y}$（$\bm{P}=\diag(0,1,\dots,1)\in\R^{M\times M}$）で，これを連立方程式として解く．ハイパーパラメーターは $d\in\{1,2,3,4\}$ と $\lambda\in\{10^{-3},10^{-2},10^{-1},1,10,100\}$．</p>
+
+<p><strong>(2) カーネル Ridge 回帰</strong>（第10章 <a href="ch10_kernel_methods.html#sec10-6">10.6</a>）．RBF カーネル $k(\tilde{\bm{x}},\tilde{\bm{x}}')$ $=\exp\bigl(-\norm{\tilde{\bm{x}}-\tilde{\bm{x}}'}^{2}/(2\ell^{2})\bigr)$（$\sigma_f=1$）で，訓練データの平均 $\bar{y}_{\mathrm{tr}}$ を引いた値に当てはめる：</p>
+\begin{equation}
+\begin{aligned}
+\bm{a}&=(\bm{K}+\lambda\bm{I})^{-1}\\
+&\quad\times(\bm{y}-\bar{y}_{\mathrm{tr}}\bm{1}),\\
+f(\tilde{\bm{x}}_*)&=\bar{y}_{\mathrm{tr}}+\bm{k}_*^{\tp}\bm{a}
+\end{aligned} \label{eq:28-krr}
+\end{equation}
+<p>（$\bm{K}\in\R^{N\times N}$，$\bm{k}_*\in\R^{N}$，$\bm{1}\in\R^{N}$．逆行列は作らず Cholesky 分解で解く）．ハイパーパラメーターは $\ell\in\{0.3,0.5,1,2\}$（標準化した単位）と $\lambda\in\{10^{-3},\dots,10\}$．</p>
+
+<p><strong>(3) ガウス過程回帰</strong>（第12章）．平均関数を定数 $m=\bar{y}_{\mathrm{tr}}$ とし，入力の成分ごとに長さスケールを持つ RBF カーネル（ARD カーネル．automatic relevance determination）</p>
+\begin{equation}
+\begin{aligned}
+&k(\tilde{\bm{x}},\tilde{\bm{x}}')\\
+&=\sigma_f^{2}\exp\!\Bigl[-\frac{(\tilde{c}-\tilde{c}')^{2}}{2\ell_c^{2}}\\
+&\qquad\qquad\ \ -\frac{(\tilde{T}-\tilde{T}')^{2}}{2\ell_T^{2}}\Bigr]
+\end{aligned} \label{eq:28-ard}
+\end{equation}
+<p>を使う．$\ell_c=\ell_T$ なら第12章の RBF カーネルに戻る．添加量と温度とで「どれだけ離れると相関が消えるか」が違ってよい，という仮定である．$\bm{K}_y=\bm{K}+\sigma^{2}\bm{I}$ として，予測は第12章 <a href="ch12_gaussian_process.html#sec12-4">12.4</a> の式</p>
+\begin{equation}
+\begin{aligned}
+\mu_*&=m+\bm{k}_*^{\tp}\bm{K}_y^{-1}(\bm{y}-m\bm{1}),\\
+\sigma_*^{2}&=k(\tilde{\bm{x}}_*,\tilde{\bm{x}}_*)-\bm{k}_*^{\tp}\bm{K}_y^{-1}\bm{k}_*
+\end{aligned} \label{eq:28-gp}
+\end{equation}
+<p>である．$\sigma_*^{2}$ は潜在関数（真の関数）の予測分散で，次の 1 回の観測値の予測分散は $\sigma_*^{2}+\sigma^{2}$ である．ハイパーパラメーター $\bm{\theta}=(\ell_c,\ell_T,\sigma_f,\sigma)$ は，訓練データでの対数周辺尤度（第12章 <a href="ch12_gaussian_process.html#sec12-7">12.7</a>）を最大にして決める（L-BFGS-B 法で対数の目盛りの上を探し，出発点を 4 つ変えて最良のものをとる）．</p>
+
+<p>40 点全部で当てはめると，$\ell_c=0.336$，$\ell_T=1.834$（標準化した単位．元の単位では $0.336\times2.91=0.98$ mol%，$1.834\times111.8=205$ °C），$\sigma_f=0.391$，$\sigma=0.056$ になった．長さスケールは添加量の山の幅（0.7〜1.1 mol%）と温度の山の幅（150 °C）に近い．$\sigma=0.056$ は測定のノイズ 0.05 に近く，バッチのずれ 0.08 を含めた $0.094$ よりずっと小さい．バッチのずれは独立なノイズとしては扱われず，関数 $f$ の側に吸収されている，ということである（28.5 節で問題になる）．</p>
+
+<h3>28.4.3 入れ子の交差検証で選び，外側で評価する</h3>
+
+<p>多項式の $(d,\lambda)$ とカーネル Ridge の $(\ell,\lambda)$ は，外側の 1 回ごとに<strong>その回の訓練データ（32 点）の中だけ</strong>で交差検証して選ぶ（第6章 <a href="ch06_generalization.html#sec6-5">6.5</a> の入れ子の交差検証）．内側の分け方は外側に合わせ，外側がバッチ単位なら内側も残り 4 バッチの leave-one-batch-out，外側がランダムなら内側はランダム 4 分割とした．ガウス過程は周辺尤度でハイパーパラメーターを決めるので，内側の交差検証は使わない．</p>
+
+<p>結果を <a href="#tab28-4">表28.4</a> と <a href="#fig28-3">図28.3</a> に示す．</p>
+
+<div class="tablewrap">
+<table id="tab28-4">
+<caption>表28.4　交差検証による比較（40 点，単位は $y$ の桁）．ランダム 5 分割の seed は 20261112</caption>
+<thead><tr><th>モデル</th><th>ランダム MAE</th><th>ランダム RMSE</th><th>バッチ単位 MAE</th><th>バッチ単位 RMSE</th></tr></thead>
+<tbody>
+<tr><td>平均で答える</td><td>0.255</td><td>0.309</td><td>0.272</td><td>0.326</td></tr>
+<tr><td>線形回帰</td><td>0.219</td><td>0.279</td><td>0.245</td><td>0.334</td></tr>
+<tr><td>多項式＋Ridge</td><td>0.224</td><td>0.274</td><td>0.265</td><td>0.334</td></tr>
+<tr><td>カーネル Ridge</td><td>0.163</td><td>0.228</td><td>0.281</td><td>0.337</td></tr>
+<tr><td>ガウス過程</td><td>0.076</td><td>0.102</td><td>0.203</td><td>0.253</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure id="fig28-3">
+<img src="figs/ch28_fig28-3.svg" alt="5 つのモデルについて，ランダム 5 分割の RMSE（塗った四角）とバッチ単位の分割の RMSE（白抜きの三角）を横に並べた図．どのモデルもバッチ単位の方が大きく，ガウス過程では 0.102 と 0.253 で差が最も大きい．縦の点線は平均で答えるモデルのバッチ単位の RMSE 0.326．" style="max-width:480px;width:100%">
+<figcaption>図28.3　表28.4 の RMSE．■ はランダム 5 分割，△ はバッチ単位の分割（leave-one-batch-out），縦の点線は基準（平均で答えるモデルのバッチ単位の RMSE 0.326）．教育用の合成データ（28.1 節）．</figcaption>
+</figure>
+
+<p>読み取れることは三つある．</p>
+<ul>
+  <li><strong>正直な評価（バッチ単位）で基準を超えたのはガウス過程だけ</strong>である（0.253 &lt; 0.326）．多項式＋Ridge（0.334）とカーネル Ridge（0.337）は，平均で答えるモデルにも負けている．</li>
+  <li><strong>ランダム分割は楽観的</strong>である．ガウス過程の RMSE はランダム分割で 0.102，バッチ単位で 0.253 と 2.5 倍違う．ランダム分割の 0.102 は，新しいバッチの下限 0.094（28.2 節）とほぼ同じで，「仲間のいるバッチ」の予測力を測っている．冒頭の「誤差は 0.1 桁」という先輩の数字は，これに当たる．</li>
+  <li><strong>内側の選択も分割に引きずられる</strong>．内側をランダムに分けると，カーネル Ridge は 5 回とも $\ell=0.3$〜$0.5$，$\lambda=10^{-3}$〜$10^{-1}$ という細かく当てはめる設定を選び，多項式は 5 回中 4 回で次数 4 を選んだ．内側もバッチ単位にすると，多項式は 5 回とも次数 1（$\lambda=10$〜$100$），カーネル Ridge は $\lambda=1$〜$10$ と強い正則化を選んだ．バッチをまたぐと細かい凹凸は再現しないことを，内側の交差検証が見抜いたのである．</li>
+</ul>
+
+<div class="box why">
+<p class="box-title">なぜガウス過程だけが基準を超えたのか</p>
+<p>三つのモデルの違いは，表せる関数の形よりも<strong>ハイパーパラメーターの決め方</strong>にある．多項式とカーネル Ridge は格子の上の少数の候補から，32 点の交差検証で選ぶ．32 点を 4 バッチに分けた内側の検証は 1 回あたり 8 点しかなく，選択が不安定である．ガウス過程は 4 つのハイパーパラメーター（成分ごとの長さスケールを含む）を連続的に，訓練データ全体の周辺尤度で決めるので，少ないデータでも比較的安定する．ただしこれは<strong>このデータでの結果</strong>であり，ガウス過程が常に勝つという意味ではない（28.10 節）．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-5">28.5 評価と不確かさ — 予測区間は何 % 当たるか<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.5.1 被覆率</h3>
+
+<p>ベイズ最適化は，予測平均だけでなく予測の幅 $\sigma_*$ を使って次の条件を決める．したがって「幅が正直か」を確かめておく必要がある．そのための量が被覆率である．</p>
+
+<div class="box def">
+<p class="box-title">定義28.1　予測区間の被覆率</p>
+<p>検証データ $\{(\bm{x}_n,y_n)\}_{n=1}^{N}$ のそれぞれについて，モデルが観測値 $y_n$ の予測平均 $\hat{y}_n$ と予測標準偏差 $s_n$ を出すとする．名目 95 % の予測区間 $[\hat{y}_n-1.96\,s_n,\ \hat{y}_n+1.96\,s_n]$ に観測値が入った点の割合，すなわち $\chi_n=1$（$\abs{y_n-\hat{y}_n}\le1.96\,s_n$ のとき），$\chi_n=0$（それ以外）として</p>
+\begin{equation}
+\mathrm{cov}=\frac1N\sum_{n=1}^{N}\chi_n \label{eq:28-coverage}
+\end{equation}
+<p>を<strong>被覆率</strong>（coverage）という（$\mathrm{cov}$ は coverage の略で，共分散 $\Cov$ とは別の量）．予測分布が正しければ被覆率は 0.95 に近い．</p>
+</div>
+
+<p>ガウス過程では，観測値の予測標準偏差は $s_n=\sqrt{\sigma_*^{2}+\sigma^{2}}$ である（潜在関数の $\sigma_*$ だけを使うと，ノイズの分だけ区間が狭すぎる．第12章 <a href="ch12_gaussian_process.html#sec12-6">12.6</a>）．</p>
+
+<p>本章のデータで調べると，ガウス過程の被覆率は<strong>ランダム 5 分割で 0.95</strong>（40 点中 38 点）だが，<strong>バッチ単位の分割では 0.70</strong>（40 点中 28 点）しかない（<a href="#fig28-4">図28.4</a>(a)）．ランダム分割では名目どおりに見える区間が，新しいバッチに対しては 3 割も外れる．外れた 12 点のうち 8 点は B2 の全点（残りは B3 の 3 点と B5 の 1 点）で，B2 の 8 点の残差（観測値−予測平均）の平均は $-0.284$ である．B2 はバッチのずれ $u_2=-0.106$ が負で，しかも条件が B1 と B3 の間の谷（図28.2(a)）にあるため，両隣のバッチから外挿した予測が高すぎたのである．</p>
+
+<figure id="fig28-4">
+<img src="figs/ch28_fig28-4.svg" alt="横軸に観測値，縦軸にバッチ単位の分割での予測平均をとった散布図を上下 2 段に並べた図．縦の線は 95 % 予測区間．上のガウス過程では 40 点中 12 点が区間の外で被覆率 70.0 %，下のバッチ項ありのガウス過程では 9 点が外で 77.5 %．外れた点は丸で囲んである．" style="max-width:400px;width:100%">
+<figcaption>図28.4　バッチ単位の分割での予測平均 $\mu_*$ と観測値 $y$（記号はバッチ．縦線は 95 % 予測区間 $\mu_*\pm1.96\,s_n$，丸で囲んだ点は区間の外）．斜めの破線は $\mu_*=y$．(a) ガウス過程（$s_n=\sqrt{\sigma_*^{2}+\sigma^{2}}$），(b) バッチ項ありのガウス過程（$s_n=\sqrt{\sigma_*^{2}+\sigma_b^{2}+\sigma^{2}}$．28.5.2 項）．教育用の合成データ（28.1 節）．</figcaption>
+</figure>
+
+<h3>28.5.2 バッチのずれを共分散に入れる</h3>
+
+<p>区間が狭すぎる理由は，モデルが式 \eqref{eq:28-obs} の $u_j$ を知らないことにある．ガウス過程は観測値の共分散を $\bm{K}+\sigma^{2}\bm{I}$ とし，「同じバッチの 2 点は共通のずれを持つ」という構造を表せない．そこで，バッチのずれを確率変数として共分散に入れる．</p>
+
+<div class="box derive">
+<p class="box-title">導出：バッチ項を入れた共分散と予測分散</p>
+<p>観測を $y_n=f(\bm{x}_n)+u_{j(n)}+\varepsilon_n$ とし，$f\sim\GP(m,k)$，$u_j\sim\Normal(0,\sigma_b^{2})$（$j=1,\dots,J$），$\varepsilon_n\sim\Normal(0,\sigma^{2})$ がすべて互いに独立だとする．$\sigma_b$ はバッチのずれの標準偏差で，ハイパーパラメーターとして推定する．</p>
+<p>2 つの観測の共分散を，共分散の双線形性で 9 項に分ける．$f$，$u$，$\varepsilon$ の間の共分散は独立性から 0 なので，残るのは同じ種類どうしの 3 項である：</p>
+$$
+\begin{aligned}
+&\Cov[y_n,y_{n'}]\\
+&=\Cov[f_n,f_{n'}]\\
+&\quad+\Cov[u_{j(n)},u_{j(n')}]\\
+&\quad+\Cov[\varepsilon_n,\varepsilon_{n'}].
+\end{aligned}
+$$
+<p>第 1 項は $k(\bm{x}_n,\bm{x}_{n'})$．第 2 項は，同じバッチ（$j(n)=j(n')$）なら同じ確率変数どうしなので $\Var[u_j]=\sigma_b^{2}$，違うバッチなら独立なので 0．第 3 項は $n=n'$ のときだけ $\sigma^{2}$．バッチの所属を表す行列 $\bm{Z}\in\{0,1\}^{N\times J}$（$Z_{nj}=1$ は試料 $n$ がバッチ $j$ のもの．第25章のヘッドの出力 $\bm{Z}_j$ や第27章の分配関数 $Z$ とは別の量で，この章だけの記号）を使うと，$(\bm{Z}\bm{Z}^{\tp})_{nn'}=\sum_jZ_{nj}Z_{n'j}$ は同じバッチなら 1，違えば 0 なので，行列でまとめて</p>
+\begin{equation}
+\bm{K}_y=\bm{K}+\sigma_b^{2}\bm{Z}\bm{Z}^{\tp}+\sigma^{2}\bm{I} \label{eq:28-batchcov}
+\end{equation}
+<p>となる（$\bm{K}_y\in\R^{N\times N}$）．$(\bm{y},f_*)$ の同時分布で変わるのは $\bm{y}$ の共分散だけで，$f_*=f(\bm{x}_*)$ と $y_n$ の共分散は $\Cov[f_*,f_n]=k(\bm{x}_*,\bm{x}_n)$ のまま（$u$ と $\varepsilon$ は $f_*$ と独立）である．したがって潜在関数の予測は，式 \eqref{eq:28-gp} の $\bm{K}_y$ を式 \eqref{eq:28-batchcov} に替えるだけでよい（第12章 <a href="ch12_gaussian_process.html#sec12-4">12.4</a> の導出がそのまま使える）．</p>
+<p>新しいバッチ $J+1$ で測る観測値は $y_*=f_*+u_{J+1}+\varepsilon_*$ で，$u_{J+1}$ はまだ一度も観測されていないから，訓練データと独立である．独立な量の和の分散は分散の和なので</p>
+\begin{equation}
+\begin{aligned}
+&\Var[y_*\mid\data]\\
+&=\sigma_*^{2}+\sigma_b^{2}+\sigma^{2}
+\end{aligned} \label{eq:28-predvar}
+\end{equation}
+<p>となる．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>40 点全部でバッチ項ありのモデルを当てはめると，$\sigma_b=0.097$，$\sigma=0.043$ と推定された（真の値はそれぞれ 0.08 と 0.05）．対数周辺尤度はバッチ項なしの 18.35 から 21.44 に上がり，データがバッチ項を支持していることが分かる．バッチ単位の分割での被覆率は 0.70 から <strong>0.775</strong>（40 点中 31 点）に上がった．B3 と B5 の外れは消えたが，B2 の 8 点は依然としてすべて区間の外にある（<a href="#fig28-4">図28.4</a>(b)）．ただし RMSE は 0.253 から 0.275 に少し悪くなった．バッチのずれを $f$ に吸収させない分，予測平均がなめらかになったためである．</p>
+
+<h3>28.5.3 1 組のデータの被覆率は揺れる</h3>
+
+<p>40 点の被覆率 1 つは，それ自体がばらつく量である．そこで同じ作り方（式 \eqref{eq:28-true}，\eqref{eq:28-obs}，同じバッチの範囲）で seed だけを変えたデータを 100 組作り（seed $20261112+1000+r$，$r=0,\dots,99$．ランダム分割の 5 組への分け方も同じ seed で決める），同じ手順で被覆率を求めた（<a href="#tab28-5">表28.5</a>）．</p>
+
+<div class="tablewrap">
+<table id="tab28-5">
+<caption>表28.5　95 % 予測区間の被覆率．本章のデータ 1 組の値と，同じ作り方の 100 組の平均・中央値・四分位範囲</caption>
+<thead><tr><th>モデルと分割</th><th>本章のデータ</th><th>100 組の平均</th><th>中央値 [第 1, 第 3 四分位]</th></tr></thead>
+<tbody>
+<tr><td>ガウス過程・ランダム 5 分割</td><td>0.950</td><td>0.892</td><td>0.900 [0.869, 0.925]</td></tr>
+<tr><td>ガウス過程・バッチ単位</td><td>0.700</td><td>0.846</td><td>0.850 [0.800, 0.925]</td></tr>
+<tr><td>バッチ項あり・バッチ単位</td><td>0.775</td><td>0.880</td><td>0.900 [0.844, 0.925]</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>100 組で見ても，バッチ単位の被覆率は名目の 0.95 に届かず，バッチ項を入れると平均で 0.846 から 0.880 に近づく．本章のデータ 1 組の 0.70 は，100 組の中でも低い方である．バッチ項を入れても 0.95 に届かない理由は二つある．一つは $\sigma_b$ を 4 バッチ（外側の 1 回の訓練データ）から推定していることで，4 個の $u_j$ から分散を決めるのは心許ない（実際，外側の 5 回で $\sigma_b$ の推定値は 0.018〜0.135 とばらついた）．もう一つは，ハイパーパラメーターを 1 つの値に決めて，その不確かさを区間に入れていないことである．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.5　被覆率 0.70 は偶然か</p>
+<p>(1) 予測分布が正しく，40 点が独立なら，95 % 区間から外れる点の数は二項分布 $\mathrm{Bin}(40,\,0.05)$ に従う．外れる数の期待値を求めよ．また，外れる数が 12 以上になる確率は $3.7\times10^{-7}$，5 以上になる確率は $0.048$ である．被覆率 0.70 は偶然と考えてよいか．(2) ある条件で $\sigma_*=0.15$ のとき，新しいバッチの観測値の予測標準偏差を，バッチ項なし（$\sigma=0.056$）とバッチ項あり（$\sigma_b=0.097$，$\sigma=0.043$）で求めよ．</p>
+<p><strong>解答</strong>　(1) 期待値は $40\times0.05=2$ 点．12 点外れる確率は $3.7\times10^{-7}$ で，偶然では説明できない．ただし同じバッチの 8 点は共通のずれ $u_j$ を持つので，40 点は独立ではない．1 つのバッチがまとめて外れることがあるので，実際の外れの数は二項分布よりばらつく（表28.5 の四分位範囲が広いのはこのため）．それを考えても 12 点は多く，区間が狭すぎると判断するのが妥当である．</p>
+<p>(2) バッチ項なしとバッチ項ありで，それぞれ</p>
+$$
+\begin{aligned}
+&\sqrt{0.15^{2}+0.056^{2}}\\
+&\quad=\sqrt{0.02250+0.00314}=0.160,\\
+&\sqrt{0.15^{2}+0.097^{2}+0.043^{2}}\\
+&\quad=\sqrt{0.02250+0.00941+0.00185}\\
+&\quad=\sqrt{0.03376}=0.184 .
+\end{aligned}
+$$
+<p>新しいバッチの分だけ幅が 15 % 広がる．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-6">28.6 候補の選択 — ベイズ最適化で追加 5 点を選ぶ<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.6.1 設定</h3>
+
+<p>次の 5 回の合成で試す条件を，第13章のベイズ最適化で 1 点ずつ選ぶ．設定は第13章に合わせる．</p>
+<ul>
+  <li><strong>代理モデル</strong>：28.4 節のガウス過程（ARD カーネル，平均関数は観測値の平均，ハイパーパラメーターは各回に周辺尤度で選び直す）．追加のたびにその時点の全データで標準化をやり直す（全部が訓練データなので漏洩ではない）．</li>
+  <li><strong>獲得関数</strong>：期待改善量（第13章 <a href="ch13_bayesian_optimization.html#sec13-4">13.4</a>，最大化，$\xi=0$）．$f_{\mathrm{best}}$ はそれまでの観測値の最大．$d=\mu_*-f_{\mathrm{best}}$，$z=d/\sigma_*$ として
+  \begin{equation}
+  \begin{aligned}
+&\mathrm{EI}(\bm{x})=d\,\Phi(z)\\
+&\quad+\sigma_*\,\Normal(z\mid0,1)
+\end{aligned} \label{eq:28-ei}
+  \end{equation}
+  （$\sigma_*$ は潜在関数の予測標準偏差，$\Phi$ は標準 Gauss 分布の累積分布関数．$d$ は第13章と同じ「平均で見た改善量」で，28.4 節の多項式の次数 $d$ とは別の量）．</li>
+  <li><strong>候補</strong>：$c$ を 0.25 mol% 刻み（41 通り），$T$ を 10 °C 刻み（41 通り）にした 1681 点の格子．その中で EI が最大の点を選ぶ．</li>
+  <li><strong>観測</strong>：追加の 1 回ごとに新しいバッチで合成するとし，式 \eqref{eq:28-true}，\eqref{eq:28-obs} に従って新しいずれ $u$ と測定のノイズ $\varepsilon$ を乗せた値を「観測」する（乱数は seed 20261112）．新しい点には新しいバッチの番号を付ける．</li>
+  <li><strong>推奨点と単純後悔</strong>（第13章 <a href="ch13_bayesian_optimization.html#sec13-8">13.8</a>）：観測値が最大の点を推奨点 $\hat{\bm{x}}$ とし，$r=g(\bm{x}^{\star})-g(\hat{\bm{x}})$（$g(\bm{x}^{\star})=-3.400$）を単純後悔とする．$r$ は真の関数を知っている合成データでだけ計算できる．</li>
+</ul>
+
+<h3>28.6.2 各回の候補と理由</h3>
+
+<p>5 回の経過を <a href="#tab28-6">表28.6</a> と <a href="#fig28-5">図28.5</a> に示す．</p>
+
+<div class="tablewrap">
+<table id="tab28-6">
+<caption>表28.6　ベイズ最適化で選んだ追加 5 点（教育用の合成データ．観測の乱数は seed 20261112）．$\mu_*$，$\sigma_*$ は選んだ時点の予測（潜在関数），$g$ はその条件の真の値</caption>
+<thead><tr><th>回</th><th>$c$ / mol%</th><th>$T$ / °C</th><th>$\mu_*$</th><th>$\sigma_*$</th><th>$f_{\mathrm{best}}$</th><th>EI</th><th>観測 $y$</th><th>真の $g$</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>7.25</td><td>1360</td><td>$-3.721$</td><td>0.147</td><td>$-3.912$</td><td>0.198</td><td>$-3.426$</td><td>$-3.469$</td></tr>
+<tr><td>2</td><td>7.00</td><td>1400</td><td>$-3.371$</td><td>0.104</td><td>$-3.426$</td><td>0.074</td><td>$-3.665$</td><td>$-3.588$</td></tr>
+<tr><td>3</td><td>7.00</td><td>1310</td><td>$-3.532$</td><td>0.089</td><td>$-3.426$</td><td>0.0050</td><td>$-3.482$</td><td>$-3.408$</td></tr>
+<tr><td>4</td><td>7.00</td><td>1320</td><td>$-3.487$</td><td>0.046</td><td>$-3.426$</td><td>0.0019</td><td>$-3.431$</td><td>$-3.401$</td></tr>
+<tr><td>5</td><td>7.00</td><td>1320</td><td>$-3.463$</td><td>0.035</td><td>$-3.426$</td><td>0.0025</td><td>$-3.248$</td><td>$-3.401$</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure id="fig28-5">
+<img src="figs/ch28_fig28-5.svg" alt="横軸に添加量，縦軸に焼成温度をとった 上下 2 段の等高線図．上は 40 点で学習したガウス過程の予測平均，下は予測の標準偏差．灰色の白抜きの丸が既存の 40 点，朱色の四角が追加の 5 点で，番号 1 から 5 はいずれも添加量 7 mol% 付近，温度 1310 から 1400 °C に集まっている．下の図では標準偏差は添加量 0 や 10 の端，温度 1400 °C の角で大きい．" style="max-width:440px;width:100%">
+<figcaption>図28.5　(a) 既存の 40 点（○）で学習したガウス過程の予測平均 $\mu_*$，(b) 潜在関数の予測標準偏差 $\sigma_*$ の等高線．■ はベイズ最適化で選んだ追加の 5 点（番号は選んだ順．4 回目と 5 回目は同じ条件）．真の最大（$c=7.0$ mol%，$T=1325$ °C）は 3〜5 回目の点のすぐ近くにある．教育用の合成データ（28.1 節）．</figcaption>
+</figure>
+
+<p>各回の理由を，表の数で説明する．</p>
+<ol>
+  <li><strong>1 回目</strong>（7.25 mol%，1360 °C）：予測平均が最大の点（$\mu_*=-3.721$）であり，しかも幅 $\sigma_*=0.147$ も小さくない．$d=\mu_*-f_{\mathrm{best}}=0.191$ と平均で既に最良値を上回るので，EI は 0.198 と大きい．B4 と B5 の間の，誰も測っていない領域である．標準偏差が最大の点（$c=0$，$T=1400$ °C，$\sigma_*=0.329$）は予測平均が $-4.917$ と低く，EI は $1\times10^{-4}$ しかない（例題28.6）．観測値は $-3.426$ で，最良値を一気に 0.49 更新した．</li>
+  <li><strong>2 回目</strong>（7.00 mol%，1400 °C）：1 回目の結果を受けて，代理モデルは「高温側でさらに高い」と予測した（$\mu_*=-3.371$）．範囲の端であり，外挿に近い予測である．観測値は $-3.665$ で外れた（真の値 $-3.588$．温度の山の頂上 1325 °C を越えていた）．</li>
+  <li><strong>3〜5 回目</strong>：2 回目の結果で山の頂上が 1300 °C 台にあることが分かり，$c=7.0$ mol% の 1310〜1320 °C を測った．EI は 0.002〜0.005 とどこでも小さく，<strong>改善の見込みはもう大きくない</strong>ことを示している．4 回目と 5 回目は同じ条件を選んだ．ノイズがあるので，同じ点を繰り返し測ることにも意味がある（第13章 <a href="ch13_bayesian_optimization.html#sec13-7">13.7</a>）．</li>
+</ol>
+
+<p>5 回の後の推奨点は，観測値が最大の 5 回目（7.00 mol%，1320 °C，$y=-3.248$）である．その真の値は $-3.401$ で，単純後悔は 0.0009，出発時の 0.372 から大きく下がった．ただし観測値 $-3.248$ そのものは真の値より 0.153 高い．観測値の最大を選ぶと，運良く高く出た値が選ばれやすいからである（28.9 節，例題28.9）．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.6　1 回目の EI を手で計算する</p>
+<p>1 回目の時点で $f_{\mathrm{best}}=-3.912$ である．候補 A（7.25 mol%，1360 °C）は $\mu_*=-3.7209$，$\sigma_*=0.1467$，候補 B（0 mol%，1400 °C）は $\mu_*=-4.9170$，$\sigma_*=0.3290$ である．式 \eqref{eq:28-ei} で両者の EI を求めよ．$\Phi(1.302)=0.9036$，$\Normal(1.302\mid0,1)=0.1709$，$\Phi(-3.054)=0.00113$，$\Normal(-3.054\mid0,1)=0.00376$ を使ってよい．</p>
+<p><strong>解答</strong>　候補 A：$d=-3.7209-(-3.912)=0.1911$，$z=0.1911/0.1467=1.302$．</p>
+$$
+\begin{aligned}
+\mathrm{EI}_{\mathrm A}&=0.1911\times0.9036+0.1467\times0.1709\\
+&=0.1727+0.0251=0.198.
+\end{aligned}
+$$
+<p>候補 B：$d=-4.9170+3.912=-1.005$，$z=-1.005/0.3290=-3.054$．</p>
+$$
+\begin{aligned}
+\mathrm{EI}_{\mathrm B}&=-1.005\times0.00113\\
+&\quad+0.3290\times0.00376\\
+&=-0.00114+0.00124\\
+&=0.00010.
+\end{aligned}
+$$
+<p>B は幅が A の 2 倍以上あるが，平均が最良値より 1 桁も低いので，「幅の分だけ運良く上回る」見込みがほとんどない．EI は A が B の約 2000 倍で，A が選ばれる．</p>
+</div>
+
+<h3>28.6.3 ランダム探索・格子探索と多数の seed で比べる</h3>
+
+<p>1 回の実行がうまくいったことは，方法が良いことの証明にはならない（第13章 <a href="ch13_bayesian_optimization.html#sec13-8">13.8</a>）．そこで次の比較を 200 回繰り返した．</p>
+<ul>
+  <li>繰り返し $r$（$r=0,\dots,199$）ごとに，28.1 節と同じ作り方で 40 点のデータを作り直す（seed $20261112+1000+r$）．出発点のデータもバッチのずれも毎回違う．</li>
+  <li>同じ 40 点から，<strong>ベイズ最適化</strong>（上の設定），<strong>ランダム探索</strong>（$c$ と $T$ を一様乱数で選ぶ），<strong>格子</strong>（あらかじめ決めた 5 点：$(c,T)=(2.5,1100)$，$(2.5,1300)$，$(7.5,1100)$，$(7.5,1300)$，$(5.0,1200)$）で追加実験をする．観測の乱数はそれぞれ seed $20261112+r$，$20261112+100000+r$，$20261112+200000+r$．</li>
+  <li>ベイズ最適化とランダム探索は 10 回まで続け，各回の単純後悔を記録する．</li>
+</ul>
+
+<figure id="fig28-6">
+<img src="figs/ch28_fig28-6.svg" alt="横軸に追加実験の回数 0 から 10，縦軸に単純後悔をとった図．ベイズ最適化の中央値は 0 回目の 0.62 から 1 回目で 0.07 に下がり，10 回目で 0.02．ランダム探索の中央値は 0.62 から 10 回目の 0.42 までゆっくり下がる．格子 5 点の中央値は 0.20．四分位範囲の帯は，ベイズ最適化が塗り，ランダム探索が斜線．" style="max-width:640px;width:100%">
+<figcaption>図28.6　追加実験の回数と単純後悔（200 回の繰り返しの中央値と四分位範囲）．実線と塗りはベイズ最適化（EI），破線と斜線はランダム探索，▲ は格子 5 点の中央値．繰り返しごとに出発点の 40 点も作り直した（seed は本文 28.6.3 項）．教育用の合成データ（28.1 節）．</figcaption>
+</figure>
+
+<div class="tablewrap">
+<table id="tab28-7">
+<caption>表28.7　単純後悔の中央値 [第 1 四分位，第 3 四分位]（200 回の繰り返し）</caption>
+<thead><tr><th>方法</th><th>出発時（40 点）</th><th>追加 5 回</th><th>追加 10 回</th></tr></thead>
+<tbody>
+<tr><td>ベイズ最適化（EI）</td><td rowspan="3">0.615 [0.482, 0.694]</td><td>0.043 [0.008, 0.070]</td><td>0.022 [0.008, 0.045]</td></tr>
+<tr><td>ランダム探索</td><td>0.531 [0.373, 0.641]</td><td>0.423 [0.176, 0.571]</td></tr>
+<tr><td>格子（5 点）</td><td>0.201 [0.201, 0.201]</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>このデータでは，ベイズ最適化の差は大きい．追加 5 回の単純後悔の中央値は 0.043 で，ランダム探索（0.531）の約 12 分の 1，格子（0.201）の約 5 分の 1 である．同じ繰り返しどうしで比べると，ベイズ最適化の方が小さかったのはランダム探索に対して 200 回中 194 回（97.0 %），格子に対して 199 回（99.5 %）である．逆に言えば，<strong>3 % の繰り返しではランダム探索に負けている</strong>．この 97 % を，ベイズ最適化一般の勝率と読んではいけない．第13章のデータ C（1 次元，初期点 3 個，予算 20 回，<a href="ch13_bayesian_optimization.html#sec13-8">13.8</a>）では，代理モデルが合っていても勝ったのは約 8 割で，約 2 割の繰り返しで負けた．勝つ割合は次元・予算・出発点のデータで変わる．本章の設定は，2 次元の範囲を 5 回しか試せないランダム探索に特に不利で（次の段落），ベイズ最適化の側は出発点の 40 点から代理モデルのハイパーパラメーターを周辺尤度で決められる（第13章の比較は初期点 3 個で長さスケールを固定した）．</p>
+
+<p>格子の結果は四分位範囲の幅が 0 である．格子の 5 点のうち $(7.5,1300)$ の真の値は $g=-3.601$ で，200 回中 198 回でこの点の観測値が 45 点中の最大になったため，後悔は $-3.400-(-3.601)=0.201$ になった（残りの 2 回はノイズのため別の点が最大になり，後悔は 0.40 と 0.48）．格子は配置を決めた時点で結果がほぼ決まる．真の最大の近くに格子点があるかどうかという「配置の運」に依存する方法である．</p>
+
+<p>ランダム探索がほとんど進まないのは，2 次元の範囲（10 mol% × 400 °C）の中で，真の最大の近くに当たる確率が小さいからである．たとえば $\abs{c-7.0}\le0.5$ mol% かつ $\abs{T-1325}\le50$ °C の範囲（面積の比 $1/10\times100/400=0.025$）に 5 回のうち 1 回でも入る確率は $1-0.975^{5}=0.12$ しかない．1 次元のデータ C（第13章）より次元が 1 つ増えただけで，当てずっぽうはずっと難しくなる．</p>
+
+<!-- ============================================================ -->
+<h2 id="sec28-7">28.7 失敗例と改善<span class="route-tag adv">詳しいルート</span></h2>
+
+<p>ここまでの手順の要所を一つずつ壊して，何が起こるかを数値で見る．結果を <a href="#tab28-8">表28.8</a> にまとめる．</p>
+
+<div class="tablewrap">
+<table id="tab28-8">
+<caption>表28.8　失敗例と，正しい手順との比較（本章のデータ 40 点）</caption>
+<thead><tr><th>失敗</th><th>数値（正しい手順 → 失敗した手順）と起こること</th></tr></thead>
+<tbody>
+<tr><td>(a) 入力の標準化を全データで</td><td>バッチ単位の RMSE：多項式 0.334 → 0.333，カーネル Ridge 0.337 → 0.338，GP 0.253 → 0.253．このデータではほとんど変わらない</td></tr>
+<tr><td>(b) バッチをまたいでランダム分割</td><td>GP の RMSE 0.253 → 0.102，被覆率 0.70 → 0.95．誤差が 2.5 倍小さく，区間が正しく見える</td></tr>
+<tr><td>(c) 訓練範囲の外（$T&gt;1400$ °C）</td><td>1600 °C で真の値 $-4.70$ に対し，多項式 $-1.06$，GP $-4.31$（$\sigma_*=0.35$）．多項式は 3.6 桁高い伝導度を予測する</td></tr>
+<tr><td>(d) ノイズの $\sigma$ を 0.01 に決め打ち</td><td>ランダム分割の被覆率 0.95 → 0.55．区間の幅が約 3 分の 1 になり，半分近くが外れる</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>28.7.1 (a) 標準化を全データで行う</h3>
+
+<p>各回の標準化の平均と標準偏差を，検証のバッチも含む 40 点全部で計算した．バッチ単位の分割での RMSE は，多項式＋Ridge で 0.334 → 0.333，カーネル Ridge で 0.337 → 0.338，ガウス過程では 7 桁目まで同じ（0.2527）だった．多項式とカーネル Ridge の差は 0.002 以下で，向きもそろわない（多項式は少し良く，カーネル Ridge は少し悪くなる）．<strong>このデータでは，標準化の漏洩の影響は無視できる</strong>．</p>
+
+<p>理由は，標準化が入力の平行移動と拡大縮小にすぎず，モデルがそれを打ち消せるからである．ガウス過程は長さスケールを周辺尤度で選び直すので，目盛りが少し変わっても $\ell_c/s_c$ が同じになるように $\ell_c$ が動き，予測はまったく同じになる．多項式とカーネル Ridge は，罰則や長さスケールの候補が格子の上の離散的な値なので，少しだけ変わる．</p>
+
+<p>それでも手順としては誤りである．例題28.4 で見たように，検証点が訓練範囲からどれだけ離れているかの尺度が変わる．また，同じ「全データで fit」でも，特徴量選択のように目標値を使う前処理では，第6章 <a href="ch06_generalization.html#sec6-7">6.7</a> の数値実験のように $R^{2}$ が $-0.44$ から 0.46 へ化けるほどの影響が出る．<strong>影響が小さいことは，計算して確かめて初めて言える</strong>．確かめていないなら，訓練データだけで fit する手順を守る．</p>
+
+<h3>28.7.2 (b) バッチをまたいでランダムに分割する</h3>
+
+<p>28.4〜28.5 節で見たとおり，ガウス過程の RMSE は 0.253 から 0.102 に，被覆率は 0.70 から 0.95 になる．どちらの数字も「仲間のいるバッチの中での内挿」の性能であり，新しいバッチの予測には当てはまらない．<strong>直し方</strong>は，評価の分割をモデルの使い道（次のバッチ）に合わせることである．報告にはどちらの分割で評価したかを必ず書く．</p>
+
+<h3>28.7.3 (c) 訓練範囲の外を予測させる</h3>
+
+<p>40 点全部で学習したモデルで，$c=7.0$ mol% の断面を 1600 °C まで延ばして予測した（<a href="#fig28-7">図28.7</a>）．多項式は次数 3，$\lambda=1$ の例である（内側をランダムに分けると次数 3〜4 が選ばれることがあった．28.4 節）．</p>
+
+<figure id="fig28-7">
+<img src="figs/ch28_fig28-7.svg" alt="横軸に焼成温度 1000 から 1600 °C，縦軸に添加量 7.0 mol% での y をとった図．1400 °C より右の灰色の領域が訓練範囲の外．真の関数（灰色の破線）は 1325 °C で最大になり，その後下がる．ガウス過程の予測平均（実線）は真の関数のやや下を通り，範囲の外で帯が広がる．次数 3 の多項式（一点鎖線）は範囲の外で急に上がり，1600 °C で −1 付近に達する．" style="max-width:640px;width:100%">
+<figcaption>図28.7　訓練範囲の外への予測（$c=7.0$ mol% の断面）．実線と塗りはガウス過程の予測平均と潜在関数の帯 $\mu_*\pm2\sigma_*$，一点鎖線は次数 3 の多項式＋Ridge（$\lambda=1$），灰色の破線は真の関数 \eqref{eq:28-true}．灰色の領域（$T&gt;1400$ °C）は訓練範囲の外．どちらのモデルも 40 点全部で学習した．教育用の合成データ（28.1 節）．</figcaption>
+</figure>
+
+<p>真の値は 1400 °C の $-3.588$ から 1600 °C の $-4.702$ へ下がる．多項式は逆に $-4.068$ から $-1.059$ へ急上昇し，1600 °C で真の値より 3.6 桁（伝導度で約 4400 倍）高い．3 次の項 $\tilde{T}^{3}$ が範囲の外で急に大きくなるからである（例題28.7）．ガウス過程の予測平均は 1600 °C で $-4.310$ と真の値に近い側へ戻り，$\sigma_*$ が 0.221（1400 °C）から 0.354（1600 °C）へ広がって「分からない」と示す．ただしガウス過程がここで当たったのは，平均関数（観測値の平均 $-4.72$）へ戻る性質が，たまたま真の関数の下がり方と同じ向きだったからにすぎない（第12章 <a href="ch12_gaussian_process.html#sec12-10">12.10</a>）．もし実際の伝導度が 1400 °C の外でさらに上がる系なら，ガウス過程も外れる．<strong>直し方</strong>は，候補を訓練範囲（あるいは物理的に意味のある範囲）の中に限ることと，範囲の外の候補を選ぶときは「外挿である」と明記し，まずその範囲の近くで確かめる実験を入れることである．28.6 節の 2 回目の候補が範囲の端（1400 °C）で外れたのは，この問題の小さな例である．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.7　3 次の項は範囲の外でどれだけ大きくなるか</p>
+<p>40 点全部の標準化では $\bar{T}=1173.75$ °C，$s_T=111.82$ °C である．(1) 訓練データの最高温度 1380 °C と，1600 °C での $\tilde{T}$ と $\tilde{T}^{3}$ を求めよ．(2) 多項式の $\tilde{T}^{3}$ の係数は $w=0.0433$ である．この項だけで，1380 °C と 1600 °C の予測はどれだけ違うか．</p>
+<p><strong>解答</strong>　(1) 1380 °C：$\tilde{T}=(1380-1173.75)/111.82$ $=206.25/111.82=1.844$，$\tilde{T}^{3}=6.28$．1600 °C：$\tilde{T}=426.25/111.82=3.812$，$\tilde{T}^{3}=55.4$．</p>
+<p>(2) $0.0433\times(55.4-6.28)$ $=0.0433\times49.1=2.13$．この 1 項だけで 2 桁以上予測が上がる．訓練範囲の中では $\abs{\tilde{T}^{3}}\le6.3$ で目立たなかった項が，範囲の外では 9 倍近くになる．多項式の外挿は，最高次の項が支配する．</p>
+</div>
+
+<h3>28.7.4 (d) ノイズを小さく決め打ちして過信する</h3>
+
+<p>「この装置の再現性は 0.01 桁だから」とノイズの標準偏差を $\sigma=0.01$ に決め打ちし，他のハイパーパラメーターは周辺尤度で選んだまま使ったとする．ランダム 5 分割では，観測値の予測標準偏差 $s_n$ の中央値が 0.096 から 0.035 に縮み，被覆率は 0.95 から <strong>0.55</strong> に落ちた．RMSE も 0.102 から 0.133 に悪化した（予測平均がノイズを拾って揺れるため）．同じ作り方の 100 組で見ても，被覆率の平均はランダム分割で 0.468，バッチ単位で 0.611 である．</p>
+
+<p>この失敗の根は，<strong>測定の再現性と，モデルから見たノイズは別物</strong>だということにある．モデルから見たノイズには，同じ試料を測り直したときのばらつきだけでなく，試料の作り直しのばらつき，入力に記録されていない要因（バッチのずれ），モデルの形の不足まで入る．<strong>直し方</strong>は，$\sigma$ を周辺尤度でデータから推定し（第12章 <a href="ch12_gaussian_process.html#sec12-7">12.7</a>），さらに被覆率で確かめることである．ベイズ最適化でも，$\sigma$ が小さすぎる代理モデルは観測値をそのまま通ろうとして，ノイズで高く出た点の周りに集まりやすくなる（第13章 <a href="ch13_bayesian_optimization.html#sec13-7">13.7</a>）．</p>
+
+<!-- ============================================================ -->
+<h2 id="sec28-8">28.8 再現できる条件と報告の書き方<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.8.1 何を残せば再現できるか</h3>
+
+<p>本章の数値は，公開した台本を実行し直すと同じ値が出る．そのために次のことをした．</p>
+<ul>
+  <li><strong>乱数の seed を明記し，引く順番を固定した</strong>：データの生成は <code>default_rng(20261112)</code> で，バッチのずれ → 各バッチの $c$，$T$，$\varepsilon$ の順．ランダム 5 分割は seed 20261112 の並べ替え．比較の繰り返しの seed は 28.6.3 項のとおり．</li>
+  <li><strong>ライブラリーの版を書いた</strong>：Python 3.12.13，numpy 2.5.4，scipy 1.18.1．最適化（L-BFGS-B）や線形代数の結果は版や計算機によって最後の桁が変わりうるので，再現の確認は「表の桁まで一致するか」で行う．</li>
+  <li><strong>分割を保存できる形にした</strong>：バッチ単位の分割は CSV の <code>batch</code> 列そのもの．ランダム分割は seed から作り直せる．実際の研究では，各試料がどの組に入ったかを列として保存しておくのがよい．</li>
+  <li><strong>ハイパーパラメーターの候補と選び方を書いた</strong>：多項式の $(d,\lambda)$，カーネル Ridge の $(\ell,\lambda)$ の格子，ガウス過程の探索範囲と出発点（台本の <code>GP.fit</code>）．</li>
+  <li><strong>点検で直した内容を記録した</strong>：表28.1．元の CSV は書き換えず，台本の中で直す．</li>
+</ul>
+<p>台本の全体の実行（多数の seed の比較を含む）は，手元の計算機の CPU 1 つで約 2 分かかった．</p>
+
+<h3>28.8.2 報告の点検表</h3>
+
+<p>機械学習を使った材料探索の結果を報告するときの点検表を <a href="#tab28-9">表28.9</a> に示す．データを他の人が見つけ，読み，使い直せるようにするという考え方は，FAIR 原則（Findable，Accessible，Interoperable，Reusable．Wilkinson et al., 2016）としてまとめられている．材料科学での機械学習の報告の注意は Wang et al. (2020) にも整理されている．</p>
+
+<div class="tablewrap">
+<table id="tab28-9">
+<caption>表28.9　報告の点検表（本章の答え）</caption>
+<thead><tr><th>項目</th><th>書くこと</th><th>本章の答え</th></tr></thead>
+<tbody>
+<tr><td>データ</td><td>出所，件数，単位，点検と処置，グループの構造</td><td>合成データ 42 行 → 40 点，5 バッチ（28.1 節）</td></tr>
+<tr><td>分割</td><td>方法と単位，seed，選んだ理由</td><td>バッチ単位（主），ランダム（比較）</td></tr>
+<tr><td>基準</td><td>平均で答えるモデルなどの誤差</td><td>RMSE 0.326（バッチ単位）</td></tr>
+<tr><td>モデル</td><td>候補，ハイパーパラメーターの選び方，前処理</td><td>入れ子の交差検証，周辺尤度</td></tr>
+<tr><td>評価</td><td>指標（単位つき），ばらつき，不確かさの較正</td><td>RMSE 0.253，回ごとの標準誤差 0.051，被覆率 0.70</td></tr>
+<tr><td>提案</td><td>獲得関数，候補の範囲，各回の理由</td><td>EI，格子 1681 点，表28.6</td></tr>
+<tr><td>比較</td><td>単純な方法との比較を多数の seed で</td><td>表28.7（200 回）</td></tr>
+<tr><td>再現</td><td>コード，seed，版，実行時間</td><td>28.8.1 項</td></tr>
+<tr><td>限界</td><td>言えないこと，外挿の有無</td><td>28.9 節</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題28.8　交差検証の誤差にばらつきを添える</p>
+<p>ガウス過程のバッチ単位の分割で，検証したバッチごとの RMSE は B1 から順に $0.076,\ 0.304,\ 0.175,\ 0.228,\ 0.372$ だった．(1) 5 つの平均と標準偏差（$n-1$ で割る），平均の標準誤差を求めよ．(2) 40 点全体で計算した RMSE 0.253 と (1) の平均が違う理由を述べよ．(3) 報告ではどう書くのがよいか．</p>
+<p><strong>解答</strong>　(1) 和は $0.076+0.304+0.175$ $+0.228+0.372=1.155$ で，平均は $0.231$．偏差は $(-0.155,\ 0.073,\ -0.056,\ -0.003,\ 0.141)$，二乗の和は $0.02403+0.00533+0.00314$ $+0.00001+0.01988=0.05239$ で，標準偏差は $\sqrt{0.05239/4}=\sqrt{0.01310}=0.114$．標準誤差は $0.114/\sqrt5=0.051$．</p>
+<p>(2) 40 点全体の RMSE は，二乗誤差を 40 点で平均してから平方根をとる．バッチごとの RMSE の平均は，平方根をとってから平均する．平方根は上に凸の関数なので，平均の平方根は平方根の平均以上になる（Jensen の不等式．<a href="appA_math.html#secA-9">付録A A.9</a>）．誤差の大きいバッチ（B5，B2）があるほど差が開く．</p>
+<p>(3) たとえば「バッチ単位の 5 分割で RMSE 0.25 桁（バッチごとの値は 0.08〜0.37，平均 0.23 ± 0.05（標準誤差））」と，分割の方法とばらつきを添えて書く．5 つしかバッチがないので，誤差の見積もりそのものが ±0.05 程度不確かであることを読者に伝える．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-9">28.9 結果の解釈と限界<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>28.9.1 合成データで言えること・言えないこと</h3>
+
+<p>本章の合成データで言えるのは，<strong>この作り方のデータ</strong>（2 つの山，バッチのずれ 0.08，ノイズ 0.05，偏った条件の配置）では，という条件つきの結論である．</p>
+<ul>
+  <li>言えること：バッチをまたいだランダム分割は誤差と不確かさを楽観的に見せる．ガウス過程の 95 % 区間は新しいバッチに対して狭すぎることがあり，バッチ項で改善する．EI によるベイズ最適化は，5 回の追加で，同じ予算のランダム探索・格子よりずっと真の最大に近づく（同じ繰り返しどうしでランダム探索より後悔が小さかったのは 200 回中 194 回．ただし勝つ割合は問題で変わり，第13章の 1 次元の例では約 8 割）．</li>
+  <li>言えないこと：実在の固体電解質でもベイズ最適化が 5 回で最適条件に届くこと．ガウス過程が他のモデルより常に良いこと．単純後悔のような「真の最大との差」は，真の関数が分からない実際の研究では計算できない．</li>
+</ul>
+<p>合成データの価値は，<strong>答えを知っている状況で手順を試せる</strong>ことにある．手順の誤り（漏洩，分割，外挿）は，真の関数を知っているからこそ数値で示せた．</p>
+
+<h3>28.9.2 推奨点の観測値は高めに出る</h3>
+
+<p>28.6 節の推奨点の観測値 $-3.248$ は，真の値 $-3.401$ より 0.153 高い．これは偶然ではなく，「観測値が最大の点を選ぶ」という手順そのものが生む偏りである．複数の点の観測値にはノイズが乗っており，その最大を選べば，ノイズが正に出た点が選ばれやすい．報告する値としては，推奨点で測り直した値の平均か，ガウス過程の予測平均（5 回目の後の推奨点では $\mu_*$ はノイズをならした値になる）を使う方が正直である．</p>
+
+<div class="box ex">
+<p class="box-title">例題28.9　最大を選ぶと高めに出る量</p>
+<p>(1) 真の値が等しい 2 つの条件を 1 回ずつ測り，大きい方の観測値を報告する．観測の誤差が $\Normal(0,s^{2})$ で独立なとき，報告値の誤差の期待値は $s/\sqrt{\pi}$ である．新しいバッチで 1 回ずつ測る場合（$s=\sqrt{0.08^{2}+0.05^{2}}$）の値を求めよ．(2) 伝導度の測定に，すべての試料に共通して 1.5 倍の系統誤差（電極の接触の問題など）があるとき，$y$ はどれだけずれるか．ベイズ最適化が選ぶ点は変わるか．</p>
+<p><strong>解答</strong>　(1) $s=\sqrt{0.0064+0.0025}=0.0943$，$s/\sqrt{\pi}=0.0943/1.7725=0.053$．2 点から最大を選ぶだけで，平均 0.053 桁高く報告することになる．候補が多いほどこの偏りは大きくなる．</p>
+<p>(2) $\log_{10}(1.5\,\sigma_{\mathrm{ion}})$ $=\log_{10}\sigma_{\mathrm{ion}}+\log_{10}1.5$ なので，$y$ はすべて $0.176$ だけ上にずれる．全点に共通の定数のずれは，ガウス過程では平均関数 $m$（観測値の平均）が吸収し，$\mu_*-f_{\mathrm{best}}$ も $\sigma_*$ も変わらないので，選ぶ点は変わらない．しかし報告する伝導度の値は 1.5 倍に誤る．系統誤差が条件によって違う（たとえば高温で焼いた緻密な試料ほど接触が良い）なら，選ぶ点まで変わる．</p>
+</div>
+
+<h3>28.9.3 実データで増える問題</h3>
+
+<ul>
+  <li><strong>測定の系統誤差</strong>：電極の付け方，測定温度・雰囲気，粒界と粒内の寄与の分け方（交流インピーダンスの解析の仕方）で伝導度は変わる．バッチのずれと同じく，記録されていない要因として目標値に乗る．</li>
+  <li><strong>条件の記録漏れ</strong>：昇温速度，保持時間，原料のロット，粉砕の条件などが記録されていないと，それらの違いはすべて「ノイズ」か「バッチのずれ」に見える．記録しておけば入力に加えられる．</li>
+  <li><strong>報告されない失敗</strong>：割れた試料，相が出なかった試料，測定できなかった試料はデータに残りにくい．本章の B3-09 のように欠測を黙って除くと，「失敗しやすい条件」の情報が失われ，モデルはその条件を楽観的に予測する．失敗も行として残し，理由を列に書く．</li>
+  <li><strong>条件の空間の外</strong>：実際の材料探索では，組成の空間が数次元以上になり，候補の格子は作れない．第13章 <a href="ch13_bayesian_optimization.html#sec13-10">13.10</a> の実際上の注意（獲得関数の最大化，次元，制約，並列実験）がそのまま問題になる．</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="sec28-10">28.10 誤解しやすい点と適用限界<span class="route-tag adv">詳しいルート</span></h2>
+
+<div class="box warn">
+<p class="box-title">注意：「交差検証の誤差が小さい」は「次の実験でも当たる」ではない</p>
+<p>交差検証の誤差は，分割の仕方が想定している「新しさ」についての誤差である．ランダム分割はバッチの中の内挿を，バッチ単位の分割は新しいバッチへの予測を測る．本章のガウス過程では両者が 2.5 倍違った（表28.4）．次の実験が新しいバッチ・新しい組成系なら，それに合わせた分割の誤差だけが目安になる．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：予測の幅は「モデルが正しければ」の幅である</p>
+<p>ガウス過程の $\sigma_*$ は，カーネルの形・ノイズの構造・ハイパーパラメーターの値がすべて正しいときの不確かさである．本章では，バッチのずれを無視しただけで，名目 95 % の区間が 70 % しか当たらなかった（表28.5）．幅を使って判断する前に，被覆率で確かめる．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：1 回の探索の成功は方法の優秀さの証明ではない</p>
+<p>28.6 節の 1 回の実行では単純後悔が 0.0009 まで下がったが，200 回の繰り返しでは 3 % の回でランダム探索に負けた．方法を比べるときは，多数の seed での中央値と四分位範囲で比べる．実際の研究では繰り返しができないので，合成データでの比較は「その方法がどの程度うまくいきうるか」の目安にすぎない．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：外れ値を「極端だから」除かない</p>
+<p>B5-08 は頑健な $z$ が 3.37 で外れ値の候補に見えたが，伝導度の高い条件を測った「良い」試料だった．探索の目的では，極端に良い値こそが手がかりである．除いてよいのは記録の誤りなど理由が分かったものだけで，除いたことは記録に残す．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：ベイズ最適化は代理モデルの仮定を受け継ぐ</p>
+<p>EI は代理モデルの予測平均と幅から計算される．範囲の端で予測が外挿になれば，候補もそこへ引き寄せられる（28.6 節の 2 回目）．ノイズを小さく見積もれば，幅が狭すぎて探索が早く打ち切られる（28.7.4 項）．候補の範囲・ノイズ・長さスケールの推定を確かめずに出した提案は，根拠の弱い提案である．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題28.10　いくつも試して最良を報告すると</p>
+<p>5 つのモデルの真の RMSE がどれも 0.25 で，交差検証による見積もりがそれぞれ独立に $\Normal(0.25,\ 0.02^{2})$ に従うとする．交差検証の値が最も小さいモデルを選び，その値をそのまま報告する．報告値の期待値を求めよ．標準 Gauss 分布に従う独立な 5 個の最大値の期待値は 1.163 である．</p>
+<p><strong>解答</strong>　見積もりを $0.25+0.02\,z_i$（$z_i\sim\Normal(0,1)$ 独立）と書くと，最小値は $0.25+0.02\min_iz_i$．$\min_iz_i=-\max_i(-z_i)$ で，$-z_i$ も標準 Gauss 分布に従うので $\Ex[\min_iz_i]=-1.163$．よって報告値の期待値は</p>
+$$
+0.25-0.02\times1.163=0.227
+$$
+<p>で，どのモデルも真の性能は同じなのに，約 0.023（約 9 %）良く報告される．選択に使った交差検証の値を，そのまま性能として報告してはいけない．性能の報告には，選択に使っていないデータ（入れ子の外側やテストデータ）での値を使う．本章の表28.4 は外側の値なので，この偏りを含まない．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec28-11">28.11 まとめ・次章への接続・演習・参考文献</h2>
+
+<h3>28.11.1 まとめ</h3>
+<ul>
+  <li><strong>点検</strong>：単位・範囲・欠測・重複・外れ値・グループの構造の順に確かめ，直した内容を記録する．外れ値は理由がない限り除かない（表28.1）．</li>
+  <li><strong>分割</strong>：評価の分割は，モデルを使う場面の「新しさ」に合わせる．次のバッチを予測するならバッチ単位．ランダム分割はガウス過程の RMSE を 0.253 から 0.102 へ，被覆率を 0.70 から 0.95 へ楽観的に見せた．</li>
+  <li><strong>基準</strong>：平均で答えるモデルの誤差（バッチ単位で RMSE 0.326）を超えたのはガウス過程だけだった．</li>
+  <li><strong>不確かさ</strong>：被覆率（式 \eqref{eq:28-coverage}）で予測の幅を確かめる．バッチのずれは共分散 $\bm{K}+\sigma_b^{2}\bm{Z}\bm{Z}^{\tp}+\sigma^{2}\bm{I}$ に入れられ，新しいバッチの予測分散は $\sigma_*^{2}+\sigma_b^{2}+\sigma^{2}$ になる．</li>
+  <li><strong>提案</strong>：EI で 1 点ずつ選ぶと，5 回で単純後悔は 0.372 から 0.0009 へ下がった．200 回の比較では中央値 0.043 で，ランダム探索 0.531，格子 0.201 より小さい．</li>
+  <li><strong>失敗例</strong>：漏洩の影響は計算して確かめる．範囲の外の予測は多項式で大きく外れる．ノイズの決め打ちは区間を狭すぎにする．</li>
+  <li><strong>報告</strong>：seed，版，分割，ハイパーパラメーター，ばらつき，限界を書く（表28.9）．</li>
+</ul>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+&\bm{K}_y=\bm{K}+\sigma_b^{2}\bm{Z}\bm{Z}^{\tp}\\
+&\qquad+\sigma^{2}\bm{I},\\
+&\Var[y_*\mid\data]\\
+&\quad=\sigma_*^{2}+\sigma_b^{2}+\sigma^{2}
+\end{aligned} \label{eq:28-key}
+\end{equation}
+</div>
+
+<h3>28.11.2 次章への接続</h3>
+<p>本章で本文は終わる．続く付録では，本文で使った数学の道具（ベクトルによる微分，固有値分解と特異値分解，ブロック行列と多変量 Gauss 分布の条件付き分布，Cholesky 分解と条件数など）を<a href="appA_math.html">付録A</a>に，記号と用語の対照を<a href="appB_notation.html">付録B</a>に，演習の解答を<a href="appC_solutions.html">付録C</a>にまとめる．材料科学と機械学習の関係を統計力学の側から見直したい読者は，<a href="ch27_materials_statmech.html">第27章</a>に戻るとよい．</p>
+
+<h3>28.11.3 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習28.1　2 回目の EI（計算）</p>
+<p>表28.6 の 2 回目の候補（7.00 mol%，1400 °C）は，$\mu_*=-3.371$，$\sigma_*=0.104$，$f_{\mathrm{best}}=-3.426$ だった．式 \eqref{eq:28-ei} で EI を計算し，表の値と比べよ．また，この点の予測平均は最良値を上回っているのに，EI が 1 回目（0.198）より小さい理由を説明せよ．</p>
+<p><em>ヒント：</em>$z=0.529$，$\Phi(0.529)=0.7015$，$\Normal(0.529\mid0,1)=0.3469$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-1">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習28.2　バッチ項つきの共分散（導出）</p>
+<p>28.5.2 項のモデルで，(1) 同じバッチ・同じ条件 $\bm{x}$ で合成した 2 試料の観測値の共分散と相関係数を，$\sigma_f^{2}$（$k(\bm{x},\bm{x})=\sigma_f^{2}$），$\sigma_b^{2}$，$\sigma^{2}$ で表せ．(2) 違うバッチ・同じ条件ならどうなるか．(3) 平均関数を定数 $m$ とするとき，バッチ項ありの対数周辺尤度を，第12章の対数周辺尤度の式にならって書け．</p>
+<p><em>ヒント：</em>(3) は $\bm{y}$ の周辺分布 $\Normal(\bm{y}\mid m\bm{1},\bm{K}_y)$ の対数をとる．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-2">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習28.3　予測の誤差を伝導度の言葉に直す（材料の題材）</p>
+<p>(1) バッチ単位の分割でのガウス過程の RMSE 0.253 は，伝導度の比では典型的に何倍の誤差か．(2) 28.6 節の推奨点の観測値 $y=-3.248$ と真の値 $-3.401$ を伝導度（S cm$^{-1}$）に直し，報告値が何倍高いかを求めよ．(3) 「添加量 7 mol%，1320 °C で $5.7\times10^{-4}$ S cm$^{-1}$ を達成した」と報告する前に，何をすべきか．</p>
+<p><em>ヒント：</em>$\log_{10}$ の差 $\Delta$ は伝導度の比 $10^{\Delta}$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-3">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習28.4　基準試料を各バッチに入れる（材料の題材）</p>
+<p>新しい条件 A と，既に測った条件 R（基準試料）の伝導度の差を知りたい．観測は式 \eqref{eq:28-obs} に従い，$\sigma_b=0.08$，$\sigma=0.05$ とする．(1) A を新しいバッチで 1 試料，R を別のバッチで 1 試料測って差をとるとき，差の標準偏差はいくらか．(2) A と R を同じバッチで 1 試料ずつ焼いて差をとるときはどうか．(3) この結果から，追加実験の計画（1 バッチに何を入れるか）について何が言えるか．ベイズ最適化の代理モデルの側では，どう扱えばよいか．</p>
+<p><em>ヒント：</em>同じバッチなら $u_j$ が打ち消し合う．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-4">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習28.5　seed を変えてやり直す（データと台本を使う課題）</p>
+<p>公開した <a href="data/ch28_capstone.py">ch28_capstone.py</a> の関数 <code>clean_from_seed(20261113)</code> で，同じ作り方の別のデータ（40 点）を作る．平均で答えるモデルとガウス過程について，ランダム 5 分割（seed 20261112）とバッチ単位の分割の RMSE，ガウス過程のバッチ単位の被覆率を求め，表28.4・28.5 の結論（ランダム分割は楽観的，被覆率は名目に届かない）が保たれるかを確かめよ．</p>
+<p><em>ヒント：</em><code>cross_validate("gp", X, y, b, folds_group(b))</code> の戻り値の <code>pred</code> と <code>s_obs</code> を使う．<code>X = stack(d["c"], d["T"])</code>．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-5">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習28.6　過信した区間の被覆率（計算）</p>
+<p>新しい観測値の誤差（観測値−予測平均）が本当は $\Normal(0,\,0.094^{2})$ に従うのに，モデルは予測標準偏差を 0.035 と見積もって 95 % 区間 $\pm1.96\times0.035$ を出す．この区間の実際の被覆率を求めよ．28.7.4 項の 0.55 と比べよ．</p>
+<p><em>ヒント：</em>$P(\abs{e}\le a)=2\Phi(a/0.094)-1$．$\Phi(0.730)=0.767$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-6">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習28.7　報告を点検する（考察）</p>
+<p>ある報告に次のように書かれていた．「焼成条件 60 点のデータ（3 つの研究室から集めた）を標準化し，相関の強い記述子 5 個を選んだ後，ランダムな 10 分割交差検証でガウス過程の $R^{2}=0.93$ を得た．予測が最大の条件で試料を 1 個作ったところ，過去最高の伝導度を記録した．よって本手法は新材料の探索に有効である．」表28.3 と表28.9 を使って，問題点を 4 つ以上挙げ，それぞれの直し方を述べよ．</p>
+<p><em>ヒント：</em>前処理の順番，グループ，評価指標，1 回の成功，推奨点の観測値の偏り．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-28-7">→ 解答</a></p>
+</div>
+
+<h3>28.11.4 参考文献</h3>
+<div class="refs">
+<ol>
+<li>C. M. Bishop, <em>Pattern Recognition and Machine Learning</em>, Springer (2006)（1 章でモデル選択と交差検証を，3 章で正則化を，6 章でガウス過程を扱う）．</li>
+<li>C. E. Rasmussen, C. K. I. Williams, <em>Gaussian Processes for Machine Learning</em>, MIT Press (2006)（著者公開の版が gaussianprocess.org/gpml にある．2 章が回帰，5 章がハイパーパラメーターの推定と ARD カーネル）．</li>
+<li>D. R. Jones, M. Schonlau, W. J. Welch, "Efficient Global Optimization of Expensive Black-Box Functions", <em>Journal of Global Optimization</em> <strong>13</strong>, 455 (1998)，doi:10.1023/A:1008306431147（ガウス過程と期待改善量による逐次的な最適化）．</li>
+<li>J. Snoek, H. Larochelle, R. P. Adams, "Practical Bayesian Optimization of Machine Learning Algorithms", <em>Advances in Neural Information Processing Systems</em> <strong>25</strong> (2012)，<a href="https://proceedings.neurips.cc/paper/2012/hash/05311655a15b75fab86956663e1819cd-Abstract.html" style="overflow-wrap:anywhere">https://proceedings.neurips.cc/paper/2012/hash/05311655a15b75fab86956663e1819cd-Abstract.html</a>（ハイパーパラメーターの扱いを含む実用的な手順）．</li>
+<li>S. Kaufman, S. Rosset, C. Perlich, O. Stitelman, "Leakage in data mining: Formulation, detection, and avoidance", <em>ACM Transactions on Knowledge Discovery from Data</em> <strong>6</strong>, 15 (2012)，doi:10.1145/2382577.2382579（データ漏洩の定義と回避）．</li>
+<li>S. Kapoor, A. Narayanan, "Leakage and the reproducibility crisis in machine-learning-based science", <em>Patterns</em> <strong>4</strong>, 100804 (2023)，doi:10.1016/j.patter.2023.100804（多くの分野での漏洩の事例と，その分類）．</li>
+<li>D. R. Roberts <em>et al.</em>, "Cross-validation strategies for data with temporal, spatial, hierarchical, or phylogenetic structure", <em>Ecography</em> <strong>40</strong>, 913–929 (2017)，doi:10.1111/ecog.02881（構造のあるデータでのブロック単位の交差検証）．</li>
+<li>B. Meredig <em>et al.</em>, "Can machine learning identify the next high-temperature superconductor? Examining extrapolation performance for materials discovery", <em>Molecular Systems Design &amp; Engineering</em> <strong>3</strong>, 819 (2018)，doi:10.1039/C8ME00012C（材料探索での外挿性能と leave-one-cluster-out 交差検証）．</li>
+<li>A. Y.-T. Wang, R. J. Murdock, S. K. Kauwe, A. O. Oliynyk, A. Gurlo, J. Brgoch, K. A. Persson, T. D. Sparks, "Machine Learning for Materials Scientists: An Introductory Guide toward Best Practices", <em>Chemistry of Materials</em> <strong>32</strong>, 4954–4965 (2020)，doi:10.1021/acs.chemmater.0c01907（材料科学での機械学習の手順と報告の注意）．</li>
+<li>M. D. Wilkinson <em>et al.</em>, "The FAIR Guiding Principles for scientific data management and stewardship", <em>Scientific Data</em> <strong>3</strong>, 160018 (2016)，doi:10.1038/sdata.2016.18（データを見つけ，使い直せるようにするための原則）．</li>
+<li>C. R. Harris <em>et al.</em>, "Array programming with NumPy", <em>Nature</em> <strong>585</strong>, 357–362 (2020)，doi:10.1038/s41586-020-2649-2（本章の台本が使う numpy）．</li>
+<li>P. Virtanen <em>et al.</em>, "SciPy 1.0: fundamental algorithms for scientific computing in Python", <em>Nature Methods</em> <strong>17</strong>, 261–272 (2020)，doi:10.1038/s41592-019-0686-2（本章の台本が使う scipy）．</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch27_materials_statmech.html">← 第27章：材料科学・統計力学との接点 — 分配関数から機械学習原子間ポテンシャルまで</a>
+  <span class="spacer"></span>
+  <a href="appA_math.html">付録A：微積分・線形代数・数値計算の補足 →</a>
+</nav>
+</main>
+</body>
+</html>

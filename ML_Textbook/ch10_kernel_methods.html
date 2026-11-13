@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>第10章 カーネル法 — 類似度で学ぶ — 機械学習</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => '10.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">機械学習 — 目次</a>
+  <span class="series">第III部 回帰・分類・カーネル / 第10章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第10章</span>カーネル法 — 類似度で学ぶ</h1>
+
+<div class="lead">
+<div class="question">
+<strong>この章で答える問い</strong>
+<ul>
+  <li>2 つの記述子で表した試料が，内側の円と外側の輪に分かれて並んでいる．直線しか引けない線形モデルで，この 2 クラスを分けるにはどうするか．</li>
+  <li>「組成の近い材料は性質も近い」という経験則を，予測の式にそのまま書き込むことはできるか．そのとき「近い」はどう測ればよいか．</li>
+  <li>特徴を何万個にも増やすと計算が重くなりそうなのに，カーネル法はなぜ「無限個の特徴」まで扱えるのか．代わりに何が重くなるのか．</li>
+</ul>
+</div>
+<p>2 つの記述子 $x_1,x_2$ で表した試料が，原点のまわりの半径 1 付近（ガラス化した）と半径 2.2 付近（結晶化した）に分かれているとしよう．どんな直線を引いても，内側の円を外側の輪から切り離すことはできない．ところが，座標の 2 乗 $x_1^{2}$，$x_2^{2}$ を新しい座標にとると，内側の点は $x_1^{2}+x_2^{2}\approx1$，外側の点は $x_1^{2}+x_2^{2}\approx4.8$ の付近に移り，今度は 1 本の直線で分けられる．入力を別の空間へ写してから線形モデルを使う，というのが本章の出発点である．</p>
+<p>写す先の空間（<strong>特徴空間</strong>）の次元を増やすほど表せる境界・曲線は豊かになるが，計算は重くなる．本章の要点は，Ridge 回帰などの解が<strong>特徴ベクトルどうしの内積</strong>だけで書けることである（<strong>双対表現</strong>）．内積を直接計算する関数 $k(\bm{x},\bm{x}')$ を<strong>カーネル</strong>と呼び，特徴ベクトルを作らずにカーネルだけで計算する工夫を<strong>カーネルトリック</strong>という．カーネルは「2 つの入力がどれだけ似ているか」を表す量とも読めるので，「似た材料は似た性質を持つ」という考え方をそのまま式にできる．本章では，どんな関数がカーネルとして使えるか（<strong>正定値性</strong>），代表的なカーネルと長さスケールの意味，<strong>カーネル Ridge 回帰</strong>，解がデータ点のカーネルの重ね合わせになる理由（<strong>リプレゼンター定理</strong>），重み付き平均としての<strong>カーネル回帰</strong>（Attention の原型），そして計算量の限界を順に扱う．</p>
+<div class="goals">
+  <strong>この章で学ぶこと</strong>
+  <ul>
+    <li>同心円状の 2 クラスを特徴写像で線形分離できることを，具体的な点の座標で確かめられる．</li>
+    <li>Ridge 回帰の解が $\bm{w}=\bm{\Phi}^{\tp}\bm{a}$，$\bm{a}=(\bm{K}+\lambda\bm{I})^{-1}\bm{y}$ と書けることを導き，主問題と双対問題の大きさ（$M$ と $N$）を比べられる．</li>
+    <li>多項式カーネル $(\bm{x}^{\tp}\bm{x}')^{2}$ を展開して特徴写像を書き出し，$(\bm{x}^{\tp}\bm{x}'+1)^{d}$ との違いを説明できる．</li>
+    <li>Gram 行列が半正定値であることを証明し，カーネルの和・積などからカーネルを組み立てられる．与えられた関数がカーネルでないことを反例で示せる．</li>
+    <li>RBF カーネルの長さスケール $\ell$ と正則化係数 $\lambda$ がカーネル Ridge 回帰の曲線をどう変えるかを，2 点の手計算と図で説明できる．</li>
+    <li>Nadaraya–Watson のカーネル回帰を重み付き平均として計算し，Attention と同じ形であることを示せる．</li>
+    <li>カーネル法の計算量 $O(N^{3})$ と記憶量 $O(N^{2})$ を見積もり，材料の記述子に求められる不変性を説明できる．</li>
+  </ul>
+</div>
+<div class="prereq"><strong>前提：</strong>本書の<a href="ch08_linear_regression.html">第8章</a>（基底関数，計画行列，Ridge 回帰．<a href="ch08_linear_regression.html#sec8-6">8.6 節</a>，関数空間から見る見方は <a href="ch08_linear_regression.html#sec8-9">8.9 節</a>），<a href="ch09_linear_classification.html">第9章</a>（決定境界，線形で分けられない配置），<a href="ch06_generalization.html#sec6-5">第6章 6.5 節</a>（交差検証），<a href="ch06_generalization.html#sec6-6">6.6 節</a>（正則化），<a href="ch07_optimization.html#sec7-3">第7章 7.3 節</a>（標準化）．行列の固有値（<a href="../UnivMath_Textbook/ch12_eigen_diagonalization.html#sec12-1">大学数学 第12章 12.1</a>），指数関数の Taylor 展開（<a href="../UnivMath_Textbook/ch04_taylor_expansion.html#sec4-2">大学数学 第4章 4.2</a>）．対称行列の対角化と半正定値行列は<a href="appA_math.html#secA-3">付録A の A.3</a>にまとめる．</div>
+<p class="route"><strong>入門ルートで読む節：</strong>この章は詳しいルートの章である．入門ルートでは <a href="#sec10-12">10.12</a>（まとめ）だけを読み，次の第11章も詳しいルートなので，第13章の 13.1〜13.3 節へ進んでよい．</p>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec10-1">10.1 特徴空間へ写す — 曲がった境界を直線にする</a></li>
+    <li><a href="#sec10-2">10.2 双対表現 — 重みをデータの係数で書き直す</a></li>
+    <li><a href="#sec10-3">10.3 カーネル関数とカーネルトリック</a></li>
+    <li><a href="#sec10-4">10.4 正定値カーネル — 使える類似度の条件</a></li>
+    <li><a href="#sec10-5">10.5 代表的なカーネルと長さスケール</a></li>
+    <li><a href="#sec10-6">10.6 カーネル Ridge 回帰</a></li>
+    <li><a href="#sec10-7">10.7 リプレゼンター定理 — 解はデータ点の重ね合わせ</a></li>
+    <li><a href="#sec10-8">10.8 カーネル回帰（Nadaraya–Watson）— 重み付き平均</a></li>
+    <li><a href="#sec10-9">10.9 計算量と限界 — カーネルの選択は仮定の選択</a></li>
+    <li><a href="#sec10-10">10.10 材料工学・物性物理学との接点 — 類似度の設計</a></li>
+    <li><a href="#sec10-11">10.11 誤解しやすい点と適用限界</a></li>
+    <li><a href="#sec10-12">10.12 まとめ・次章への接続・演習・参考文献</a></li>
+  </ol>
+</nav>
+
+<div class="box note">
+<p class="box-title">記号：この章で使う記号</p>
+<p>入力 $\bm{x}\in\R^{D}$，データ $\data=\{(\bm{x}_n,y_n)\}_{n=1}^{N}$，目標値をまとめた $\bm{y}=(y_1,\dots,y_N)^{\tp}\in\R^{N}$．特徴写像 $\bm{\phi}:\R^{D}\to\R^{M}$，計画行列 $\bm{\Phi}\in\R^{N\times M}$（第 $n$ 行が $\bm{\phi}(\bm{x}_n)^{\tp}$）．カーネル $k(\bm{x},\bm{x}')$，Gram 行列 $\bm{K}\in\R^{N\times N}$（$K_{nm}=k(\bm{x}_n,\bm{x}_m)$），テスト入力 $\bm{x}_*$ に対する $\bm{k}_*=(k(\bm{x}_1,\bm{x}_*),\dots,k(\bm{x}_N,\bm{x}_*))^{\tp}\in\R^{N}$．双対変数（データ点ごとの係数）$\bm{a}\in\R^{N}$．正則化係数 $\lambda\gt0$．分類のラベルは第9章と同じ $y\in\{0,1\}$ だが，10.5 節のシミュレーターは第11章の規約 $y\in\{-1,+1\}$ で表示する．<br>
+損失は第8・9章と同じく<strong>データについての和</strong>で書く（第7章は平均で書いた．和で書くと $\lambda$ の大きさの目安が $N$ 倍違う）．なお第24章では同じ $\bm{K}$ を Key 行列の意味で使う．本章の $\bm{K}$ はすべて Gram 行列である．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-1">10.1 特徴空間へ写す — 曲がった境界を直線にする<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.1.1 直線では分けられない配置</h3>
+
+<p>第9章の線形識別モデルは，判別関数 $f(\bm{x})=\bm{w}^{\tp}\bm{x}+b$ の符号でクラスを決める．決定境界 $f(\bm{x})=0$ は入力空間の直線（一般には超平面）である．<a href="#fig10-1">図10.1</a>(a) のように，一方のクラスが他方を取り囲む配置では，どの直線も両クラスの点を両側に残してしまう．</p>
+
+<p>そこで入力 $\bm{x}=(x_1,x_2)^{\tp}$ を，次の<strong>特徴写像</strong>（feature map）で 3 次元の点に写す．</p>
+\begin{equation}
+\bm{\phi}(\bm{x})=\begin{pmatrix}x_1^{2}\\ x_2^{2}\\ \sqrt2\,x_1x_2\end{pmatrix}\in\R^{3} \label{eq:10-feature-map}
+\end{equation}
+<p>第 3 成分の係数 $\sqrt2$ は，10.3 節で内積がきれいな形になるように付けた．写した先の座標を $\bm{z}=\bm{\phi}(\bm{x})$，$z_1=x_1^{2}$，$z_2=x_2^{2}$，$z_3=\sqrt2x_1x_2$ と書くと，</p>
+$$
+z_1+z_2=x_1^{2}+x_2^{2}=r^{2}
+$$
+<p>であり，原点からの距離の 2 乗 $r^{2}$ が特徴空間の座標の<strong>1 次式</strong>になる．したがって特徴空間の線形な判別関数 $g(\bm{z})=z_1+z_2-c$（$\bm{w}=(1,1,0)^{\tp}$，$b=-c$）を使えば，境界 $g=0$ は特徴空間では平面 $z_1+z_2=c$，入力空間では円 $x_1^{2}+x_2^{2}=c$ になる．「特徴空間で線形」なモデルが，入力空間では曲がった境界を表すのである．</p>
+
+<figure id="fig10-1">
+<img src="figs/ch10_fig10-1.svg" alt="左の図は入力空間で，原点の近くに四角の点（y=0）が，半径 2 程度の輪の上に丸い点（y=1）が並び，境界は破線の円である．右の図は横軸 z1=x1 の 2 乗，縦軸 z2=x2 の 2 乗の特徴空間で，四角の点は原点近くの三角形の領域に，丸い点はその外側に移り，破線の直線 z1+z2=2.92 で分けられる．" style="max-width:640px;width:100%">
+<figcaption>図10.1　同心円状の 2 クラス（教育用の合成データ）．(a) 入力空間．破線は円 $x_1^{2}+x_2^{2}=2.92$．(b) 特徴写像 \eqref{eq:10-feature-map} の第 1・第 2 成分 $z_1=x_1^{2}$，$z_2=x_2^{2}$ を軸にとった図．破線の直線 $z_1+z_2=2.92$ は (a) の円と同じ境界である．● は $y=1$（外側），■ は $y=0$（内側）．生成式：$\bm{x}=r(\cos\theta,\sin\theta)$，$\theta\sim$ 一様分布 $[0,2\pi)$，$r=r_y+0.25\,\varepsilon$（$r_0=1.0$，$r_1=2.2$，$\varepsilon\sim\Normal(0,1)$），60 点（クラスは交互），<code>np.random.default_rng(20261113)</code>．$x_1,x_2$ は標準化した無次元の記述子とする．しきい値 $2.92$ は $r_0^{2}$ と $r_1^{2}$ の中点で，60 点中 59 点を正しく分ける．</figcaption>
+</figure>
+
+<p>しきい値 $c=2.92$ は，内側の円の半径の 2 乗 $1.0^{2}=1$ と外側の輪の半径の 2 乗 $2.2^{2}=4.84$ の中点 $(1+4.84)/2$ として選んだ．<a href="#fig10-1">図10.1</a>(b) では，内側の点（■）が原点に近い三角形の領域に集まり，直線の外側には外側の点（●）が並ぶ．ノイズで半径が大きくずれた 1 点だけが反対側に入る．</p>
+
+<h3>10.1.2 特徴空間の線形モデル</h3>
+
+<p>一般に，入力 $\bm{x}\in\R^{D}$ を $M$ 個の基底関数を並べた特徴ベクトル $\bm{\phi}(\bm{x})=(\phi_1(\bm{x}),\dots,\phi_M(\bm{x}))^{\tp}\in\R^{M}$ に写し，</p>
+\begin{equation}
+f(\bm{x};\bm{w})=\bm{w}^{\tp}\bm{\phi}(\bm{x}) \label{eq:10-linear-model}
+\end{equation}
+<p>（$\bm{w}\in\R^{M}$）とするのが第8章の基底関数モデルであった．「線形」は $\bm{w}$ について線形という意味で，$\bm{x}$ については曲がっていてよい．第9章のロジスティック回帰でも同じことができる．第9章の<a href="ch09_linear_classification.html#sim9-1">シミュレーター9.1</a>（ロジスティック回帰のタブ）で同心円のデータを選び，特徴を「1 次」から「2 次項つき」（$x_1^{2}$，$x_1x_2$，$x_2^{2}$ を足す）に変えると，訓練の正解率が約 6 割から 100 % に上がり，境界が直線から楕円に変わる．</p>
+
+<p>では，もっと複雑な境界が必要なら特徴をどんどん増やせばよいのか．$D$ 次元の入力から 3 次までのすべての単項式を作ると，特徴の数は $D=10$ で 286 個，$D=100$ で 176851 個になる（10.3 節）．特徴を陽に作って $M\times M$ の行列を扱うのは，すぐに現実的でなくなる．次節では，解がデータ点の数 $N$ の大きさの問題に書き直せることを示す．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.1　4 点を特徴空間へ写す</p>
+<p>内側の円の上の 2 点 $\bm{x}_A=(1,0)^{\tp}$，$\bm{x}_B=(0.6,0.8)^{\tp}$ と，外側の円の上の 2 点 $\bm{x}_C=(2,0)^{\tp}$，$\bm{x}_D=(-1.2,1.6)^{\tp}$ を考える．(1) 各点を式 \eqref{eq:10-feature-map} で写せ．(2) 特徴空間の判別関数 $g(\bm{z})=z_1+z_2-2.25$ の値を各点で求め，4 点が正しく分けられることを確かめよ．入力空間での境界は何か．(3) $\bm{\phi}(\bm{x}_A)^{\tp}\bm{\phi}(\bm{x}_B)$ と $(\bm{x}_A^{\tp}\bm{x}_B)^{2}$ を計算して比べよ．</p>
+<p><strong>解答</strong>　(1) $\sqrt2\approx1.4142$ を使う．</p>
+<ul>
+  <li>$\bm{\phi}(\bm{x}_A)=(1,\ 0,\ 0)^{\tp}$</li>
+  <li>$\bm{\phi}(\bm{x}_B)=(0.36,\ 0.64,\ 0.6788)^{\tp}$（第 3 成分は $\sqrt2\times0.48$）</li>
+  <li>$\bm{\phi}(\bm{x}_C)=(4,\ 0,\ 0)^{\tp}$</li>
+  <li>$\bm{\phi}(\bm{x}_D)=(1.44,\ 2.56,\ -2.7153)^{\tp}$（第 3 成分は $\sqrt2\times(-1.92)$）</li>
+</ul>
+<p>(2) $g$ は第 3 成分を使わない．$g(A)=1+0-2.25=-1.25$，$g(B)=0.36+0.64-2.25=-1.25$，$g(C)=4+0-2.25=1.75$，$g(D)=1.44+2.56-2.25=1.75$．内側の 2 点は負，外側の 2 点は正なので正しく分けられる．$g=0$ は $x_1^{2}+x_2^{2}=2.25$，すなわち入力空間で半径 1.5 の円である．<br>
+(3) 特徴空間の内積は $\bm{\phi}(\bm{x}_A)^{\tp}\bm{\phi}(\bm{x}_B)$ $=1\times0.36+0\times0.64$ $+0\times0.6788=0.36$．一方 $\bm{x}_A^{\tp}\bm{x}_B=1\times0.6+0\times0.8=0.6$ なので $(\bm{x}_A^{\tp}\bm{x}_B)^{2}=0.36$．両者は一致する．特徴ベクトルを作らなくても，入力の内積を 2 乗するだけで特徴空間の内積が求まる．これが 10.3 節のカーネルトリックの最も簡単な例である．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-2">10.2 双対表現 — 重みをデータの係数で書き直す<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.2.1 Ridge 回帰の解をもう一度見る</h3>
+
+<p>第8章の Ridge 回帰から出発する（<a href="ch08_linear_regression.html#sec8-6">第8章 8.6 節</a>）．損失関数は</p>
+\begin{equation}
+L(\bm{w})=\frac12\norm{\bm{y}-\bm{\Phi}\bm{w}}^{2}+\frac{\lambda}{2}\norm{\bm{w}}^{2} \label{eq:10-ridge-loss}
+\end{equation}
+<p>である（$\bm{w}\in\R^{M}$）．$\bm{\Phi}\bm{w}\in\R^{N}$ は全データ点での予測値を並べたベクトルである．勾配は $\nabla L(\bm{w})=-\bm{\Phi}^{\tp}(\bm{y}-\bm{\Phi}\bm{w})+\lambda\bm{w}$ で，これを $\bm{0}$ とおくと</p>
+\begin{equation}
+(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M)\,\bm{w}=\bm{\Phi}^{\tp}\bm{y} \label{eq:10-primal}
+\end{equation}
+<p>が得られる．$\bm{I}_M$ は $M\times M$ の単位行列である．解くべき行列 $\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M$ は $M\times M$ で，大きさは特徴の数 $M$ で決まる．これを<strong>主問題</strong>（primal problem）の形と呼ぶ．</p>
+
+<h3>10.2.2 重みはデータ点の特徴ベクトルの重ね合わせ</h3>
+
+<p>勾配が $\bm{0}$ という条件を，$\bm{w}$ について解かずに次のように並べ替える．</p>
+
+<div class="box derive">
+<p class="box-title">導出：双対表現</p>
+<p>$\nabla L=\bm{0}$ の $\lambda\bm{w}$ の項だけを左辺に残し，両辺を $\lambda\gt0$ で割る．</p>
+$$
+\begin{aligned}
+\lambda\bm{w}&=\bm{\Phi}^{\tp}(\bm{y}-\bm{\Phi}\bm{w})\\
+\bm{w}&=\bm{\Phi}^{\tp}\,\frac{1}{\lambda}(\bm{y}-\bm{\Phi}\bm{w})
+\end{aligned}
+$$
+<p>右辺の $\frac{1}{\lambda}(\bm{y}-\bm{\Phi}\bm{w})$ は $N$ 次元のベクトルなので，これを $\bm{a}$ とおく．</p>
+\begin{align}
+\bm{a}&\equiv\frac{1}{\lambda}(\bm{y}-\bm{\Phi}\bm{w})\in\R^{N} \notag\\
+\bm{w}&=\bm{\Phi}^{\tp}\bm{a}=\sum_{n=1}^{N}a_n\bm{\phi}(\bm{x}_n) \label{eq:10-dual-w}
+\end{align}
+<p>$\bm{\Phi}^{\tp}$ の第 $n$ 列は $\bm{\phi}(\bm{x}_n)$ なので，$\bm{\Phi}^{\tp}\bm{a}$ は特徴ベクトルを係数 $a_n$ で足し合わせたものである．次に，$\bm{a}$ の定義に $\bm{w}=\bm{\Phi}^{\tp}\bm{a}$ を代入して $\bm{w}$ を消す．</p>
+$$
+\begin{aligned}
+\lambda\bm{a}&=\bm{y}-\bm{\Phi}\bm{w}=\bm{y}-\bm{\Phi}\bm{\Phi}^{\tp}\bm{a}\\
+\bm{\Phi}\bm{\Phi}^{\tp}\bm{a}+\lambda\bm{a}&=\bm{y}\\
+(\bm{K}+\lambda\bm{I}_N)\,\bm{a}&=\bm{y},\qquad \bm{K}\equiv\bm{\Phi}\bm{\Phi}^{\tp}\in\R^{N\times N}
+\end{aligned}
+$$
+<p>$\bm{K}$ は半正定値（10.4 節）なので，$\lambda\gt0$ なら $\bm{K}+\lambda\bm{I}_N$ の固有値はすべて $\lambda$ 以上で正則である．よって</p>
+\begin{equation}
+\bm{a}=(\bm{K}+\lambda\bm{I}_N)^{-1}\bm{y} \label{eq:10-dual-a}
+\end{equation}
+<p>逆に，この $\bm{a}$ から $\bm{w}=\bm{\Phi}^{\tp}\bm{a}$ を作ると，上の変形を逆にたどって $\nabla L(\bm{w})=\bm{0}$ を満たす．$L$ は狭義凸なので（$\lambda\gt0$），これが唯一の最小点である．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>$\bm{K}$ の $(n,m)$ 成分は</p>
+\begin{equation}
+K_{nm}=\bm{\phi}(\bm{x}_n)^{\tp}\bm{\phi}(\bm{x}_m) \label{eq:10-gram}
+\end{equation}
+<p>で，データ点どうしの特徴ベクトルの内積である．$\bm{K}$ を <strong>Gram（グラム）行列</strong>という．新しい入力 $\bm{x}_*$ での予測は，$\bm{w}=\bm{\Phi}^{\tp}\bm{a}$ を代入して</p>
+\begin{align}
+f(\bm{x}_*)&=\bm{w}^{\tp}\bm{\phi}(\bm{x}_*) \notag\\
+&=\bm{a}^{\tp}\bm{\Phi}\bm{\phi}(\bm{x}_*) \notag\\
+&=\sum_{n=1}^{N}a_n\,\bm{\phi}(\bm{x}_n)^{\tp}\bm{\phi}(\bm{x}_*) \notag\\
+&=\bm{k}_*^{\tp}\bm{a} \label{eq:10-dual-pred}
+\end{align}
+<p>となる．ここで $\bm{k}_*=\bm{\Phi}\bm{\phi}(\bm{x}_*)\in\R^{N}$ の第 $n$ 成分は $\bm{\phi}(\bm{x}_n)^{\tp}\bm{\phi}(\bm{x}_*)$ である．<strong>学習（$\bm{a}$ を求める）にも予測にも，特徴ベクトルは内積の形でしか現れない</strong>．これが双対表現の要点である．</p>
+
+<figure id="fig10-2">
+<svg role="img" aria-label="主問題と双対問題の対比の模式図．左の箱は主問題で，重み w は M 次元，解く行列は M 行 M 列．右の箱は双対問題で，係数 a は N 次元，解く行列は N 行 N 列の Gram 行列に lambda I を足したもの．中央の矢印に w は Phi 転置 a と書かれている．下に，予測は内積 k だけで書けることが示されている．" viewBox="0 0 600 270" style="max-width:600px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図10.2　主問題と双対問題</title>
+<defs><marker id="arr-fig10-2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker></defs>
+<rect x="15" y="15" width="245" height="150" rx="10" fill="#fff" stroke="#1a1a1a" stroke-width="1.6" stroke-dasharray="6 4"></rect>
+<text x="137" y="42" font-size="16" text-anchor="middle" fill="#1a1a1a">主問題（重み）</text>
+<text x="137" y="72" font-size="15" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif"><tspan font-weight="bold">w</tspan> ∈ ℝ<tspan baseline-shift="super" font-size="11" font-style="italic">M</tspan></text>
+<text x="137" y="102" font-size="15" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif">(<tspan font-weight="bold">Φ</tspan><tspan baseline-shift="super" font-size="11">T</tspan><tspan font-weight="bold">Φ</tspan> + <tspan font-style="italic">λ</tspan><tspan font-weight="bold">I</tspan>) <tspan font-weight="bold">w</tspan> = <tspan font-weight="bold">Φ</tspan><tspan baseline-shift="super" font-size="11">T</tspan><tspan font-weight="bold">y</tspan></text>
+<text x="137" y="132" font-size="14" text-anchor="middle" fill="#1a1a1a"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">M</tspan> × <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">M</tspan> の行列を解く</text>
+<text x="137" y="154" font-size="14" text-anchor="middle" fill="#4a5568">特徴の数で重さが決まる</text>
+<rect x="340" y="15" width="245" height="150" rx="10" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.8"></rect>
+<text x="462" y="42" font-size="16" text-anchor="middle" fill="#1a1a1a">双対問題（データの係数）</text>
+<text x="462" y="72" font-size="15" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif"><tspan font-weight="bold">a</tspan> ∈ ℝ<tspan baseline-shift="super" font-size="11" font-style="italic">N</tspan></text>
+<text x="462" y="102" font-size="15" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif">(<tspan font-weight="bold">K</tspan> + <tspan font-style="italic">λ</tspan><tspan font-weight="bold">I</tspan>) <tspan font-weight="bold">a</tspan> = <tspan font-weight="bold">y</tspan></text>
+<text x="462" y="132" font-size="14" text-anchor="middle" fill="#1a1a1a"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">N</tspan> × <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">N</tspan> の行列を解く</text>
+<text x="462" y="154" font-size="14" text-anchor="middle" fill="#4a5568">データの数で重さが決まる</text>
+<line x1="266" y1="90" x2="334" y2="90" stroke="#1a1a1a" stroke-width="1.6" marker-start="url(#arr-fig10-2)" marker-end="url(#arr-fig10-2)"></line>
+<text x="300" y="80" font-size="14" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif"><tspan font-weight="bold">w</tspan> = <tspan font-weight="bold">Φ</tspan><tspan baseline-shift="super" font-size="10">T</tspan><tspan font-weight="bold">a</tspan></text>
+<rect x="60" y="195" width="480" height="60" rx="8" fill="#fff" stroke="#888" stroke-width="1.2"></rect>
+<text x="300" y="220" font-size="14" text-anchor="middle" fill="#1a1a1a">どちらも予測は同じ：<tspan font-family="Times New Roman, STIXGeneral, serif"><tspan font-style="italic">f</tspan>(<tspan font-weight="bold">x</tspan><tspan baseline-shift="sub" font-size="10">*</tspan>) = <tspan font-weight="bold">k</tspan><tspan baseline-shift="sub" font-size="10">*</tspan><tspan baseline-shift="super" font-size="10">T</tspan><tspan font-weight="bold">a</tspan></tspan></text>
+<text x="300" y="244" font-size="14" text-anchor="middle" fill="#1a1a1a">必要なのは内積 <tspan font-family="Times New Roman, STIXGeneral, serif"><tspan font-style="italic">k</tspan>(<tspan font-weight="bold">x</tspan>, <tspan font-weight="bold">x</tspan>′) = <tspan font-weight="bold">φ</tspan>(<tspan font-weight="bold">x</tspan>)<tspan baseline-shift="super" font-size="10">T</tspan><tspan font-weight="bold">φ</tspan>(<tspan font-weight="bold">x</tspan>′)</tspan> だけ</text>
+</svg>
+<figcaption>図10.2　Ridge 回帰の主問題（破線の枠）と双対問題（実線の枠）．同じ解を，$M$ 次元の重み $\bm{w}$ で表すか，$N$ 個のデータ点の係数 $\bm{a}$ で表すかの違いである．双対問題では特徴ベクトルは内積の形でしか現れない（模式図）．</figcaption>
+</figure>
+
+<p>主問題と双対問題のどちらが得かは，$M$ と $N$ の大小で決まる（<a href="#fig10-2">図10.2</a>）．連立方程式を Cholesky 分解で解く手間は行列の大きさの 3 乗に比例するので，特徴が少なくデータが多い（$M\ll N$）なら主問題，特徴が多くデータが少ない（$M\gg N$）なら双対問題が軽い．材料のデータは数十〜数百点のことが多く，後者になりやすい．双対問題の本当の利点は次節で現れる．$M$ が無限大でも，内積さえ計算できれば双対問題は $N\times N$ のままなのである．</p>
+
+<div class="box note">
+<p class="box-title">数学の道具：二つの形が同じ解を与える理由</p>
+<p>式 \eqref{eq:10-primal} と \eqref{eq:10-dual-a} から，$\bm{w}$ は次の 2 通りに書ける．</p>
+$$
+\begin{aligned}
+\bm{w}&=(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M)^{-1}\bm{\Phi}^{\tp}\bm{y}\\
+&=\bm{\Phi}^{\tp}(\bm{\Phi}\bm{\Phi}^{\tp}+\lambda\bm{I}_N)^{-1}\bm{y}
+\end{aligned}
+$$
+<p>これは行列の恒等式</p>
+$$
+\begin{aligned}
+&(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M)^{-1}\bm{\Phi}^{\tp}\\
+&=\bm{\Phi}^{\tp}(\bm{\Phi}\bm{\Phi}^{\tp}+\lambda\bm{I}_N)^{-1}
+\end{aligned}
+$$
+<p>の言い換えでもある（演習10.2．押し通しの恒等式と呼ばれ，<a href="appA_math.html#secA-7">付録A の A.7</a> に一般の形がある）．$\bm{\Phi}^{\tp}(\bm{\Phi}\bm{\Phi}^{\tp}+\lambda\bm{I}_N)=(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M)\bm{\Phi}^{\tp}$ の両辺に左右から逆行列を掛ければ示せる．実際の計算では逆行列を作らず，連立方程式として解く（10.9 節）．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.2　3 点の直線当てはめを主問題と双対問題で解く</p>
+<p>3 点 $(x_n,y_n)=(0,1),(1,3),(2,4)$ に，特徴 $\bm{\phi}(x)=(1,x)^{\tp}$（$M=2$）の Ridge 回帰を $\lambda=1$ で当てはめる（ここでは切片にも罰則をかける）．(1) 主問題 \eqref{eq:10-primal} を解いて $\bm{w}$ を求めよ．(2) Gram 行列 $\bm{K}$ を作り，双対問題 \eqref{eq:10-dual-a} の解 $\bm{a}$ を求め，$\bm{\Phi}^{\tp}\bm{a}$ が (1) の $\bm{w}$ に一致することを確かめよ．(3) $x_*=3$ での予測を両方の形で計算せよ．</p>
+<p><strong>解答</strong>　(1) $\bm{\Phi}=\begin{pmatrix}1&0\\1&1\\1&2\end{pmatrix}$ より $\bm{\Phi}^{\tp}\bm{\Phi}=\begin{pmatrix}3&3\\3&5\end{pmatrix}$，$\bm{\Phi}^{\tp}\bm{y}=\begin{pmatrix}1+3+4\\0+3+8\end{pmatrix}=\begin{pmatrix}8\\11\end{pmatrix}$．</p>
+$$
+\begin{pmatrix}4&3\\3&6\end{pmatrix}\bm{w}=\begin{pmatrix}8\\11\end{pmatrix}
+$$
+<p>行列式は $4\times6-3\times3=15$ なので，</p>
+$$
+\begin{aligned}
+\bm{w}&=\frac{1}{15}\begin{pmatrix}6&-3\\-3&4\end{pmatrix}\begin{pmatrix}8\\11\end{pmatrix}\\
+&=\frac{1}{15}\begin{pmatrix}15\\20\end{pmatrix}=\begin{pmatrix}1\\4/3\end{pmatrix}
+\end{aligned}
+$$
+<p>(2) $K_{nm}=1+x_nx_m$ なので $\bm{K}=\begin{pmatrix}1&1&1\\1&2&3\\1&3&5\end{pmatrix}$．式 \eqref{eq:10-dual-w} の定義 $\bm{a}=(\bm{y}-\bm{\Phi}\bm{w})/\lambda$ を使うと，$\bm{\Phi}\bm{w}=(1,\ 7/3,\ 11/3)^{\tp}$ より $\bm{a}=(0,\ 2/3,\ 1/3)^{\tp}$．これが $(\bm{K}+\bm{I})\bm{a}=\bm{y}$ を満たすことを行ごとに確かめる．</p>
+$$
+\begin{aligned}
+2\cdot0+1\cdot\tfrac23+1\cdot\tfrac13&=1\\
+1\cdot0+3\cdot\tfrac23+3\cdot\tfrac13&=3\\
+1\cdot0+3\cdot\tfrac23+6\cdot\tfrac13&=4
+\end{aligned}
+$$
+<p>$\bm{\Phi}^{\tp}\bm{a}$ の第 1 成分は $0+\tfrac23+\tfrac13=1$，第 2 成分は $0+\tfrac23+2\cdot\tfrac13=\tfrac43$ で，(1) と一致する．<br>
+(3) 主問題では $f(3)=w_0+3w_1=1+4=5$．双対問題では $K$ の作り方と同じく $k(x_n,x_*)=1+x_nx_*$ なので $\bm{k}_*=(1,\ 4,\ 7)^{\tp}$ で，$\bm{k}_*^{\tp}\bm{a}=0+\tfrac83+\tfrac73=5$．一致する．<br>
+$a_1=0$ に注目する．$a_n=(y_n-f(x_n))/\lambda$ は点 $n$ の残差に比例するので，直線がちょうど通る点（$f(0)=1=y_1$）の係数は 0 になる．</p>
+</div>
+
+<div class="box why">
+<p class="box-title">なぜ切片の扱いに注意するのか</p>
+<p>例題10.2 では定数の特徴 $\phi_0=1$ にも罰則をかけたので，直線は全体に 0 の側へ引き寄せられる．第8章で述べたように，実務では切片に罰則をかけない（<a href="ch08_linear_regression.html#sec8-6">第8章 8.6 節</a>）．双対表現でこれを簡単に実現するには，<strong>目標値の平均 $\bar{y}$ を引いてから解き，予測に $\bar{y}$ を足す</strong>のがよい．本章の図10.4，10.5 と演習ではこの方法を使う．第12章のガウス過程では，同じことを「定数の平均関数 $m$」として扱う．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-3">10.3 カーネル関数とカーネルトリック<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.3.1 内積を 1 つの関数で計算する</h3>
+
+<p>双対表現 \eqref{eq:10-dual-a}，\eqref{eq:10-dual-pred} に必要なのは，2 つの入力の特徴ベクトルの内積だけであった．そこで内積を直接与える関数を考える．</p>
+
+<div class="box def">
+<p class="box-title">定義10.1　カーネル関数</p>
+<p>入力の集合 $\mathcal{X}$（たとえば $\R^{D}$）の 2 点 $\bm{x},\bm{x}'$ に実数を対応させる関数 $k(\bm{x},\bm{x}')$ が，ある特徴写像 $\bm{\phi}$ を使って</p>
+\begin{equation}
+k(\bm{x},\bm{x}')=\bm{\phi}(\bm{x})^{\tp}\bm{\phi}(\bm{x}') \label{eq:10-kernel-def}
+\end{equation}
+<p>と書けるとき，$k$ を<strong>カーネル関数</strong>（kernel function），または単にカーネルという．$\bm{\phi}$ の値は有限次元のベクトルでも，無限個の成分を持つ列（10.5 節）でもよい．定義から $k(\bm{x},\bm{x}')=k(\bm{x}',\bm{x})$（対称）である．</p>
+</div>
+
+<p>カーネルさえ計算できれば，Gram 行列 $K_{nm}=k(\bm{x}_n,\bm{x}_m)$ と $\bm{k}_*$ が作れ，式 \eqref{eq:10-dual-a} と \eqref{eq:10-dual-pred} で学習と予測ができる．特徴ベクトル $\bm{\phi}(\bm{x})$ は一度も作らなくてよい．このように，内積をカーネルで置き換えて特徴空間の計算を避ける工夫を<strong>カーネルトリック</strong>（kernel trick）という．</p>
+
+<h3>10.3.2 多項式カーネルを展開して特徴写像を見る</h3>
+
+<p>$D=2$ の入力について，入力の内積の 2 乗 $k(\bm{x},\bm{x}')=(\bm{x}^{\tp}\bm{x}')^{2}$ を展開する．</p>
+$$
+\begin{aligned}
+(\bm{x}^{\tp}\bm{x}')^{2}&=(x_1x_1'+x_2x_2')^{2}\\
+&=x_1^{2}x_1'^{2}+2x_1x_2x_1'x_2'+x_2^{2}x_2'^{2}\\
+&=x_1^{2}\cdot x_1'^{2}+x_2^{2}\cdot x_2'^{2}\\
+&\quad+(\sqrt2x_1x_2)(\sqrt2x_1'x_2')
+\end{aligned}
+$$
+<p>最後の行は，式 \eqref{eq:10-feature-map} の $\bm{\phi}(\bm{x})=(x_1^{2},x_2^{2},\sqrt2x_1x_2)^{\tp}$ と $\bm{\phi}(\bm{x}')$ の内積そのものである．すなわち</p>
+\begin{equation}
+(\bm{x}^{\tp}\bm{x}')^{2}=\bm{\phi}(\bm{x})^{\tp}\bm{\phi}(\bm{x}') \label{eq:10-poly2-hom}
+\end{equation}
+<p>であり，このカーネルは「2 次の単項式だけを並べた特徴空間」の内積を計算している．このように次数のそろった単項式だけを含むものを<strong>同次</strong>の多項式カーネルという．一般の $D$ では $(\bm{x}^{\tp}\bm{x}')^{2}=\sum_{i=1}^{D}\sum_{j=1}^{D}(x_ix_j)(x_i'x_j')$ なので，特徴は $D^{2}$ 個の積 $x_ix_j$（$x_ix_j=x_jx_i$ をまとめれば $D(D+1)/2$ 種類）である．</p>
+
+<p>実際によく使うのは，定数 $c\gt0$ を足した<strong>非同次</strong>の形である．</p>
+\begin{equation}
+k(\bm{x},\bm{x}')=(\bm{x}^{\tp}\bm{x}'+c)^{d} \label{eq:10-poly-gen}
+\end{equation}
+<p>$d$ は多項式の次数である（第6・8章と同じ記号）．$c=1$，$d=2$，$D=2$ で展開すると</p>
+$$
+\begin{aligned}
+(\bm{x}^{\tp}\bm{x}'+1)^{2}&=(\bm{x}^{\tp}\bm{x}')^{2}+2\,\bm{x}^{\tp}\bm{x}'+1\\
+&=x_1^{2}x_1'^{2}+x_2^{2}x_2'^{2}+2x_1x_2x_1'x_2'\\
+&\quad+2x_1x_1'+2x_2x_2'+1
+\end{aligned}
+$$
+<p>となり，対応する特徴写像は</p>
+$$
+\begin{aligned}
+\bm{\phi}(\bm{x})=\bigl(&1,\ \sqrt2x_1,\ \sqrt2x_2,\\
+&x_1^{2},\ x_2^{2},\ \sqrt2x_1x_2\bigr)^{\tp}\in\R^{6}
+\end{aligned}
+$$
+<p>である．同次の形 \eqref{eq:10-poly2-hom} との違いは，<strong>定数と 1 次の項を含む</strong>ことである．同次の 2 次カーネルでは境界は原点について対称な 2 次曲線（$\bm{w}^{\tp}\bm{\phi}(\bm{x})=0$ が $x_1\to-x_1,x_2\to-x_2$ で変わらない）に限られるが，非同次なら中心のずれた楕円や放物線も表せる．$c$ は低次の項の重みを決める（$c$ を大きくすると低次の項の比重が増す．演習10.1）．10.5 節のシミュレーターの多項式カーネルは $c=1$ の $(\bm{x}^{\tp}\bm{x}'+1)^{d}$（$d=2,3$）である．</p>
+
+<p>次数 $d$ 以下のすべての単項式を並べると，特徴の数は $\binom{D+d}{d}$ になる（変数 $x_1,\dots,x_D$ に「定数 1」を加えた $D+1$ 個から重複を許して $d$ 個選ぶ組合せの数）．$D=10$，$d=3$ で $\binom{13}{3}=286$，$D=100$，$d=3$ で $\binom{103}{3}=176851$ である．一方，カーネル \eqref{eq:10-poly-gen} の計算は内積 1 回（掛け算 $D$ 回）と累乗だけで済む．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.3　カーネルと特徴写像で同じ値になることを確かめる</p>
+<p>$\bm{x}=(1,2)^{\tp}$，$\bm{x}'=(3,-1)^{\tp}$ とする．(1) $(\bm{x}^{\tp}\bm{x}')^{2}$ を直接計算し，式 \eqref{eq:10-feature-map} の特徴ベクトルの内積と比べよ．(2) $(\bm{x}^{\tp}\bm{x}'+1)^{2}$ についても 6 次元の特徴ベクトルで確かめよ．(3) それぞれの計算で掛け算は何回必要か．</p>
+<p><strong>解答</strong>　(1) $\bm{x}^{\tp}\bm{x}'=1\times3+2\times(-1)=1$ なので $(\bm{x}^{\tp}\bm{x}')^{2}=1$．特徴ベクトルは $\bm{\phi}(\bm{x})=(1,\ 4,\ 2\sqrt2)^{\tp}$，$\bm{\phi}(\bm{x}')=(9,\ 1,\ -3\sqrt2)^{\tp}$ で，内積は $1\times9+4\times1$ $+2\sqrt2\times(-3\sqrt2)$ $=9+4-12=1$．一致する．<br>
+(2) $(\bm{x}^{\tp}\bm{x}'+1)^{2}=(1+1)^{2}=4$．特徴ベクトルは</p>
+$$
+\begin{aligned}
+\bm{\phi}(\bm{x})&=(1,\ \sqrt2,\ 2\sqrt2,\ 1,\ 4,\ 2\sqrt2)^{\tp}\\
+\bm{\phi}(\bm{x}')&=(1,\ 3\sqrt2,\ -\sqrt2,\ 9,\ 1,\ -3\sqrt2)^{\tp}
+\end{aligned}
+$$
+<p>で，内積は $1+6-4+9+4-12=4$．一致する．<br>
+(3) カーネルの直接計算は，内積に 2 回，2 乗に 1 回で計 3 回．特徴ベクトルの経路では，(2) の場合，各ベクトルを作るのに数回ずつ，内積に 6 回かかる．入力の次元 $D$ と次数 $d$ が大きくなると，この差は $\binom{D+d}{d}$ と $D$ の差として急に開く．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-4">10.4 正定値カーネル — 使える類似度の条件<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.4.1 Gram 行列は半正定値</h3>
+
+<p>カーネルは「2 点の似ている度合い」と読めるので，類似度を自由に設計したくなる．しかし，任意の関数が式 \eqref{eq:10-kernel-def} の形に書けるわけではない．どの関数が使えるかを判定する条件を調べる．</p>
+
+<div class="box def">
+<p class="box-title">定義10.2　正定値カーネル</p>
+<p>対称な関数 $k(\bm{x},\bm{x}')=k(\bm{x}',\bm{x})$ が，任意の個数 $N$，任意の点 $\bm{x}_1,\dots,\bm{x}_N$，任意の実数 $c_1,\dots,c_N$ について</p>
+\begin{equation}
+\begin{aligned}
+&\bm{c}^{\tp}\bm{K}\bm{c}\\
+&=\sum_{n,m}c_nc_m\,k(\bm{x}_n,\bm{x}_m)\\
+&\ge0
+\end{aligned} \label{eq:10-psd}
+\end{equation}
+<p>を満たすとき，$k$ を<strong>正定値カーネル</strong>（positive definite kernel）という．すなわち，どの点の組に対しても Gram 行列 $\bm{K}\in\R^{N\times N}$ が<strong>半正定値</strong>（固有値がすべて 0 以上）であることを求める．「正定値」という名前だが不等号は等号を含む，という慣習に注意する．</p>
+</div>
+
+<div class="box thm">
+<p class="box-title">定理10.1　特徴写像の内積は正定値カーネル</p>
+<p>$k(\bm{x},\bm{x}')=\bm{\phi}(\bm{x})^{\tp}\bm{\phi}(\bm{x}')$ と書ける関数は，正定値カーネルである．</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">証明</p>
+<p>対称性は内積の対称性から従う．任意の $N$，点，係数 $c_n$ について，ベクトル $\bm{v}\equiv\sum_{n}c_n\bm{\phi}(\bm{x}_n)$ を作り，二重和を内積の線形性でまとめる．</p>
+$$
+\begin{aligned}
+&\sum_{n,m}c_nc_m\,k(\bm{x}_n,\bm{x}_m)\\
+&=\sum_{n,m}c_nc_m\,\bm{\phi}(\bm{x}_n)^{\tp}\bm{\phi}(\bm{x}_m)\\
+&=\Bigl(\sum_{n}c_n\bm{\phi}(\bm{x}_n)\Bigr)^{\tp}\Bigl(\sum_{m}c_m\bm{\phi}(\bm{x}_m)\Bigr)\\
+&=\bm{v}^{\tp}\bm{v}=\norm{\bm{v}}^{2}\ \ge\ 0
+\end{aligned}
+$$
+<p>行列で書けば $\bm{K}=\bm{\Phi}\bm{\Phi}^{\tp}$ なので $\bm{c}^{\tp}\bm{K}\bm{c}=\norm{\bm{\Phi}^{\tp}\bm{c}}^{2}\ge0$ である．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>逆向きも成り立つ．正定値カーネル $k$ が与えられれば，それを内積とする特徴空間（<strong>再生核 Hilbert 空間</strong>，reproducing kernel Hilbert space，RKHS）と特徴写像が必ず存在する（Moore–Aronszajn の定理．Aronszajn (1950)）．構成の考え方だけ述べると，特徴写像として「関数そのもの」$\bm{\phi}(\bm{x})=k(\bm{x},\cdot)$ を選び，内積を $\langle k(\bm{x},\cdot),k(\bm{x}',\cdot)\rangle=k(\bm{x},\bm{x}')$ と定める．正定値性 \eqref{eq:10-psd} は，こうして定めた内積で長さの 2 乗が負にならないことを保証する条件である．証明は本書では扱わない（Schölkopf &amp; Smola (2002) の 2 章）．</p>
+
+<p>したがって<strong>「カーネルとして使える」⇔「正定値」</strong>であり，候補の関数がカーネルかどうかは，内積の形に書き直すか，Gram 行列が半正定値かを調べればわかる．カーネルでない関数を使うと，$\bm{K}+\lambda\bm{I}$ が負の固有値を持って Cholesky 分解できなくなったり（$\lambda$ によっては特異にもなる），第11章の SVM の双対問題が凸でなくなったりする．</p>
+
+<h3>10.4.2 カーネルを組み立てる規則</h3>
+
+<div class="box thm">
+<p class="box-title">定理10.2　カーネルの組み立て</p>
+<p>$k_1,k_2$ を正定値カーネルとする．次もすべて正定値カーネルである．</p>
+<ol>
+  <li>和：$k_1(\bm{x},\bm{x}')+k_2(\bm{x},\bm{x}')$</li>
+  <li>正の定数倍：$c\,k_1(\bm{x},\bm{x}')$（$c\gt0$）</li>
+  <li>積：$k_1(\bm{x},\bm{x}')\,k_2(\bm{x},\bm{x}')$</li>
+  <li>関数による重み：$g(\bm{x})\,k_1(\bm{x},\bm{x}')\,g(\bm{x}')$（$g$ は任意の実数値関数）</li>
+  <li>入力の変換：$k_1(\bm{\psi}(\bm{x}),\bm{\psi}(\bm{x}'))$（$\bm{\psi}$ は任意の写像）</li>
+  <li>係数が 0 以上の多項式・べき級数：$\sum_{j\ge0}b_j\,k_1(\bm{x},\bm{x}')^{j}$（$b_j\ge0$，級数は収束するとする）．特に $\exp(k_1(\bm{x},\bm{x}'))$</li>
+</ol>
+</div>
+
+<div class="box derive">
+<p class="box-title">証明</p>
+<p>(1) Gram 行列で $\bm{c}^{\tp}(\bm{K}_1+\bm{K}_2)\bm{c}=\bm{c}^{\tp}\bm{K}_1\bm{c}+\bm{c}^{\tp}\bm{K}_2\bm{c}\ge0$．特徴写像で言えば，2 つの特徴ベクトルを縦につないだもの $(\bm{\phi}_1(\bm{x});\bm{\phi}_2(\bm{x}))$ の内積である．<br>
+(2) $\bm{c}^{\tp}(c\bm{K}_1)\bm{c}=c\,\bm{c}^{\tp}\bm{K}_1\bm{c}\ge0$．<br>
+(3) $k_1=\bm{\phi}^{\tp}\bm{\phi}'$，$k_2=\bm{\psi}^{\tp}\bm{\psi}'$（$\bm{\phi}=\bm{\phi}(\bm{x})$，$\bm{\phi}'=\bm{\phi}(\bm{x}')$ と略記）と書けば，</p>
+$$
+\begin{aligned}
+k_1k_2&=\Bigl(\sum_i\phi_i\phi_i'\Bigr)\Bigl(\sum_j\psi_j\psi_j'\Bigr)\\
+&=\sum_{i}\sum_{j}(\phi_i\psi_j)(\phi_i'\psi_j')
+\end{aligned}
+$$
+<p>で，これは成分 $\phi_i\psi_j$ を全部並べた特徴ベクトルの内積である．<br>
+(4) $\bm{\phi}_g(\bm{x})=g(\bm{x})\bm{\phi}(\bm{x})$ の内積．Gram 行列で言えば $\bm{c}$ の代わりに $(c_ng(\bm{x}_n))_n$ を使えばよい．<br>
+(5) $\bm{\phi}(\bm{\psi}(\bm{x}))$ の内積．<br>
+(6) (3) を繰り返すと $k_1^{j}$ はカーネル（$k_1^{0}=1$ は 1 次元の特徴 1 の内積）．(1)(2) で有限和はカーネル．無限級数は有限和の極限で，$\bm{c}^{\tp}\bm{K}\bm{c}\ge0$ は極限でも保たれる．$\exp(t)=\sum_{j\ge0}t^{j}/j!$ の係数はすべて正である．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>この規則で RBF カーネル（10.5 節）が正定値であることが示せる．$\norm{\bm{x}-\bm{x}'}^{2}=\norm{\bm{x}}^{2}-2\bm{x}^{\tp}\bm{x}'+\norm{\bm{x}'}^{2}$ を指数に入れると</p>
+$$
+\begin{aligned}
+&\exp\!\left(-\frac{\norm{\bm{x}-\bm{x}'}^{2}}{2\ell^{2}}\right)\\
+&=e^{-\norm{\bm{x}}^{2}/(2\ell^{2})}\,\exp\!\left(\frac{\bm{x}^{\tp}\bm{x}'}{\ell^{2}}\right)\,e^{-\norm{\bm{x}'}^{2}/(2\ell^{2})}
+\end{aligned}
+$$
+<p>となる．中央の因子は線形カーネル $\bm{x}^{\tp}\bm{x}'/\ell^{2}$ の指数なので規則 (2)(6) でカーネル，両側の因子は規則 (4) の $g(\bm{x})=e^{-\norm{\bm{x}}^{2}/(2\ell^{2})}$ である．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.4　カーネルかどうかを判定する</p>
+<p>1 次元の入力 $x\in\R$ について，次の関数は正定値カーネルか．(1) $k(x,x')=(x-x')^{2}$．(2) $k(x,x')=xx'-1$．(3) $k(x,x')=(xx')^{2}+2e^{-(x-x')^{2}/2}$．(4) RBF カーネル（$\ell=1$）の 3 点 $x=0,1,2$ の Gram 行列の固有値を求め，定理10.1 と矛盾しないことを確かめよ．</p>
+<p><strong>解答</strong>　(1) 2 点 $x_1=0$，$x_2=1$ の Gram 行列は $\begin{pmatrix}0&1\\1&0\end{pmatrix}$．$\bm{c}=(1,-1)^{\tp}$ で $\bm{c}^{\tp}\bm{K}\bm{c}=0-1-1+0=-2\lt0$（固有値は $\pm1$）．正定値でない．距離の 2 乗は「似ていない度合い」なので，そのままでは類似度にならない．<br>
+(2) 1 点 $x_1=0$ だけで $\bm{K}=(-1)$，$c_1=1$ で $-1\lt0$．正定値でない（$k(x,x)\ge0$ は必要条件である）．<br>
+(3) $(xx')^{2}$ は特徴 $\phi(x)=x^{2}$ の内積，$e^{-(x-x')^{2}/2}$ は RBF カーネル．定数倍 2 と和の規則で正定値である．<br>
+(4) $e^{-1/2}=0.6065$，$e^{-2}=0.1353$ より</p>
+$$
+\bm{K}=\begin{pmatrix}1&0.6065&0.1353\\0.6065&1&0.6065\\0.1353&0.6065&1\end{pmatrix}
+$$
+<p>対称な並びを使う．$(1,0,-1)^{\tp}$ は固有ベクトルで，固有値は $1-0.1353=0.8647$．残りの 2 つは $(1,t,1)^{\tp}$ の形で，$1+0.1353+0.6065\,t=\mu$，$2\times0.6065+t=\mu t$ を解くと $\mu=0.2072$ と $1.9281$．3 つとも正なので，定理10.1 のとおり半正定値（この例では正定値）である．固有値の和 $0.2072+0.8647+1.9281=3.000$ は対角成分の和 $\tr\bm{K}=3$ に一致する．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-5">10.5 代表的なカーネルと長さスケール<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.5.1 カーネルの一覧</h3>
+
+<p>よく使うカーネルを<a href="#tab10-1">表10.1</a>にまとめる．$r=\norm{\bm{x}-\bm{x}'}$ は 2 点の Euclid 距離である．</p>
+
+<div class="tablewrap">
+<table id="tab10-1">
+<caption>表10.1　代表的なカーネル（$\sigma_f^{2}\gt0$ は値の大きさ，$\ell\gt0$ は長さスケール）</caption>
+<thead><tr><th>名前</th><th>式</th><th>対応する特徴・性質</th></tr></thead>
+<tbody>
+<tr><td>線形</td><td>$\bm{x}^{\tp}\bm{x}'$</td><td>入力そのもの（$\bm{\phi}(\bm{x})=\bm{x}$）．Ridge 回帰に戻る</td></tr>
+<tr><td>多項式</td><td>$(\bm{x}^{\tp}\bm{x}'+c)^{d}$</td><td>次数 $d$ 以下の単項式 $\binom{D+d}{d}$ 個</td></tr>
+<tr><td>RBF（Gauss）</td><td>$\sigma_f^{2}\exp\!\bigl(-r^{2}/(2\ell^{2})\bigr)$</td><td>無限次元．何回でも微分できる滑らかな関数</td></tr>
+<tr><td>Laplace</td><td>$\sigma_f^{2}\exp(-r/\ell)$</td><td>無限次元．1 次元では連続だが微分できない折れ線状の関数</td></tr>
+<tr><td>Matérn（$\nu=3/2$）</td><td>$\sigma_f^{2}\bigl(1+\sqrt3\,r/\ell\bigr)e^{-\sqrt3\,r/\ell}$</td><td>1 回だけ微分できる関数．$\nu$ で滑らかさを調節</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>RBF（radial basis function，動径基底関数）カーネルは，本書では次の形で書く．</p>
+\begin{equation}
+k(\bm{x},\bm{x}')=\sigma_f^{2}\exp\!\bigl(-\norm{\bm{x}-\bm{x}'}^{2}/(2\ell^{2})\bigr) \label{eq:10-rbf}
+\end{equation}
+<p>距離だけに依存するカーネルを<strong>定常</strong>（stationary）なカーネルという．定常なカーネルは「入力空間のどこでも，同じ距離なら同じだけ似ている」という仮定を表す．SVM の文献では $\sigma_f=1$ とし，$\gamma=1/(2\ell^{2})$ を使って $\exp(-\gamma\norm{\bm{x}-\bm{x}'}^{2})$ と書くことが多い（第11章）．Matérn カーネルは $\nu$ を $\tfrac12,\tfrac32,\tfrac52,\dots$ と選ぶと，$\nu=\tfrac12$ で Laplace カーネル，$\nu\to\infty$ で RBF カーネルになる族である．一般形と性質は Rasmussen &amp; Williams (2006) の 4 章に詳しい．</p>
+
+<h3>10.5.2 長さスケール $\ell$ の意味</h3>
+
+<p>RBF カーネルの値は，距離 $r=0$ で最大値 $\sigma_f^{2}$ をとり，$r=\ell$ で $\sigma_f^{2}e^{-1/2}\approx0.61\,\sigma_f^{2}$，$r=2\ell$ で $0.14\,\sigma_f^{2}$，$r=3\ell$ で $0.011\,\sigma_f^{2}$ まで下がる（<a href="#fig10-3">図10.3</a>(a)）．つまり $\ell$ は<strong>「どれくらい離れた点までを似ているとみなすか」の距離</strong>である．$\ell$ は入力と同じ単位を持つ（入力が温度 °C なら $\ell$ も °C）．記述子ごとに単位や桁が違うときは，標準化してから 1 つの $\ell$ を使うか，次元ごとに別の $\ell_i$ を持たせる（$\sum_i(x_i-x_i')^{2}/(2\ell_i^{2})$）．</p>
+
+<figure id="fig10-3">
+<img src="figs/ch10_fig10-3.svg" alt="左の図は横軸に距離 r，縦軸にカーネルの値をとり，RBF カーネルを長さスケール 0.5，1，2 で描いたもの．どれも r=0 で 1 から始まり，長さスケールが大きいほどゆっくり下がる．値 0.61 に点線があり，各曲線が r=ell でこの値を通る．右の図は長さスケール 1 で RBF，Matérn 3/2，Laplace を比べたもので，原点付近で RBF は平ら，Laplace は尖って急に下がり，Matérn はその中間である．" style="max-width:640px;width:100%">
+<figcaption>図10.3　カーネルの値を 2 点の距離 $r$ の関数として描いた図（$\sigma_f=1$）．(a) RBF カーネル \eqref{eq:10-rbf} を $\ell=0.5$（実線），$1$（破線），$2$（一点鎖線）で描いた．点線は $e^{-1/2}\approx0.61$ で，各曲線は $r=\ell$ でこの高さを通る．(b) $\ell=1$ での RBF（実線），Matérn $\nu=3/2$（一点鎖線），Laplace（破線）．原点付近の形（平らか尖っているか）が，予測される関数の滑らかさを決める．</figcaption>
+</figure>
+
+<p><a href="#fig10-3">図10.3</a>(b) の原点付近の形の違いは，予測される関数の滑らかさの違いになる．RBF は原点で平らなので，近い 2 点はほぼ同じ値をとり，曲線は非常に滑らかになる．Laplace は原点で尖っているので，近い 2 点でも値の差が残り，折れ線に近いでこぼこした関数を許す．材料の性質が組成に対して滑らかに変わると期待できるなら RBF や Matérn $\nu=5/2$，相境界などで急に変わりうるなら Laplace や短い $\ell$，という選び方になる（10.9 節）．</p>
+
+<div class="box derive">
+<p class="box-title">導出：1 次元の RBF カーネルは無限次元の特徴の内積</p>
+<p>$\sigma_f=1$，入力 $x,x'\in\R$ とする．10.4 節の分解を 1 次元で書き，中央の因子を指数関数の Taylor 展開 $e^{t}=\sum_{j=0}^{\infty}t^{j}/j!$ で展開する．</p>
+$$
+\begin{aligned}
+k(x,x')&=e^{-x^{2}/(2\ell^{2})}\,e^{xx'/\ell^{2}}\,e^{-x'^{2}/(2\ell^{2})}\\
+&=e^{-x^{2}/(2\ell^{2})}\Bigl(\sum_{j=0}^{\infty}\frac{1}{j!}\Bigl(\frac{xx'}{\ell^{2}}\Bigr)^{j}\Bigr)e^{-x'^{2}/(2\ell^{2})}\\
+&=\sum_{j=0}^{\infty}\Bigl(e^{-x^{2}/(2\ell^{2})}\frac{x^{j}}{\ell^{j}\sqrt{j!}}\Bigr)\\
+&\qquad\times\Bigl(e^{-x'^{2}/(2\ell^{2})}\frac{x'^{j}}{\ell^{j}\sqrt{j!}}\Bigr)
+\end{aligned}
+$$
+<p>3〜4 行目は，$(xx')^{j}/(\ell^{2j}j!)$ を $x$ だけの因子と $x'$ だけの因子に $\sqrt{j!}$ ずつ分けた．したがって</p>
+$$
+\phi_j(x)=e^{-x^{2}/(2\ell^{2})}\,\frac{x^{j}}{\ell^{j}\sqrt{j!}}
+$$
+<p>（$j=0,1,2,\dots$）とおけば $k(x,x')=\sum_{j=0}^{\infty}\phi_j(x)\phi_j(x')$ である．RBF カーネルは，Gauss 型の窓 $e^{-x^{2}/(2\ell^{2})}$ を掛けた<strong>すべての次数の単項式</strong>を並べた，無限次元の特徴空間の内積を計算している．$1/\sqrt{j!}$ の因子のため高次の成分ほど小さく，級数は収束する．特徴ベクトルを作ることはできないが，カーネルの値は指数関数 1 回で計算できる．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.5　長さスケールと類似度の値</p>
+<p>標準化した記述子の空間で，2 つの試料の距離が $r=0.5$ であった．(1) RBF カーネル（$\sigma_f=1$）の値を $\ell=0.25,\ 1,\ 4$ で求め，それぞれ「似ている」とみなされるかを述べよ．(2) SVM の慣例の幅 $\gamma=1$ は $\ell$ でいくつか．(3) $\gamma=1$ のとき，距離の 2 乗が $0.273$ の 2 点のカーネルの値を求めよ．</p>
+<p><strong>解答</strong>　(1) $r^{2}=0.25$．</p>
+<ul>
+  <li>$\ell=0.25$：$\exp\bigl(-0.25/(2\times0.0625)\bigr)=e^{-2}=0.135$．距離が $2\ell$ なので，ほとんど似ていないとみなされる．</li>
+  <li>$\ell=1$：$\exp(-0.25/2)=e^{-0.125}=0.882$．かなり似ている．</li>
+  <li>$\ell=4$：$\exp(-0.25/32)=0.992$．ほぼ同じとみなされる．</li>
+</ul>
+<p>同じ 2 点でも，$\ell$ しだいで類似度は 0.14 から 0.99 まで変わる．$\ell$ は「予測を各試料のどのくらい近くまで効かせるか」というモデルの仮定であり，データから選ぶ必要がある（10.9 節，<a href="ch12_gaussian_process.html#sec12-7">第12章 12.7 節</a>）．<br>
+(2) $\gamma=1/(2\ell^{2})=1$ より $\ell=1/\sqrt2=0.707$．<br>
+(3) $\exp(-\gamma r^{2})=\exp(-1\times0.273)$ $=e^{-0.273}=0.761$．この値は，次のシミュレーターの既定の状態で「最大の項のカーネルの値」として表示される．</p>
+</div>
+
+<p>カーネルの幅が分類の境界をどう変えるかは，次のシミュレーターで確かめられる．この装置は第11章のサポートベクトルマシン（SVM）の装置で，ここではカーネルの役割だけを見る．装置は $\sigma_f=1$ の RBF カーネルを $\exp(-\gamma\norm{\bm{x}-\bm{x}'}^{2})$，$\gamma=1/(2\ell^{2})$ の形で使い，多項式カーネルは $c=1$ に固定した $(\bm{x}^{\tp}\bm{x}'+1)^{d}$ である．ラベルは第11章の規約 $y\in\{-1,+1\}$ で表示され，画面のスコア $f(\bm{x})$ は確率ではない．SVM の式の意味（マージン，サポートベクトル，$C$）は第11章で説明する．ここでは「$f(\bm{x})$ は，サポートベクトルと呼ばれる一部の訓練点 $\bm{x}_n$ のカーネル $k(\bm{x}_n,\bm{x})$ に係数を掛けて足し合わせ，定数 $b$ を足したもの」とだけ理解しておけばよい．これは式 \eqref{eq:10-dual-pred} と同じ形である．</p>
+
+<div class="box sim" id="sim10-1">
+<p class="box-title">シミュレーター10.1　カーネルの幅と境界の形</p>
+<p>教育用の合成データ（2 つの記述子で表した 2 クラスの点）に，カーネルを使う分類器（SVM）を当てはめ，RBF カーネルの幅 $\gamma=1/(2\ell^{2})$ やカーネルの種類を変えたときに，境界の形とスコア $f(\bm{x})$ の値がどう変わるかを確かめる装置である．</p>
+<iframe class="qsim-embed" src="sim/classifier.html?embed=1&amp;only=svm" title="分類とカーネルのシミュレーター（カーネルと SVM）" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/classifier.html#svm" target="_blank" rel="noopener noreferrer">別ウィンドウで大きく開く &rarr;</a></p>
+<p><strong>操作と観察</strong></p>
+<ol class="sim-steps">
+  <li>開いた直後の既定（データの型「三日月」，データ数 $N=60$，seed 20261112，カーネル「RBF（Gauss）」，$C=1.00$，$\gamma=1.00$（ℓ = 0.707））のまま見る → 読み出しは サポートベクトル 22 個（○ 18，◇ 4），マージン幅 0.5812，訓練の正解率 100 %．境界（実線）は 2 つの三日月の間を曲がって通る．調べる点 $(0.5,\ 0.5)$ で $f=-1.2578$．「いまの数値を式に入れると」の「最大の項のカーネルの値」が $\exp(-1.000\times0.273)=0.7610$ であることを，式 \eqref{eq:10-rbf} に $\ell=0.707$ を入れた値（例題10.5 (3)）と比べる．</li>
+  <li>$\gamma$ のスライダーを左へ動かして 0.100（ℓ = 2.24）にする → サポートベクトル 26 個（○ 5，◇ 21），マージン幅 0.6014，正解率 93.3 %．境界は緩やかな曲線になり，三日月の先端の点を取りこぼす．調べる点の $f=-0.5196$．</li>
+  <li>$\gamma$ を 10.0（ℓ = 0.224）にする → サポートベクトル 51 個（○ 49，◇ 2），マージン幅 0.3731，正解率 100 %．境界は個々の点に沿って細かく曲がる．</li>
+  <li>$\gamma$ を 100（ℓ = 0.0707）にする → サポートベクトル 60 個（全点），調べる点の $f=-0.0831$．$b=-0.0277$ に近い．スコアの濃淡は各点のまわりの小さな島になり，点から離れた所は白（$f\approx b$）に戻る．<a href="#fig10-4">図10.4</a>(a) の $\ell=0.05$ の曲線が点の間で平均に戻るのと同じ現象である．</li>
+  <li>$\gamma$ を 1.00 に戻し，データの型を「同心円」にする．カーネルを「線形」にする → 正解率 70.0 %（境界は直線）．「多項式 2 次」にする → 正解率 100 %，サポートベクトル 7 個（○ 6，◇ 1），境界は楕円になる．10.1 節の特徴写像 \eqref{eq:10-feature-map} と，多項式カーネル \eqref{eq:10-poly-gen} の関係を確かめる．</li>
+</ol>
+<p><strong>操作後の問い</strong></p>
+<ol class="sim-questions">
+  <li>手順 2〜4 で $\gamma$ を大きくすると，なぜ境界が細かく曲がるのか．$\ell$ の言葉で説明せよ．
+    <details class="ans"><summary>答えの例</summary><p>$\gamma$ を大きくすると $\ell=1/\sqrt{2\gamma}$ が短くなり，カーネル $k(\bm{x}_n,\bm{x})$ は $\bm{x}_n$ から $\ell$ 程度の範囲でしか値を持たない．$f(\bm{x})$ はカーネルの重ね合わせなので，各訓練点のまわりの小さな山（谷）の和になり，境界は点の配置に細かく沿う．訓練の正解率は上がるが，新しい点への当たりは悪くなりうる（過学習．第6章）．逆に $\ell$ が長いと，遠くの点まで似ているとみなされ，境界は緩やかになる．</p></details></li>
+  <li>手順 4 で，調べる点の $f$ が $b$ に近くなるのはなぜか．回帰の場合に同じことが起こる例を本章から挙げよ．
+    <details class="ans"><summary>答えの例</summary><p>$\ell=0.0707$ では，調べる点 $(0.5,0.5)$ から最も近い訓練点までの距離（約 0.17）でもカーネルの値は $\exp(-100\times0.029)\approx0.06$ と小さく，他の点の項はさらに小さい．和の部分がほぼ 0 になり，$f\approx b$ が残る．カーネル Ridge 回帰でも，$\ell$ が短いとデータ点の間やデータ範囲の外で予測が平均（中心化した値の 0）に戻る（<a href="#fig10-4">図10.4</a>(a)，例題10.6 (3)）．</p></details></li>
+  <li>手順 5 で線形カーネルでは正解率が 70 % にとどまるのに，多項式 2 次では 100 % になるのはなぜか．
+    <details class="ans"><summary>答えの例</summary><p>線形カーネルでは境界は入力空間の直線で，内側の円を外側の輪から切り離せない．多項式 2 次カーネル $(\bm{x}^{\tp}\bm{x}'+1)^{2}$ は，$x_1^{2}$，$x_2^{2}$，$x_1x_2$ を含む 6 次元の特徴空間の内積なので，その空間の線形な境界は入力空間の 2 次曲線（ここでは楕円）になり，10.1 節と同じ理由で分けられる．</p></details></li>
+</ol>
+<noscript><p>JavaScript が無効のため，この装置は動きません．何を確かめる装置かは上の説明と本文の式を読んでください．</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-6">10.6 カーネル Ridge 回帰<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.6.1 式のまとめ</h3>
+
+<p>10.2 節の双対表現の内積をカーネルで置き換えたものが<strong>カーネル Ridge 回帰</strong>（kernel ridge regression，KRR）である．</p>
+<div class="keyeq">
+\begin{align}
+\bm{a}&=(\bm{K}+\lambda\bm{I}_N)^{-1}\bm{y} \notag\\
+f(\bm{x}_*)&=\bm{k}_*^{\tp}\bm{a} \label{eq:10-krr}\\
+&=\sum_{n=1}^{N}a_n\,k(\bm{x}_n,\bm{x}_*) \notag
+\end{align}
+</div>
+<p>予測 $f(\bm{x}_*)$ は，各データ点を中心に置いたカーネルの山 $k(\bm{x}_n,\cdot)$ を係数 $a_n$ で重ね合わせた関数である．RBF カーネルなら，$N$ 個の Gauss 型の山を足したものになる．$a_n$ の単位は「$y$ の単位 ÷ カーネルの単位」で，$\sigma_f=1$ のカーネルなら $y$ と同じ単位である．10.2 節のなぜの囲みで述べたように，実際には目標値の平均 $\bar{y}$ を引いた $\bm{y}-\bar{y}\bm{1}$ で $\bm{a}$ を求め，予測に $\bar{y}$ を足す．</p>
+
+<p>$\lambda$ の役割を見るため，$\bm{K}$ の固有値分解 $\bm{K}=\sum_i\mu_i\bm{u}_i\bm{u}_i^{\tp}$（$\mu_i\ge0$，$\bm{u}_i$ は正規直交）を使う．訓練点での予測値は</p>
+$$
+\bm{K}\bm{a}=\sum_i\frac{\mu_i}{\mu_i+\lambda}\,\bm{u}_i\bigl(\bm{u}_i^{\tp}\bm{y}\bigr)
+$$
+<p>となる．$\mu_i\gg\lambda$ の成分（データ全体にわたるゆっくりした変化）はほぼそのまま通し，$\mu_i\ll\lambda$ の成分（細かい凹凸）は $\mu_i/\lambda$ 倍に縮める．$\lambda\to0$ では全成分を通すので，$\bm{K}$ が正則なら訓練点を正確に通る補間になる．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.6　2 点のカーネル Ridge 回帰を手で解く</p>
+<p>2 点 $(x_1,y_1)=(0,1)$，$(x_2,y_2)=(1,2)$ に，RBF カーネル（$\sigma_f=1$，$\ell=1$），$\lambda=0.1$ のカーネル Ridge 回帰を当てはめる（ここでは平均を引かない）．(1) $\bm{K}$ と $\bm{a}$ を求めよ．(2) $f(0)$，$f(1)$，$f(0.5)$ を求めよ．(3) $f(3)$ と $f(-2)$ を求め，データから離れると予測がどうなるかを述べよ．</p>
+<p><strong>解答</strong>　(1) $c\equiv k(0,1)=e^{-1/2}=0.60653$ なので $\bm{K}=\begin{pmatrix}1&c\\c&1\end{pmatrix}$．$\bm{K}+0.1\bm{I}=\begin{pmatrix}1.1&c\\c&1.1\end{pmatrix}$ の行列式は $1.21-c^{2}=1.21-0.36788=0.84212$．2×2 の逆行列の公式から</p>
+$$
+\begin{aligned}
+\bm{a}&=\frac{1}{0.84212}\begin{pmatrix}1.1&-c\\-c&1.1\end{pmatrix}\begin{pmatrix}1\\2\end{pmatrix}\\
+&=\frac{1}{0.84212}\begin{pmatrix}1.1-1.21306\\-0.60653+2.2\end{pmatrix}\\
+&=\begin{pmatrix}-0.1343\\1.8922\end{pmatrix}
+\end{aligned}
+$$
+<p>(2) $f(0)=a_1+c\,a_2$ $=-0.1343+1.1477=1.0134$，$f(1)=c\,a_1+a_2$ $=-0.0814+1.8922=1.8108$．$\lambda\gt0$ のため観測値 1，2 から少し縮んでいる．$f(0.5)$ では $k(0,0.5)=k(1,0.5)=e^{-0.125}=0.8825$ なので $f(0.5)=0.8825\times(a_1+a_2)$ $=0.8825\times1.7579=1.5514$．<br>
+(3) $e^{-4.5}=0.0111$，$e^{-2}=0.1353$ を使う．</p>
+$$
+\begin{aligned}
+f(3)&=e^{-4.5}a_1+e^{-2}a_2\\
+&=0.0111\times(-0.1343)\\
+&\quad+0.1353\times1.8922=0.2546\\
+f(-2)&=e^{-2}a_1+e^{-4.5}a_2\\
+&=-0.0182+0.0210=0.0029
+\end{aligned}
+$$
+<p>データから $\ell$ の数倍離れるとカーネルの値が 0 に近づき，予測は 0 へ戻る．平均を引かずに解いたので「0 へ戻る」が「データの平均へ戻る」にならず，外挿として不自然である．これが平均を引いてから解く理由の 1 つである．</p>
+</div>
+
+<h3>10.6.2 データ A で $\ell$ と $\lambda$ を変える</h3>
+
+<figure id="fig10-4">
+<img src="figs/ch10_fig10-4.svg" alt="横軸は規格化した温度 s，縦軸は相対密度の 2 枚の図．12 個の白抜きの点はデータ A の観測値で，点線は真の関数．左の図は lambda=0.1 で長さスケールを変えたもので，ell=0.05 の曲線は点の所だけ尖り，点の間では平均の 86.3 % 付近に戻る．ell=0.3 の曲線は真の関数に近い．ell=1.5 の曲線は滑らかだが点からずれ，右端で上がり続ける．右の図は ell=0.3 で lambda を変えたもので，lambda=10 の 4 乗分の 1 は点を全部通るが点の間で大きく振れる．lambda=0.1 は真の関数に近く，lambda=10 は平らに近い．" style="max-width:640px;width:100%">
+<figcaption>図10.4　データ A（焼成温度と相対密度．<a href="ch06_generalization.html#sec6-2">第6章 6.2 節</a>と同じ真の関数 $g(s)=88+8s-5s^{2}+2\sin3s$）の 12 点（白抜きの ○）に RBF カーネル（$\sigma_f=1$）のカーネル Ridge 回帰を当てはめた．平均 $\bar{y}=86.34\ \%$ を引いて解き，予測に足し戻した．(a) $\lambda=0.1$ に固定し $\ell=0.05$（実線），$0.3$（破線），$1.5$（一点鎖線）．(b) $\ell=0.3$ に固定し $\lambda=10^{-4}$（実線．縦軸の範囲をはみ出す），$0.1$（破線），$10$（一点鎖線）．細い点線は真の関数，灰色は訓練範囲 $[-1,1]$ の外．教育用の合成データ：$s$ は $[-1,1]$ の一様乱数 12 個を小さい順に並べたもの，ノイズの標準偏差 1.0 %，<code>np.random.default_rng(20261110)</code>．温度は $T=1300+200s$ °C．</figcaption>
+</figure>
+
+<p><a href="#fig10-4">図10.4</a> は，第6章で使ったデータ A の 12 点にカーネル Ridge 回帰を当てはめたものである．この標本は偶然 $s=-0.48$ から $0.05$ の間と $s\gt0.76$ に点がない．</p>
+<ul>
+  <li><strong>$\ell$ が短すぎる</strong>（(a) の $\ell=0.05$）：各点のまわり $\pm0.1$ 程度にしか影響が及ばず，点の間では平均 $86.3\ \%$ へ戻る．訓練点の近くは合うが，点のない所の予測は役に立たない．</li>
+  <li><strong>$\ell$ が長すぎる</strong>（(a) の $\ell=1.5$）：区間全体がほぼ「同じくらい似ている」ので，表せる曲線が緩やかになりすぎ，$s\approx0.4$ 付近の頂上を表せない．範囲の外では上がり続ける．</li>
+  <li><strong>$\lambda$ が小さすぎる</strong>（(b) の $\lambda=10^{-4}$）：ほぼ補間になり，係数の最大の大きさが $\max_n\abs{a_n}\approx3.6\times10^{3}$ まで膨らむ．ノイズまで通すので点の間と点のない領域で大きく振れる．</li>
+  <li><strong>$\lambda$ が大きすぎる</strong>（(b) の $\lambda=10$）：$\mu_i/(\mu_i+\lambda)$ がどの成分でも小さく，曲線全体が平均の方へ縮む．</li>
+</ul>
+<p>$\ell=0.3$，$\lambda=0.1$ は真の関数に近い．ただしこの組は図を見て選んだもので，実際には交差検証（<a href="ch06_generalization.html#sec6-5">第6章 6.5 節</a>）か，第12章の周辺尤度（<a href="ch12_gaussian_process.html#sec12-7">12.7 節</a>）で選ぶ．なお，カーネル Ridge 回帰の予測は，第12章のガウス過程回帰（<a href="ch12_gaussian_process.html#sec12-9">12.9 節</a>）で同じカーネルを使い $\lambda=\sigma^{2}$（ノイズの分散）とした予測の平均と一致する．ガウス過程はそれに加えて予測の不確かさを与える．</p>
+
+<!-- ============================================================ -->
+<h2 id="sec10-7">10.7 リプレゼンター定理 — 解はデータ点の重ね合わせ<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.7.1 関数そのものを未知数にする</h3>
+
+<p>10.2 節では「重み $\bm{w}$ を求める」問題を出発点にし，その解がデータ点の特徴ベクトルの重ね合わせになることを示した．無限次元の特徴を持つ RBF カーネルでは，$\bm{w}$ そのものを書き下せない．そこで，未知数を重みではなく<strong>関数 $f$ そのもの</strong>にとり，「どんな形の $f$ を探せばよいか」を問う．答えを与えるのがリプレゼンター定理（representer theorem）である．</p>
+
+<p>正定値カーネル $k$ に対応する関数の空間 $\mathcal{H}$（10.4 節の RKHS）を考える．$\mathcal{H}$ は，有限個の点 $\bm{z}_1,\dots,\bm{z}_J$ と係数 $b_j$ で作った関数 $g(\cdot)=\sum_{j}b_j\,k(\bm{z}_j,\cdot)$ を全部集め，その極限も加えた空間である．内積は $\langle k(\bm{x},\cdot),k(\bm{x}',\cdot)\rangle_{\mathcal{H}}=k(\bm{x},\bm{x}')$ を線形に広げて定める．次の 2 つの性質だけを使う．</p>
+<ul>
+  <li><strong>再生性</strong>：任意の $f\in\mathcal{H}$ と点 $\bm{x}$ について $f(\bm{x})=\langle f,\ k(\bm{x},\cdot)\rangle_{\mathcal{H}}$．$f=\sum_jb_jk(\bm{z}_j,\cdot)$ なら，右辺は $\sum_jb_jk(\bm{z}_j,\bm{x})=f(\bm{x})$ で，確かに成り立つ．「関数値を取り出す操作が内積で書ける」ことが名前の由来である．</li>
+  <li><strong>ノルム</strong>：$f=\sum_{n}a_nk(\bm{x}_n,\cdot)$ なら $\norm{f}_{\mathcal{H}}^{2}=\sum_{n,m}a_na_mk(\bm{x}_n,\bm{x}_m)=\bm{a}^{\tp}\bm{K}\bm{a}$．このノルムは関数の「複雑さ」を測る．RBF カーネルでは，$\ell$ に比べて細かく振れる関数ほどノルムが大きい．</li>
+</ul>
+
+<div class="box thm">
+<p class="box-title">定理10.3　リプレゼンター定理</p>
+<p>データ $\{(\bm{x}_n,y_n)\}_{n=1}^{N}$，各点の損失 $\ell_n(\cdot)$（$f(\bm{x}_n)$ の値だけに依存する任意の関数），狭義単調増加な関数 $\Omega:[0,\infty)\to\R$ について，</p>
+$$
+\min_{f\in\mathcal{H}}\ \sum_{n=1}^{N}\ell_n\bigl(f(\bm{x}_n)\bigr)+\Omega\bigl(\norm{f}_{\mathcal{H}}\bigr)
+$$
+<p>の最小点は（存在すれば）すべて次の形をしている．</p>
+\begin{equation}
+f(\cdot)=\sum_{n=1}^{N}a_n\,k(\bm{x}_n,\cdot) \label{eq:10-representer}
+\end{equation}
+<p>ここで $\bm{a}=(a_1,\dots,a_N)^{\tp}\in\R^{N}$ は実数の係数である．</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">証明</p>
+<p>データ点のカーネルが張る部分空間 $\mathcal{S}=\{\sum_na_nk(\bm{x}_n,\cdot)\}$ を考え，任意の $f\in\mathcal{H}$ を $\mathcal{S}$ の成分と，$\mathcal{S}$ に直交する成分に分ける：$f=f_{\parallel}+f_{\perp}$，$f_{\parallel}\in\mathcal{S}$，$\langle f_{\perp},k(\bm{x}_n,\cdot)\rangle_{\mathcal{H}}=0$（すべての $n$）．</p>
+<p>(i) データ点での値は $f_{\perp}$ によらない．再生性と内積の線形性から</p>
+$$
+\begin{aligned}
+f(\bm{x}_n)&=\langle f_{\parallel}+f_{\perp},\ k(\bm{x}_n,\cdot)\rangle_{\mathcal{H}}\\
+&=\langle f_{\parallel},\ k(\bm{x}_n,\cdot)\rangle_{\mathcal{H}}+0=f_{\parallel}(\bm{x}_n)
+\end{aligned}
+$$
+<p>なので，損失の項 $\sum_n\ell_n(f(\bm{x}_n))$ は $f$ と $f_{\parallel}$ で同じ値である．<br>
+(ii) ノルムは $f_{\perp}$ の分だけ大きい．直交するので Pythagoras の定理 $\norm{f}_{\mathcal{H}}^{2}=\norm{f_{\parallel}}_{\mathcal{H}}^{2}+\norm{f_{\perp}}_{\mathcal{H}}^{2}$ が成り立ち，$f_{\perp}\ne0$ なら $\norm{f}_{\mathcal{H}}\gt\norm{f_{\parallel}}_{\mathcal{H}}$．$\Omega$ は狭義単調増加なので $\Omega(\norm{f}_{\mathcal{H}})\gt\Omega(\norm{f_{\parallel}}_{\mathcal{H}})$．<br>
+(i)(ii) より，$f_{\perp}\ne0$ の $f$ は $f_{\parallel}$ より目的関数が真に大きく，最小点になりえない．よって最小点は $f_{\perp}=0$，すなわち $\mathcal{S}$ の元である．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>この定理の意味は大きい．探す関数が無限次元の空間の元であっても，最適解は<strong>データ点の数 $N$ 個の係数</strong>で書ける．損失は二乗損失に限らないので，第11章の SVM（ヒンジ損失），カーネル版のロジスティック回帰（交差エントロピー損失）にも同じ形が現れる．第12章のガウス過程回帰の予測の平均 $\bm{k}_*^{\tp}\bm{K}_y^{-1}\bm{y}$ も同じ形である．歴史的には Kimeldorf &amp; Wahba (1971) がスプラインの文脈で示し，Schölkopf, Herbrich &amp; Smola (2001) が一般の損失と正則化項に広げた．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.7　リプレゼンター定理からカーネル Ridge 回帰を導く</p>
+<p>目的関数 $J(f)=\frac12\sum_{n=1}^{N}\bigl(y_n-f(\bm{x}_n)\bigr)^{2}+\frac{\lambda}{2}\norm{f}_{\mathcal{H}}^{2}$ を考える．(1) $\Omega$ に当たる関数は何か．狭義単調増加か．(2) 式 \eqref{eq:10-representer} を代入して $J$ を $\bm{a}$ の関数で書け．(3) $\bm{a}=(\bm{K}+\lambda\bm{I})^{-1}\bm{y}$ が最小点であることを示せ．(4) 例題10.6 の数値で $J$ の勾配が 0 であることを確かめよ．</p>
+<p><strong>解答</strong>　(1) $\Omega(t)=\frac{\lambda}{2}t^{2}$．$t\ge0$ で $\lambda\gt0$ なら狭義単調増加である．<br>
+(2) $f(\bm{x}_m)=\sum_na_nk(\bm{x}_n,\bm{x}_m)=(\bm{K}\bm{a})_m$（$\bm{K}$ は対称）と $\norm{f}_{\mathcal{H}}^{2}=\bm{a}^{\tp}\bm{K}\bm{a}$ を使う．</p>
+$$
+J(\bm{a})=\frac12\norm{\bm{y}-\bm{K}\bm{a}}^{2}+\frac{\lambda}{2}\bm{a}^{\tp}\bm{K}\bm{a}
+$$
+<p>(3) 勾配を成分で計算する．第 1 項の勾配は $-\bm{K}^{\tp}(\bm{y}-\bm{K}\bm{a})=-\bm{K}(\bm{y}-\bm{K}\bm{a})$，第 2 項は $\lambda\bm{K}\bm{a}$（$\bm{K}$ が対称なので $\nabla_{\bm{a}}\,\bm{a}^{\tp}\bm{K}\bm{a}=2\bm{K}\bm{a}$）．</p>
+$$
+\begin{aligned}
+\nabla J(\bm{a})&=-\bm{K}(\bm{y}-\bm{K}\bm{a})+\lambda\bm{K}\bm{a}\\
+&=\bm{K}\bigl[(\bm{K}+\lambda\bm{I})\bm{a}-\bm{y}\bigr]
+\end{aligned}
+$$
+<p>$(\bm{K}+\lambda\bm{I})\bm{a}=\bm{y}$ なら角括弧が $\bm{0}$ なので勾配は $\bm{0}$．Hesse 行列 $\bm{K}^{2}+\lambda\bm{K}$ は半正定値なので $J$ は凸で，勾配 0 の点は最小点である．（$\bm{K}$ が特異なら $\bm{K}$ の零空間の分だけ $\bm{a}$ は一意でないが，そのずれは $\bm{K}\bm{a}$ と $f$ を変えない．）<br>
+(4) 例題10.6 の $\bm{a}=(-0.1343,\ 1.8922)^{\tp}$ では $\bm{K}\bm{a}=(1.0134,\ 1.8108)^{\tp}$，$\bm{y}-\bm{K}\bm{a}=(-0.0134,\ 0.1892)^{\tp}$．$0.1\bm{a}=(-0.0134,\ 0.1892)^{\tp}$ なので</p>
+$$
+\begin{aligned}
+(\bm{K}+0.1\bm{I})\bm{a}&=\bm{K}\bm{a}+0.1\bm{a}\\
+&=\begin{pmatrix}1.0134-0.0134\\1.8108+0.1892\end{pmatrix}\\
+&=\begin{pmatrix}1\\2\end{pmatrix}=\bm{y}
+\end{aligned}
+$$
+<p>となり，角括弧は $\bm{0}$ である．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-8">10.8 カーネル回帰（Nadaraya–Watson）— 重み付き平均<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.8.1 近くの観測値を重みを付けて平均する</h3>
+
+<p>「似た入力は似た出力を持つ」をもっとも素直に式にするなら，予測したい点 $\bm{x}_*$ の近くの観測値を，近さに応じた重みで平均すればよい．</p>
+
+<div class="box def">
+<p class="box-title">定義10.3　Nadaraya–Watson のカーネル回帰</p>
+<p>0 以上の値をとる類似度 $k(\bm{x}_*,\bm{x}_n)\ge0$ を使い，</p>
+\begin{equation}
+f(\bm{x}_*)=\sum_{n=1}^{N}w_n(\bm{x}_*)\,y_n \label{eq:10-nw}
+\end{equation}
+<p>重みは次のように定める．</p>
+$$
+w_n(\bm{x}_*)=\frac{k(\bm{x}_*,\bm{x}_n)}{\sum_{m=1}^{N}k(\bm{x}_*,\bm{x}_m)}
+$$
+<p>式 \eqref{eq:10-nw} で予測する方法を，<strong>Nadaraya–Watson（ナダラヤ–ワトソン）のカーネル回帰</strong>という（Nadaraya (1964)，Watson (1964)）．重み $w_n(\bm{x}_*)$ は 0 以上で，和は 1 である．</p>
+</div>
+
+<p>ここでの $k$ は「滑らかに重みを付ける窓」の意味で，10.4 節の正定値性は要らない（値が 0 以上であればよい）．RBF 型の窓がよく使われる．連立方程式を解く必要がない点が，カーネル Ridge 回帰との大きな違いである．</p>
+
+<div class="box derive">
+<p class="box-title">導出：同時密度の推定から条件付き期待値へ</p>
+<p>1 次元の入力 $x$ と出力 $y$ の同時密度を，各データ点に小さな山を置いて推定する（カーネル密度推定）．山には平均 0 で面積 1 の対称な密度 $\kappa(\cdot)$ を使い，</p>
+$$
+\hat p(x,y)=\frac1N\sum_{n=1}^{N}\kappa_x(x-x_n)\,\kappa_y(y-y_n)
+$$
+<p>とする．回帰に使う量は条件付き期待値 $\Ex[y\mid x]=\int y\,\hat p(x,y)\,\dd y\big/\int\hat p(x,y)\,\dd y$ である．$y$ についての積分を 1 項ずつ行うと，山の面積が 1 なので $\int\kappa_y(y-y_n)\,\dd y=1$，平均が 0 なので $\int y\,\kappa_y(y-y_n)\,\dd y=y_n$．よって</p>
+$$
+\begin{aligned}
+\int\hat p(x,y)\,\dd y&=\frac1N\sum_n\kappa_x(x-x_n)\\
+\int y\,\hat p(x,y)\,\dd y&=\frac1N\sum_n\kappa_x(x-x_n)\,y_n
+\end{aligned}
+$$
+<p>となり，比をとると $1/N$ が消えて式 \eqref{eq:10-nw}（$k(x,x_n)=\kappa_x(x-x_n)$）が得られる．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.8　3 点の重み付き平均</p>
+<p>3 点 $(x_n,y_n)=(0,1),(1,3),(2,2)$ と RBF 型の窓 $k(x,x')=\exp\bigl(-(x-x')^{2}/2\bigr)$（$\ell=1$）を使う．(1) $x_*=1.5$ での重み $w_n$ と予測 $f(1.5)$ を求めよ．(2) 同じ 3 点にカーネル Ridge 回帰を当てはめた場合と，計算の手順の違いを述べよ．</p>
+<p><strong>解答</strong>　(1) 距離の 2 乗は $(1.5-0)^{2}=2.25$，$(1.5-1)^{2}=0.25$，$(1.5-2)^{2}=0.25$．窓の値は</p>
+$$
+\begin{aligned}
+k(1.5,0)&=e^{-1.125}=0.3247\\
+k(1.5,1)&=k(1.5,2)=e^{-0.125}=0.8825
+\end{aligned}
+$$
+<p>で，和は $2.0897$．重みは $w=(0.1554,\ 0.4223,\ 0.4223)$（和は 1）．予測は</p>
+$$
+\begin{aligned}
+f(1.5)&=0.1554\times1+0.4223\times3\\
+&\quad+0.4223\times2=2.267
+\end{aligned}
+$$
+<p>近い 2 点（値 3 と 2）の平均 2.5 より，遠い点（値 1）の分だけ小さい．<br>
+(2) Nadaraya–Watson では，予測点ごとに窓の値を計算して割り算するだけで，学習の段階が無い．カーネル Ridge 回帰では，まず $(\bm{K}+\lambda\bm{I})\bm{a}=\bm{y}$ を解いて係数を決め（学習），予測では $\bm{k}_*^{\tp}\bm{a}$ を計算する．カーネル Ridge 回帰の係数 $a_n$ は負にもなり，予測は観測値の範囲を超えうるが，Nadaraya–Watson の予測は常に観測値の最小値と最大値の間に入る（重みが 0 以上で和が 1 だから）．</p>
+</div>
+
+<figure id="fig10-5">
+<img src="figs/ch10_fig10-5.svg" alt="左の図は横軸が規格化した温度 s，縦軸が相対密度で，データ A の 12 点に Nadaraya–Watson のカーネル回帰を長さスケール 0.05，0.15，0.4 で当てはめた曲線と，カーネル Ridge 回帰の曲線を重ねたもの．Nadaraya–Watson の曲線は ell が小さいと階段状になり，訓練範囲の外では端の点の値のまま水平に延びる．カーネル Ridge 回帰の曲線は範囲の外で平均の方へ戻る．右の図は s=0.2 での重みを訓練点の位置に対して描いたもので，ell=0.15 では近くの 5 点に重みが集中し，ell=0.4 では広い範囲に重みが分かれる．" style="max-width:640px;width:100%">
+<figcaption>図10.5　Nadaraya–Watson（NW）のカーネル回帰．データは<a href="#fig10-4">図10.4</a>と同じデータ A の 12 点（教育用の合成データ，seed 20261110）．(a) RBF 型の窓で $\ell=0.05$（実線），$0.15$（破線），$0.4$（一点鎖線）とした NW の予測と，比較のためのカーネル Ridge 回帰（KRR，$\ell=0.3$，$\lambda=0.1$，点線）．灰色は訓練範囲の外．(b) $s_*=0.2$ での重み $w_n(s_*)$（式 \eqref{eq:10-nw}）．■ は $\ell=0.15$，△ は $\ell=0.4$ で，細い曲線は窓の形 $k(s_*,s)\big/\sum_mk(s_*,s_m)$ である．</figcaption>
+</figure>
+
+<p><a href="#fig10-5">図10.5</a>(a) を見ると，$\ell$ が小さい NW の予測は階段状になる．点の間では最も近い点の値に引き寄せられるからである．訓練範囲の外では，NW は端の点の値（右側では最後の点 $s=0.76$ の 92.16 %）のまま水平に延び，KRR は平均 86.34 % の方へ戻る．どちらも「データの無い所は分からない」ことを，それぞれのやり方で表しているにすぎない．(b) は，予測が窓の幅の中の点の重み付き平均であることを示す．$\ell=0.15$ では $s_*=0.2$ の近くの 6 点（$0.049\le s_n\le0.416$）にほぼ全部の重みが乗り，$\ell=0.4$ では 12 点すべてに重みが分かれる．</p>
+
+<h3>10.8.2 Attention との関係（第24章の予告）</h3>
+
+<p>RBF 型の窓の重みを書き直す．$\norm{\bm{x}_*-\bm{x}_n}^{2}=\norm{\bm{x}_*}^{2}-2\bm{x}_*^{\tp}\bm{x}_n+\norm{\bm{x}_n}^{2}$ のうち，$\norm{\bm{x}_*}^{2}$ はすべての $n$ に共通なので，分母と分子で約分される．</p>
+\begin{equation}
+w_n(\bm{x}_*)=\frac{\exp(s_n)}{\sum_{m}\exp(s_m)} \label{eq:10-nw-softmax}
+\end{equation}
+$$
+s_n=\frac{\bm{x}_*^{\tp}\bm{x}_n}{\ell^{2}}-\frac{\norm{\bm{x}_n}^{2}}{2\ell^{2}}
+$$
+<p>重みは，スコア $s_n$ の softmax（第9章）である．さらに $\norm{\bm{x}_n}$ がすべて等しければ，第 2 項も約分されて $s_n=\bm{x}_*^{\tp}\bm{x}_n/\ell^{2}$ となる．すると NW の予測は</p>
+$$
+f(\bm{x}_*)=\sum_n\softmax_n\!\Bigl(\frac{\bm{x}_*^{\tp}\bm{x}_n}{\ell^{2}}\Bigr)\,y_n
+$$
+<p>であり，「問い合わせ（Query）$\bm{x}_*$ と見出し（Key）$\bm{x}_n$ の内積を尺度で割って softmax をとり，その重みで値（Value）$y_n$ を平均する」という形になる．これは第24章で扱う Attention の式 $\softmax(\bm{Q}\bm{K}^{\tp}/\sqrt{d_k})\bm{V}$ の 1 行分と同じ構造で，$1/\ell^{2}$ が $1/\sqrt{d_k}$ の役を担う．Attention では Query・Key・Value をそれぞれ学習する線形変換で作る点が違う．</p>
+
+<!-- ============================================================ -->
+<h2 id="sec10-9">10.9 計算量と限界 — カーネルの選択は仮定の選択<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>10.9.1 $N$ が増えると何が重くなるか</h3>
+
+<p>カーネル Ridge 回帰の計算の手間を数える（入力は $D$ 次元，予測点は 1 個）．</p>
+<ul>
+  <li>Gram 行列を作る：$N^{2}/2$ 個の成分それぞれにカーネルの計算（RBF なら $O(D)$）．合計 $O(N^{2}D)$．</li>
+  <li>記憶：$\bm{K}$ の $N^{2}$ 個の実数．倍精度（8 バイト）で $8N^{2}$ バイト．</li>
+  <li>$(\bm{K}+\lambda\bm{I})\bm{a}=\bm{y}$ を解く：Cholesky 分解 $\bm{K}+\lambda\bm{I}=\bm{L}\bm{L}^{\tp}$（$\bm{L}$ は下三角）に約 $N^{3}/6$ 回の掛け算（足し算と合わせて約 $N^{3}/3$ 回の演算），前進・後退代入 $\bm{L}\bm{z}=\bm{y}$，$\bm{L}^{\tp}\bm{a}=\bm{z}$ に $O(N^{2})$．</li>
+  <li>予測：$\bm{k}_*$ を作って内積をとる $O(ND)$．</li>
+</ul>
+<p>主問題の Ridge 回帰の手間 $O(NM^{2}+M^{3})$ と比べると，カーネル法はデータ数 $N$ に対して重い．数十〜数千点の材料データでは問題にならないが，第一原理計算で作った数十万の構造のようなデータには，そのままでは使えない．大きな $N$ に対しては，一部の点だけで $\bm{K}$ を低ランク近似する Nyström 法（Williams &amp; Seeger (2000)）や，カーネルを乱数で作った有限次元の特徴の内積で近似するランダム特徴（Rahimi &amp; Recht (2007)）が使われる．どちらも主問題の大きさに戻して計算する工夫である．</p>
+
+<h3>10.9.2 数値計算の注意</h3>
+
+<p>逆行列 $(\bm{K}+\lambda\bm{I})^{-1}$ は作らず，Cholesky 分解で連立方程式として解く（<a href="ch08_linear_regression.html#sec8-5">第8章 8.5 節</a>，<a href="ch12_gaussian_process.html#sec12-8">第12章 12.8 節</a>）．$\lambda$ は正則化であると同時に，数値の安定のためにも効く．RBF カーネルで 2 つの入力がほとんど同じ位置にあると，$\bm{K}$ のほぼ同じ 2 行が並び，最小固有値が 0 に近づく．$\lambda=0$ で補間しようとすると条件数が巨大になり，係数 $a_n$ が丸め誤差で大きく振れる．ガウス過程の文献で「ジッター」と呼ぶ小さな値を対角に足すのも同じ理由である．</p>
+
+<h3>10.9.3 カーネルを選ぶことはモデルを選ぶこと</h3>
+
+<p>カーネル法では，特徴を手で設計する代わりにカーネルを選ぶ．しかしカーネルは中立な道具ではなく，次の仮定を含む．</p>
+<ul>
+  <li><strong>何を「近い」とみなすか</strong>：使う記述子と距離の測り方．単位や桁の違う記述子をそのまま並べると，桁の大きい記述子だけで距離が決まる（標準化が必要．<a href="ch07_optimization.html#sec7-3">第7章 7.3 節</a>）．</li>
+  <li><strong>どのくらい離れたら無関係か</strong>：長さスケール $\ell$．</li>
+  <li><strong>どのくらい滑らかか</strong>：RBF（何回でも微分可能）か Matérn か Laplace か．</li>
+  <li><strong>どこでも同じ性質か</strong>：定常なカーネルは「入力空間のどこでも同じ距離なら同じだけ似ている」と仮定する．相境界の付近だけ急に変わる性質には合わない．</li>
+</ul>
+<p>カーネルの種類と $\ell$，$\lambda$ は，交差検証（<a href="ch06_generalization.html#sec6-5">第6章 6.5 節</a>）で選ぶか，第12章のガウス過程の周辺尤度で選ぶ．どちらの方法も，候補の中から選ぶことしかできない．候補に正しい仮定が無ければ，最良の候補でも外れる．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.9　計算量と条件数の見積もり</p>
+<p>(1) $N=2000$，$10^{4}$，$10^{5}$ のとき，Gram 行列を倍精度で保持する記憶量と，Cholesky 分解の演算（掛け算と足し算）の回数 $N^{3}/3$ を見積もれ．(2) RBF カーネル（$\sigma_f=1$，$\ell=1$）で，距離 $\delta=0.01$ だけ離れた 2 点の Gram 行列の固有値と条件数（最大固有値 ÷ 最小固有値）を求めよ．(3) $\lambda=0.01$ を足すと条件数はいくつになるか．</p>
+<p><strong>解答</strong>　(1) 記憶量 $8N^{2}$ バイトは，$N=2000$ で $3.2\times10^{7}$ バイト（32 MB），$N=10^{4}$ で $8\times10^{8}$ バイト（0.8 GB），$N=10^{5}$ で $8\times10^{10}$ バイト（80 GB）．演算の回数は $2.7\times10^{9}$，$3.3\times10^{11}$，$3.3\times10^{14}$（掛け算だけならこの半分）．$N$ が 10 倍になると記憶は 100 倍，手間は 1000 倍になる．<br>
+(2) $c=\exp(-\delta^{2}/2)=\exp(-5\times10^{-5})=0.99995$．$\bm{K}=\begin{pmatrix}1&c\\c&1\end{pmatrix}$ の固有値は $1+c=1.99995$ と $1-c=5.0\times10^{-5}$（固有ベクトル $(1,1)^{\tp}$ と $(1,-1)^{\tp}$）．条件数は $1.99995/(5.0\times10^{-5})\approx4.0\times10^{4}$．<br>
+(3) 固有値はどちらも $\lambda$ だけ増え，$2.00995$ と $0.01005$ になる．条件数は $2.00995/0.01005\approx200$ に下がる．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-10">10.10 材料工学・物性物理学との接点 — 類似度の設計<span class="route-tag adv">詳しいルート</span></h2>
+
+<p>カーネル法を材料に使うとき，いちばん重要な設計は「どの材料とどの材料を似ているとみなすか」である．式 \eqref{eq:10-krr} の予測は，似ている訓練データの値をつなぎ合わせたものにすぎないので，類似度の設計が予測の質をほとんど決める．ここでは，組成，原子の並び（原子環境），分子の 3 つの段階で考える．</p>
+
+<h3>10.10.1 組成を比べる</h3>
+
+<p>最も簡単な記述子は組成ベクトルである．元素 A，B，C からなる化合物を，各元素の原子の割合 $\bm{x}=(x_{\mathrm A},x_{\mathrm B},x_{\mathrm C})^{\tp}$（和は 1）で表し，RBF カーネルで比べる．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.10　組成ベクトルの類似度</p>
+<p>架空の元素 A，B，C の化合物 P：$\mathrm{ABC}$，Q：$\mathrm{ABC_2}$，R：$\mathrm{A_2C}$ を考える（教育用の設定）．(1) 各化合物の組成ベクトルを求めよ．(2) P と Q，P と R の距離の 2 乗と，RBF カーネル（$\sigma_f=1$，$\ell=0.2$）の値を求めよ．(3) この類似度は，B と C がどんな元素かに依存するか．材料の予測ではそれがなぜ問題になりうるかを述べよ．</p>
+<p><strong>解答</strong>　(1) 原子数の合計で割る．P $=(1/3,\ 1/3,\ 1/3)$，Q $=(1/4,\ 1/4,\ 1/2)$，R $=(2/3,\ 0,\ 1/3)$．<br>
+(2) P と Q：差は $(1/12,\ 1/12,\ -1/6)$ で，距離の 2 乗は $\tfrac{1}{144}+\tfrac{1}{144}+\tfrac{4}{144}=\tfrac{6}{144}=0.04167$．カーネルは $\exp(-0.04167/0.08)=e^{-0.521}=0.594$．P と R：差は $(-1/3,\ 1/3,\ 0)$ で，距離の 2 乗は $2/9=0.2222$，カーネルは $\exp(-0.2222/0.08)=e^{-2.78}=0.062$．<br>
+(3) 依存しない．組成ベクトルの各成分は互いに無関係な座標として扱われるので，「B を C に置き換える」ことは，B と C が周期表で隣の元素でもまったく違う元素でも同じだけの変化とみなされる．実際の材料では，価数やイオン半径の近い元素への置換は性質をあまり変えないことが多い．こうした知識を類似度に入れるには，元素の性質（原子半径・電気陰性度など）の平均や分散を組成で重み付けした記述子を作り，それを標準化してから RBF カーネルで比べる，などの工夫をする．どの性質を使うかが「似ている」の定義になる．</p>
+</div>
+
+<h3>10.10.2 原子環境を比べる — 回転と並べ替えで変わらない類似度</h3>
+
+<p>結晶や分子のエネルギー，原子に働く力は，原子の位置と種類で決まる．機械学習で原子間ポテンシャルを作る方法の多くは，全エネルギーを各原子の「局所的なエネルギー」の和に分け，局所的なエネルギーを<strong>その原子のまわり（カットオフ半径の内側）の原子の配置</strong>から予測する．このとき類似度には次の性質が必要である．物理的に同じ配置は，座標の書き方が違っても同じエネルギーを持つからである．</p>
+<ul>
+  <li><strong>並進</strong>：全原子を同じだけずらしても変わらない．</li>
+  <li><strong>回転</strong>：全体を回しても変わらない（エネルギーはスカラーである）．</li>
+  <li><strong>同種原子の並べ替え</strong>：同じ元素の原子に付けた番号を入れ替えても変わらない．</li>
+  <li><strong>滑らかさ</strong>：原子が少し動くと，類似度も少しだけ変わる（力はエネルギーの微分なので，滑らかでないと力が不連続になる）．</li>
+</ul>
+
+<figure id="fig10-6">
+<svg role="img" aria-label="3 つの原子からなる配置を 2 通りに書いた模式図．左は原子 1 を原点に，原子 2 を右に，原子 3 を上に置いた配置．中央は同じ配置を 90 度回して原子 2 と 3 の番号を入れ替えたもの．右側に，座標を並べた記述子では 2 つのベクトルが違い類似度がほぼ 0 になるが，原子間距離を小さい順に並べた記述子では同じになることを示す．" viewBox="0 0 620 300" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図10.6　物理的に同じ配置と記述子</title>
+<text x="95" y="24" font-size="15" text-anchor="middle" fill="#1a1a1a">配置 P</text>
+<line x1="40" y1="200" x2="140" y2="200" stroke="#888" stroke-width="1.6"></line>
+<line x1="40" y1="200" x2="40" y2="80" stroke="#888" stroke-width="1.6"></line>
+<line x1="140" y1="200" x2="40" y2="80" stroke="#888" stroke-width="1.2" stroke-dasharray="4 3"></line>
+<circle cx="40" cy="200" r="15" fill="#5b2a5e"></circle><text x="40" y="205" font-size="14" text-anchor="middle" fill="#fff">1</text>
+<circle cx="140" cy="200" r="15" fill="#fff" stroke="#0072b2" stroke-width="2"></circle><text x="140" y="205" font-size="14" text-anchor="middle" fill="#1a1a1a">2</text>
+<circle cx="40" cy="80" r="15" fill="#fff" stroke="#0072b2" stroke-width="2"></circle><text x="40" y="85" font-size="14" text-anchor="middle" fill="#1a1a1a">3</text>
+<text x="92" y="222" font-size="14" text-anchor="middle" fill="#1a1a1a">1.0</text>
+<text x="24" y="145" font-size="14" text-anchor="end" fill="#1a1a1a">1.2</text>
+<line x1="170" y1="150" x2="222" y2="150" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig10-6)"></line>
+<text x="196" y="138" font-size="13" text-anchor="middle" fill="#1a1a1a">90° 回転</text>
+<text x="196" y="172" font-size="13" text-anchor="middle" fill="#1a1a1a">2⇔3 入替</text>
+<defs><marker id="arr-fig10-6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker></defs>
+<text x="300" y="24" font-size="15" text-anchor="middle" fill="#1a1a1a">配置 Q</text>
+<line x1="370" y1="200" x2="250" y2="200" stroke="#888" stroke-width="1.6"></line>
+<line x1="370" y1="200" x2="370" y2="100" stroke="#888" stroke-width="1.6"></line>
+<line x1="250" y1="200" x2="370" y2="100" stroke="#888" stroke-width="1.2" stroke-dasharray="4 3"></line>
+<circle cx="370" cy="200" r="15" fill="#5b2a5e"></circle><text x="370" y="205" font-size="14" text-anchor="middle" fill="#fff">1</text>
+<circle cx="250" cy="200" r="15" fill="#fff" stroke="#0072b2" stroke-width="2"></circle><text x="250" y="205" font-size="14" text-anchor="middle" fill="#1a1a1a">2</text>
+<circle cx="370" cy="100" r="15" fill="#fff" stroke="#0072b2" stroke-width="2"></circle><text x="370" y="105" font-size="14" text-anchor="middle" fill="#1a1a1a">3</text>
+<text x="310" y="222" font-size="14" text-anchor="middle" fill="#1a1a1a">1.2</text>
+<text x="386" y="155" font-size="14" text-anchor="start" fill="#1a1a1a">1.0</text>
+<rect x="420" y="50" width="190" height="95" rx="8" fill="#fff" stroke="#1a1a1a" stroke-width="1.2" stroke-dasharray="6 4"></rect>
+<text x="515" y="74" font-size="14" text-anchor="middle" fill="#1a1a1a">座標を並べる</text>
+<text x="515" y="98" font-size="14" text-anchor="middle" fill="#1a1a1a">P と Q で違うベクトル</text>
+<text x="515" y="124" font-size="14" text-anchor="middle" fill="#1a1a1a">類似度 ≈ 0（不適）</text>
+<rect x="420" y="165" width="190" height="95" rx="8" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.8"></rect>
+<text x="515" y="189" font-size="14" text-anchor="middle" fill="#1a1a1a">距離を小さい順に</text>
+<text x="515" y="213" font-size="14" text-anchor="middle" fill="#1a1a1a">(1.0, 1.2, 1.56)</text>
+<text x="515" y="239" font-size="14" text-anchor="middle" fill="#1a1a1a">P と Q で同じ（類似度 1）</text>
+<text x="200" y="285" font-size="13" text-anchor="middle" fill="#4a5568">数字は原子の番号，辺の数は原子間距離（Å，教育用の値）</text>
+</svg>
+<figcaption>図10.6　物理的に同じ配置を，回転と番号の付け替えで別の座標に書いた例（模式図．原子 2 と 3 は同じ元素，原子 1 は別の元素とする）．座標をそのまま並べた記述子（破線の枠）では P と Q が別物に見えるが，原子間距離を小さい順に並べた記述子（実線の枠）では同じになる．距離の並べ替えは原子が多いと情報が足りず，並べ替えで滑らかさも失われるため，実用には SOAP などのより精密な不変記述子が使われる（演習10.6）．</figcaption>
+</figure>
+
+<p>座標をそのまま並べたベクトルに RBF カーネルを使うと，回転・並べ替えの不変性がどれも満たされない（<a href="#fig10-6">図10.6</a>）．Bartók, Kondor &amp; Csányi (2013) は，原子環境を表す記述子に求められる不変性を整理し，<strong>SOAP</strong>（smooth overlap of atomic positions）と呼ばれる類似度を提案した．考え方の骨組みは次のとおりである．中心原子のまわりの各原子の位置に小さな Gauss 型の雲を置いて「原子の密度」を作り，2 つの環境の密度の重なり（積分）を測る．重なりは並べ替えに不変で，原子が動くと滑らかに変わる．さらに，一方の環境をあらゆる向きに回転させた重なりを平均（積分）することで，回転にも不変にする．こうして作った類似度は正定値カーネルになるので，カーネル Ridge 回帰や第12章のガウス過程回帰にそのまま使える．同じ論文は，それまで使われていたいくつかの記述子が一般的な展開の特別な場合であることも示した．</p>
+
+<h3>10.10.3 分子のエネルギーをカーネル Ridge 回帰で予測する</h3>
+
+<div class="box phys">
+<p class="box-title">応用：分子の原子化エネルギーの予測</p>
+<p>分子の<strong>原子化エネルギー</strong>は，分子をばらばらの原子に分けるのに必要なエネルギーで，分子の安定性の目安になる．量子化学計算（密度汎関数理論など）で求められるが，分子 1 つあたりの計算に時間がかかるので，多数の候補を調べるには速い代理モデルが欲しい．Rupp, Tkatchenko, Müller &amp; von Lilienfeld (2012) は，原子番号と原子の位置だけから作った行列（原子核どうしの Coulomb 反発を並べた「Coulomb 行列」）を記述子とし，カーネル Ridge 回帰 \eqref{eq:10-krr} で有機分子の原子化エネルギーを予測した．7000 を超える有機分子での交差検証で，平均絶対誤差は約 10 kcal/mol と報告されている．</p>
+<p>本章の言葉で言えば，この研究は (i) 分子の類似度を，並進・回転に不変な記述子（原子間の距離から作る行列）とカーネルで定め，(ii) 学習データの分子との類似度の重ね合わせで予測した，ということである．並べ替えへの不変性は，Coulomb 行列そのものではなく，その固有値を絶対値の大きい順に並べた列を記述子にすることで得ている（原子の番号を入れ替えても固有値は変わらない）．原子の数が違う分子どうしは，短い方の列に 0 を足して長さをそろえて比べ，類似度には Gauss（RBF）カーネルを使った．類似度の設計を誤ると，物理的に同じ分子が「似ていない」と判定され，予測が乱れる．</p>
+</div>
+
+<p>回転・並べ替えに対する不変性（または，回転とともに決まった規則で変わる「同変性」）をモデルの構造に組み込む考え方は，第16章でニューラルネットワーク（グラフ・対称性を利用する深層学習）について扱う．カーネル法では，その要求を<strong>カーネルの設計</strong>に入れる．ガウス過程による原子間ポテンシャルの話題は第12章と第27章で再び取り上げる．</p>
+
+<div class="box ex">
+<p class="box-title">例題10.11　訓練範囲の外の予測（外挿）</p>
+<p><a href="#fig10-4">図10.4</a>，<a href="#fig10-5">図10.5</a> のデータ A について，訓練範囲（$s\in[-1,1]$，すなわち 1100〜1500 °C．実際の点は $s=-0.93$〜$0.76$）の外の 1700 °C（$s=2$）と 1000 °C（$s=-1.5$）での予測を考える．カーネル Ridge 回帰（$\ell=0.3$，$\lambda=0.1$）は 86.34 % と 84.43 %，Nadaraya–Watson（$\ell=0.15$）は 92.16 % と 74.97 % を与える．データ A の式をそのまま延ばした値は 83.44 % と 66.71 % である（教育用の設定であり，実在の材料の挙動ではない）．(1) それぞれの予測値が何に由来するかを説明せよ．(2) この比較から，カーネル法の外挿について何が言えるか．</p>
+<p><strong>解答</strong>　(1) カーネル Ridge 回帰は，$s=2$ では最も近い点 $s=0.76$ からも $4\ell$ 以上離れ，$\bm{k}_*\approx\bm{0}$ なので予測は平均 $\bar{y}=86.34\ \%$ に戻る．$s=-1.5$ は端の点 $s=-0.93$ から約 $1.9\ell$ なので，まだ一部の点の影響が残り 84.43 % になる．Nadaraya–Watson は重みの和が 1 に保たれるので，遠く離れると最も近い点の重みが 1 に近づき，端の点の値（$s=0.76$ の 92.16 %，$s=-0.93$ の 74.96 %）をほぼそのまま返す．<br>
+(2) どちらの値も「データの外の物理」を表してはいない．カーネル法の外挿は，カーネルの形と平均の扱い（平均へ戻るか，端の値を延ばすか）という<strong>モデルの仮定</strong>で決まる．外挿が必要なら，物理的な理由のある関数形（たとえば第8章の Arrhenius 型）を平均関数や基底に入れるか，外挿であることを明示して追加実験で確かめる（<a href="ch06_generalization.html#sec6-9">第6章 6.9 節</a>）．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-11">10.11 誤解しやすい点と適用限界<span class="route-tag adv">詳しいルート</span></h2>
+
+<div class="box warn">
+<p class="box-title">注意：「無限次元の特徴だから何でも学べる」わけではない</p>
+<p>RBF カーネルの特徴空間は無限次元だが，リプレゼンター定理（10.7 節）のとおり，解はデータ点 $N$ 個のカーネルの重ね合わせであり，使える自由度はデータの数で頭打ちになる．データの無い領域では予測は平均（または端の値）へ戻るだけで，そこでの関数の形を学ぶことはできない．表現力が大きいことと，少ないデータから正しく一般化できることは別である（第6章）．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：距離を使うカーネルは入力の単位と桁に敏感である</p>
+<p>RBF・Laplace・Matérn カーネルは $\norm{\bm{x}-\bm{x}'}$ を使うので，焼成温度（°C，数百の幅）と組成（0〜1）をそのまま並べると，距離はほぼ温度だけで決まる．記述子を標準化するか，次元ごとに長さスケール $\ell_i$ を持たせる．標準化の平均と標準偏差は<strong>訓練データだけ</strong>から計算する．全データで計算すると，検証データの情報が学習に漏れる（データ漏洩．<a href="ch06_generalization.html#sec6-7">第6章 6.7 節</a>）．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：自作の類似度がカーネルとは限らない</p>
+<p>「1 − 距離」「相関係数」「文字列の一致率」のような直観的な類似度は，正定値でないことがある（例題10.4 (1)(2)）．正定値でないと，$\bm{K}+\lambda\bm{I}$ が負の固有値を持って解けなくなったり，第11章の SVM の最適化が凸でなくなって解が意味を失ったりする．新しい類似度を使うときは，内積の形に書けるか，定理10.2 の規則で組み立てられるかを確かめ，少なくとも実データの Gram 行列の最小固有値を調べる．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：カーネル回帰とカーネル Ridge 回帰は別物である</p>
+<p>名前が似ているが，Nadaraya–Watson のカーネル回帰（10.8 節）は重み付き平均で，連立方程式を解かず，予測は観測値の範囲に収まる．カーネル Ridge 回帰（10.6 節）は正則化した最小二乗の解で，係数は負にもなり，予測は観測値の範囲を超えうる．どちらの予測にも，それ自体には「どれだけ確かか」の情報は無い．不確かさが必要なら第12章のガウス過程回帰を使う．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：$\ell$ と $\lambda$ を訓練誤差で選ばない</p>
+<p>$\ell\to0$ か $\lambda\to0$ にすれば，訓練データの誤差はいくらでも小さくできる（<a href="#fig10-4">図10.4</a> の $\ell=0.05$ や $\lambda=10^{-4}$）．訓練誤差が小さいことは良いモデルの証拠にならない．交差検証か周辺尤度で選び，選んだ後の評価は別のテストデータで行う（<a href="ch06_generalization.html#sec6-3">第6章 6.3 節</a>）．材料データでは，同じ系統の試料が訓練と検証にまたがらないように分ける（<a href="ch06_generalization.html#sec6-8">第6章 6.8 節</a>）．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題10.12　標準化の有無で距離がどう変わるか</p>
+<p>2 つの試料を（焼成温度 $T$ / °C，添加量 $x$ / mol%）で表し，A $=(1200,\ 2.0)$，B $=(1210,\ 8.0)$，C $=(1300,\ 2.2)$ とする（教育用の設定）．(1) 標準化せずに A–B，A–C の Euclid 距離を求め，RBF カーネルで「A により似ているのはどちらか」を答えよ．(2) 訓練データの標準偏差が温度 100 °C，添加量 3 mol% だったとして，各成分を標準偏差で割ってから距離を求め直せ．(3) 結果の違いを説明せよ．</p>
+<p><strong>解答</strong>　(1) A–B：$\sqrt{10^{2}+6.0^{2}}=\sqrt{136}=11.66$．A–C：$\sqrt{100^{2}+0.2^{2}}=100.0$．RBF カーネルは距離が短いほど大きいので，B の方が A に似ているとみなされる．<br>
+(2) 標準化した差は，A–B が $(10/100,\ 6.0/3)=(0.1,\ 2.0)$ で距離 $\sqrt{0.01+4}=2.002$，A–C が $(100/100,\ 0.2/3)=(1.0,\ 0.0667)$ で距離 $\sqrt{1+0.00444}=1.002$．今度は C の方が A に似ている．<br>
+(3) 標準化しないと，数値の幅の大きい温度の差が距離をほぼ決め，添加量 6 mol% の大きな違いが無視される．標準化すると，両方の記述子を「訓練データのばらつきの何倍か」で比べることになる．どちらが物理的に正しい類似度かはデータだけでは決まらないが，単位の選び方（°C か K か，mol% か mol 分率か）で結果が変わる距離は避けるべきである．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec10-12">10.12 まとめ・次章への接続・演習・参考文献</h2>
+
+<h3>10.12.1 まとめ</h3>
+<ul>
+  <li><strong>特徴空間</strong>：入力を $\bm{\phi}(\bm{x})$ に写してから線形モデルを使うと，入力空間では曲がった境界・曲線を表せる．同心円は $(x_1^{2},x_2^{2},\sqrt2x_1x_2)$ で線形分離できる．</li>
+  <li><strong>双対表現</strong>：Ridge 回帰の解は $\bm{w}=\bm{\Phi}^{\tp}\bm{a}$，$\bm{a}=(\bm{K}+\lambda\bm{I}_N)^{-1}\bm{y}$，$\bm{K}=\bm{\Phi}\bm{\Phi}^{\tp}$ と書け，学習も予測も特徴ベクトルの内積だけで書ける．行列の大きさは $M\times M$ から $N\times N$ に変わる．</li>
+  <li><strong>カーネルトリック</strong>：内積 $\bm{\phi}(\bm{x})^{\tp}\bm{\phi}(\bm{x}')$ をカーネル $k(\bm{x},\bm{x}')$ で直接計算する．$(\bm{x}^{\tp}\bm{x}')^{2}$ は 2 次の単項式，$(\bm{x}^{\tp}\bm{x}'+1)^{d}$ は $d$ 次以下のすべての単項式，RBF カーネルは無限個の特徴に対応する．</li>
+  <li><strong>正定値性</strong>：カーネルとして使える ⇔ どの点の組でも Gram 行列が半正定値．和・積・正の定数倍・指数などで組み立てられる．距離の 2 乗はカーネルでない．</li>
+  <li><strong>長さスケール</strong>：$\ell$ は「どこまで離れた点を似ているとみなすか」．短すぎると点の間で平均に戻り，長すぎると細部を表せない．$\lambda$ は細かい成分を縮める．</li>
+  <li><strong>リプレゼンター定理</strong>：RKHS のノルムで正則化した問題の解は $\sum_na_nk(\bm{x}_n,\cdot)$ の形．SVM・ガウス過程も同じ形を持つ．</li>
+  <li><strong>Nadaraya–Watson</strong>：窓の値で重み付けした平均．重みは softmax の形で，Attention の原型である．</li>
+  <li><strong>限界</strong>：計算 $O(N^{3})$，記憶 $O(N^{2})$．カーネルの選択は「何を近いとみなすか」という仮定の選択で，材料では回転・並べ替えに不変な類似度の設計が要る．</li>
+</ul>
+
+<div class="keyeq">
+\begin{align}
+f(\bm{x}_*)&=\bm{k}_*^{\tp}\bm{a} \label{eq:10-key}\\
+\bm{a}&=(\bm{K}+\lambda\bm{I}_N)^{-1}\bm{y} \notag\\
+\bm{c}^{\tp}\bm{K}\bm{c}&\ge0 \notag
+\end{align}
+</div>
+
+<h3>10.12.2 次章への接続</h3>
+<p>本章では回帰を中心にカーネルを導入した．次の<a href="ch11_svm.html">第11章</a>では，分類の境界を「マージン（境界から最も近い点までの距離）を最大にする」という基準で決めるサポートベクトルマシンを扱う．<a href="ch07_optimization.html#sec7-7">第7章 7.7 節</a>の KKT 条件で双対問題を導くと，予測は本章と同じ形 $\sum_n\alpha_ny_nk(\bm{x}_n,\bm{x})+b$ になり（本章の $a_n$ に当たるのが $\alpha_ny_n$．$\alpha_n$ は第11章の双対変数），しかも多くの係数がちょうど 0 になる．シミュレーター10.1 で見た「サポートベクトル」がその 0 でない点である．さらに<a href="ch12_gaussian_process.html">第12章</a>では，カーネルを「関数値の共分散」と読み替え，カーネル Ridge 回帰と同じ予測の平均に，予測の不確かさを加えるガウス過程回帰を導く．第24章では，10.8 節の重み付き平均が Attention として再び現れる．</p>
+
+<h3>10.12.3 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習10.1　非同次の多項式カーネルの特徴写像（計算）</p>
+<p>$D=2$，$c\gt0$ とする．(1) $(\bm{x}^{\tp}\bm{x}'+c)^{2}$ を展開し，6 次元の特徴写像 $\bm{\phi}(\bm{x})$ を書け．(2) $c$ を大きくすると，どの成分の比重が増すか．(3) $\bm{x}=(1,2)^{\tp}$，$\bm{x}'=(3,-1)^{\tp}$，$c=2$ でカーネルの値と特徴ベクトルの内積を計算し，一致を確かめよ．(4) $D=5$，$d=3$ と $D=20$，$d=3$ の非同次の多項式カーネルに対応する特徴の数を求めよ．</p>
+<p><em>ヒント：</em>(1) は例題10.3 (2) を $c$ つきにする．(4) は $\binom{D+d}{d}$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-1">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.2　主問題と双対問題を結ぶ恒等式（導出）</p>
+<p>$\bm{\Phi}\in\R^{N\times M}$，$\lambda\gt0$ とする．(1) $\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M$ と $\bm{\Phi}\bm{\Phi}^{\tp}+\lambda\bm{I}_N$ がどちらも正則であることを示せ．(2) $(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M)^{-1}\bm{\Phi}^{\tp}=\bm{\Phi}^{\tp}(\bm{\Phi}\bm{\Phi}^{\tp}+\lambda\bm{I}_N)^{-1}$ を示せ．(3) $N=50$，$M=10^{4}$ のとき，主問題と双対問題で Cholesky 分解の演算（掛け算と足し算）の回数（行列の大きさの 3 乗の 1/3）を比べよ．</p>
+<p><em>ヒント：</em>(1) は $\bm{v}^{\tp}(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I})\bm{v}=\norm{\bm{\Phi}\bm{v}}^{2}+\lambda\norm{\bm{v}}^{2}$．(2) は $\bm{\Phi}^{\tp}(\bm{\Phi}\bm{\Phi}^{\tp}+\lambda\bm{I}_N)=(\bm{\Phi}^{\tp}\bm{\Phi}+\lambda\bm{I}_M)\bm{\Phi}^{\tp}$ から出発する．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-2">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.3　カーネルの組み立て（導出）</p>
+<p>(1) $k_1,k_2$ が正定値カーネルなら，積 $k_1k_2$ も正定値であることを，Gram 行列の言葉で示せ．（ヒントの事実を使ってよい．）(2) $\exp(\bm{x}^{\tp}\bm{x}'/\ell^{2})$ が正定値カーネルであることを示せ．(3) (2) と定理10.2 の (4) を使って，RBF カーネル \eqref{eq:10-rbf} が正定値であることを示せ．(4) $k(x,x')=\exp(-\abs{x-x'})$（1 次元の Laplace カーネル）の，3 点 $x=0,1,3$ での Gram 行列の固有値を求め，すべて正であることを確かめよ．</p>
+<p><em>ヒント：</em>(1) $\bm{K}_2=\sum_i\mu_i\bm{u}_i\bm{u}_i^{\tp}$（$\mu_i\ge0$）と固有値分解し，$\bm{c}^{\tp}(\bm{K}_1\odot\bm{K}_2)\bm{c}=\sum_i\mu_i(\bm{c}\odot\bm{u}_i)^{\tp}\bm{K}_1(\bm{c}\odot\bm{u}_i)$ を示す（$\odot$ は成分ごとの積）．(4) は計算機を使ってよい．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-3">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.4　3 点のカーネル Ridge 回帰（計算）</p>
+<p>3 点 $(x_n,y_n)=(-1,1),(0,0),(1,1)$ に，RBF カーネル（$\sigma_f=1$，$\ell=1$），$\lambda=0.5$ のカーネル Ridge 回帰を当てはめる（平均を引かない）．(1) 対称性から $\bm{a}=(p,q,p)^{\tp}$ とおけることを説明し，$p,q$ の連立方程式を立てて解け．(2) $f(0)$，$f(1)$，$f(3)$ を求めよ．(3) 訓練点での予測が観測値からずれる理由と，$f(3)$ が 0 に近い理由を述べよ．</p>
+<p><em>ヒント：</em>$e^{-1/2}=0.60653$，$e^{-2}=0.13534$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-4">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.5　混晶のバンドギャップをカーネル Ridge 回帰で補間する（材料の題材）</p>
+<p>データ B（<a href="ch08_linear_regression.html#sec8-1">第8章 8.1 節</a>）の架空の混晶 $\mathrm{A_{1-x}B_xC}$ のバンドギャップ $E_g(x)=1.20(1-x)+2.40x-0.80x(1-x)$ eV を，ノイズなしで $x=0,\ 0.5,\ 1$ の 3 点だけ測ったとする（教育用の設定）．(1) 3 点の $E_g$ と平均 $\bar{y}$ を求めよ．(2) RBF カーネル（$\sigma_f=1$，$\ell=0.5$），$\lambda=10^{-3}$ で，平均を引いてカーネル Ridge 回帰を当てはめ，$x=0.25$ と $0.75$ の予測を求めて真の値と比べよ．(3) 直線で補間した値と比べ，どちらが真の値に近いか，その理由を述べよ．(4) $x=1.3$ の予測値は何を意味するか．</p>
+<p><em>ヒント：</em>$\bm{K}$ は演習10.4 と同じ数値の並びになる（距離 $0.5=\ell$ と $1.0=2\ell$）．連立方程式は計算機で解いてよい．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-5">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.6　原子の配置の類似度と不変性（材料の題材・考察）</p>
+<p>平面上の 3 原子の配置 P：原子 1 $(0,0)$，原子 2 $(1.0,0)$，原子 3 $(0,1.2)$（Å）を考える（原子 2 と 3 は同じ元素．教育用の値）．P を原点のまわりに 90° 回転し，原子 2 と 3 の番号を入れ替えたものを Q とする．(1) Q の座標を書け．(2) 6 個の座標を並べたベクトルを記述子とし，RBF カーネル（$\ell=0.5$ Å）で P と Q の類似度を求めよ．(3) 原子間距離 3 つを小さい順に並べた記述子で同じことをせよ．(4) 原子 3 を $(0,1.3)$ に動かした配置 P′ と P の類似度を，(3) の記述子で求めよ．(5) 距離を小さい順に並べる記述子の弱点を 2 つ挙げよ．</p>
+<p><em>ヒント：</em>90° の回転は $(x,y)\mapsto(-y,x)$．(5) は原子の数が増えたときと，2 つの距離が入れ替わる瞬間を考える．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-6">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.7　Nadaraya–Watson の極限と Attention（計算・考察）</p>
+<p>例題10.8 の 3 点 $(0,1),(1,3),(2,2)$ と RBF 型の窓を使う．(1) $x_*=1.5$ で，$\ell\to0$ と $\ell\to\infty$ の極限の予測を求めよ．(2) $\ell=1$ で $x_*=4$ の重みと予測を求めよ．(3) (2) の重みが，スコア $s_n=x_*x_n/\ell^{2}-x_n^{2}/(2\ell^{2})$ の softmax と一致することを確かめよ．(4) Attention の尺度 $1/\sqrt{d_k}$ を大きくすることは，$\ell$ をどうすることに当たるか．</p>
+<p><em>ヒント：</em>(1) $\ell\to0$ では最も近い点の重みだけが残る（同じ距離の点が複数あれば等分）．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-7">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習10.8　結晶方位に対する周期的なカーネル（材料の題材・導出）</p>
+<p>立方晶の単結晶の (001) 面内で，引張りの方向の角度 $\theta$（°）を変えて弾性率を測る．立方晶は [001] 軸のまわりに 4 回対称なので，この量は $\theta$ について周期 $p=90°$ を持つ．(1) $\bm{u}(\theta)=\bigl(\cos(2\pi\theta/p),\ \sin(2\pi\theta/p)\bigr)^{\tp}$ と写し，$\bm{u}$ の空間の RBF カーネル（$\sigma_f=1$，長さスケール $\ell$）を $\theta$ で書くと $k(\theta,\theta')=\exp\bigl(-2\sin^{2}(\pi(\theta-\theta')/p)/\ell^{2}\bigr)$ になることを示し，これが正定値カーネルである理由を述べよ．(2) $\ell=1$ で $\theta-\theta'=15°,\ 45°,\ 90°$ のカーネルの値を求めよ．(3) $\theta$ そのものに RBF カーネル（長さスケール 20°）を使った場合と比べ，周期的なカーネルを使う利点を述べよ．</p>
+<p><em>ヒント：</em>$\norm{\bm{u}-\bm{u}'}^{2}=2-2\cos(2\pi\Delta/p)$ と半角の公式．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-10-8">→ 解答</a></p>
+</div>
+
+<h3>10.12.4 参考文献</h3>
+<div class="refs">
+<ol>
+<li>C. M. Bishop, <em>Pattern Recognition and Machine Learning</em>, Springer (2006)（6 章でカーネル法の双対表現・カーネルの構成・Nadaraya–Watson モデルを扱う）．</li>
+<li>B. Schölkopf and A. J. Smola, <em>Learning with Kernels: Support Vector Machines, Regularization, Optimization, and Beyond</em>, MIT Press (2002)（正定値カーネルと再生核 Hilbert 空間の標準的な教科書）．</li>
+<li>T. Hofmann, B. Schölkopf and A. J. Smola, "Kernel methods in machine learning", <em>The Annals of Statistics</em> <strong>36</strong>, 1171–1220 (2008)，doi:10.1214/009053607000000677（カーネル法の総説）．</li>
+<li>C. E. Rasmussen and C. K. I. Williams, <em>Gaussian Processes for Machine Learning</em>, MIT Press (2006)（4 章で Matérn などのカーネルの性質を扱う．著者の Web サイトで公開）．</li>
+<li>N. Aronszajn, "Theory of reproducing kernels", <em>Transactions of the American Mathematical Society</em> <strong>68</strong>, 337–404 (1950)（再生核 Hilbert 空間の理論）．</li>
+<li>G. S. Kimeldorf and G. Wahba, "Some results on Tchebycheffian spline functions", <em>Journal of Mathematical Analysis and Applications</em> <strong>33</strong>, 82–95 (1971)（リプレゼンター定理の原型）．</li>
+<li>B. Schölkopf, R. Herbrich and A. J. Smola, "A generalized representer theorem", in <em>Computational Learning Theory (COLT 2001)</em>, Lecture Notes in Computer Science <strong>2111</strong>, 416–426, Springer (2001)．</li>
+<li>E. A. Nadaraya, "On estimating regression", <em>Theory of Probability and Its Applications</em> <strong>9</strong>, 141–142 (1964)．</li>
+<li>G. S. Watson, "Smooth regression analysis", <em>Sankhyā: The Indian Journal of Statistics, Series A</em> <strong>26</strong>, 359–372 (1964)．</li>
+<li>C. K. I. Williams and M. Seeger, "Using the Nyström method to speed up kernel machines", <em>Advances in Neural Information Processing Systems</em> <strong>13</strong>（NIPS 2000）, 682–688 (2000)．</li>
+<li>A. Rahimi and B. Recht, "Random features for large-scale kernel machines", <em>Advances in Neural Information Processing Systems</em> <strong>20</strong>, 1177–1184 (2007)．</li>
+<li>M. Rupp, A. Tkatchenko, K.-R. Müller and O. A. von Lilienfeld, "Fast and accurate modeling of molecular atomization energies with machine learning", <em>Physical Review Letters</em> <strong>108</strong>, 058301 (2012)，doi:10.1103/PhysRevLett.108.058301．</li>
+<li>A. P. Bartók, R. Kondor and G. Csányi, "On representing chemical environments", <em>Physical Review B</em> <strong>87</strong>, 184115 (2013)，doi:10.1103/PhysRevB.87.184115（SOAP の提案）．</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch09_linear_classification.html">← 第9章：線形識別モデル — 決定境界と確率</a>
+  <span class="spacer"></span>
+  <a href="ch11_svm.html">第11章：サポートベクトルマシン — マージンを最大にする →</a>
+</nav>
+</main>
+</body>
+</html>

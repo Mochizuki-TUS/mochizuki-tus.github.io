@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>回帰と過学習シミュレーター — 多項式回帰・正則化・バイアスと分散・ベイズ線形回帰</title>
+<meta name="description" content="焼成温度と相対密度の教育用の合成データで，多項式の次数と正則化が過学習をどう変えるか，バイアスと分散の兼ね合い，ベイズ線形回帰の予測の不確かさを確かめるシミュレーターです．">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第6章・第8章のシミュレーター S03．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim table.grid.coef td:nth-child(odd) { color: var(--sub); text-align: center; }
+#qsim .legend .hatch { display: inline-block; width: 24px; height: 9px; margin-right: 5px; vertical-align: middle; border: 1px dashed #3a8fc8;
+  background: repeating-linear-gradient(135deg, rgba(58,143,200,.55) 0 1.5px, rgba(58,143,200,.12) 1.5px 5px); }
+#qsim .inline-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+#qsim .inline-row .ctl { margin: 0; }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>回帰と過学習 — 次数・正則化・データ数で予測がどう変わるか</h1>
+  <p class="lead">焼成温度と相対密度の教育用の合成データ（データ A）に多項式や Gauss 基底の線形モデルを当てはめます．次数を上げると訓練誤差は下がり続けるのに検証誤差は途中から増えること（過学習），正則化 <i>λ</i> がそれを抑えること，その背後にあるバイアスと分散の兼ね合い，ベイズ線形回帰で予測の不確かさがノイズ由来と知識不足由来の 2 つに分かれることを，画面の数値を本文の式に入れて確かめてください．</p>
+
+  <div class="tabs" role="tablist" aria-label="シミュレーターの切り替え">
+    <button class="tab is-active" data-tab="fit" role="tab" type="button">① 多項式回帰と正則化</button>
+    <button class="tab" data-tab="biasvar" role="tab" type="button">② バイアスと分散</button>
+    <button class="tab" data-tab="bayes" role="tab" type="button">③ ベイズ線形回帰</button>
+  </div>
+
+  <!-- ① fit -->
+  <section class="panel" data-panel="fit">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">多項式の当てはめ（データ A：焼成温度と相対密度）</p>
+        <p class="psub">次数 <i>d</i> の多項式 <i>f</i>(<i>s</i>; <b>w</b>) = <i>w</i><sub>0</sub> + <i>w</i><sub>1</sub><i>s</i> + … + <i>w</i><sub><i>d</i></sub><i>s</i><sup><i>d</i></sup>（＋ 基準値 88 %）を，最小二乗または Ridge 回帰で当てはめます．</p>
+        <div class="stage">
+          <canvas data-role="cvFit"></canvas>
+          <div data-role="lgFit"></div>
+          <p class="cap" data-role="capFit"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvCurve"></canvas>
+          <div data-role="lgCurve"></div>
+          <p class="cap">横軸は多項式の次数 <i>d</i>（係数は <i>d</i> + 1 個），縦軸は RMSE（%，対数目盛）．各次数を同じ訓練データ・同じ <i>λ</i> で当てはめ直した値です．縦の線が現在の次数．検証 RMSE はノイズの標準偏差 <i>σ</i> より小さくなりにくいことに注意してください．0.01 % 未満の値は下端に描きます．</p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqFit" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlFit"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readFit" aria-live="polite"></div>
+          <p class="msg empty" data-role="noteFit"></p>
+        </div>
+        <div class="info">
+          <h3>係数 <i>w</i><sub><i>j</i></sub> の大きさ</h3>
+          <div data-role="coefFit"></div>
+          <p class="hint">目標値は <i>y</i> − 88 % です（<i>w</i><sub>0</sub> は 88 % からのずれ）．過学習すると係数の絶対値が桁違いに大きくなり，正の項と負の項が打ち消しあって訓練データを通ります．</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② biasvar -->
+  <section class="panel" data-panel="biasvar" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">同じ条件のデータ集合を何組も作って当てはめを重ねる</p>
+        <p class="psub">データ A から <i>N</i> 点を引いて当てはめる，を <i>L</i> 組くり返します．当てはめの平均 <i>f̄</i>(<i>s</i>) と真の関数 <i>g</i>(<i>s</i>) のずれがバイアス，組ごとのばらつきが分散です．</p>
+        <div class="stage">
+          <canvas data-role="cvBV"></canvas>
+          <div data-role="lgBV"></div>
+          <p class="cap" data-role="capBV"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvDec"></canvas>
+          <div data-role="lgDec"></div>
+          <p class="cap" data-role="capDec"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqBV" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlBV"></div>
+        <div class="info">
+          <h3>読み出し</h3>
+          <div data-role="readBV" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ bayes -->
+  <section class="panel" data-panel="bayes" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">ベイズ線形回帰の予測分布と 2 種類の帯</p>
+        <p class="psub">図をクリック（タップ）すると，その位置に観測点を足します．キーボードでは右の「この <i>s</i> で観測」を使います．</p>
+        <div class="stage">
+          <canvas data-role="cvB" class="drag"></canvas>
+          <div data-role="lgB"></div>
+          <p class="cap" data-role="capB"></p>
+        </div>
+        <div class="info">
+          <h3>いまの数値を式に入れると</h3>
+          <div class="eq left" data-role="eqB" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlB"></div>
+        <div class="info">
+          <h3>読み出し（注目する点 <i>s</i><sub>*</sub>）</h3>
+          <div data-role="readB" aria-live="polite"></div>
+          <div class="ctlhead" style="margin-top:10px">観測値の予測分散の内訳</div>
+          <div class="stackbar" data-role="stackB" role="img"></div>
+          <p class="hint" data-role="stackTextB"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">このページの操作部分は JavaScript で動きます．JavaScript が無効なので，図と操作は表示されません．下の説明（操作手順・式・条件・問い）は読めます．本文は<a href="../ch06_generalization.html#sec6-2" target="_top">第6章 6.2 節</a>と<a href="../ch08_linear_regression.html#sec8-6" target="_top">第8章 8.6 節</a>から読めます．</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>このシミュレーターの説明（操作手順・式・条件・問い）</summary>
+
+      <h2>操作手順と観察する点</h2>
+      <ol>
+        <li>①は既定（<i>N</i> = 10，ノイズ 1.0 %，正則化なし，seed 20261112）のまま，次数 <i>d</i> を 0，1，3，9 と変えます．<span class="look">見る点：訓練 RMSE は 6.10 → 1.60 → 0.855 % → ほぼ 0（10<sup>−13</sup> 程度）と下がり続けるのに，検証 RMSE は 6.48 → 1.95 → 1.23 → 14.8 % と <i>d</i> = 3 で最小になり，<i>d</i> = 9 で急に悪化すること（下の図の U 字）．<i>d</i> = 9 では係数の最大の絶対値が 3160（3.16×10<sup>3</sup>）になります．</span></li>
+        <li><i>d</i> = 9 のまま「正則化なし」を外し，ln <i>λ</i> を −10 から 0 まで動かします．<span class="look">見る点：ln <i>λ</i> = −5 で検証 RMSE が 1.31 % まで下がり，係数が十数程度に縮むこと．<i>λ</i> を大きくしすぎると（ln <i>λ</i> = 0）曲線が平らになり，訓練・検証の両方が悪くなること．</span></li>
+        <li>訓練データ数 <i>N</i> を 10 から 50 に増やします（<i>d</i> = 9，正則化なし）．<span class="look">見る点：同じ次数でも，検証 RMSE が 14.8 %（<i>N</i> = 10）→ 5.25 %（<i>N</i> = 20）→ 1.13 %（<i>N</i> = 50）と下がり，過学習が目立たなくなること．</span></li>
+        <li>②で横軸「ln <i>λ</i>」のまま，<i>d</i> = 9，<i>N</i> = 15 の既定で計算を待ちます．<span class="look">見る点：<i>λ</i> が小さいと分散が，大きいとバイアスが大きく，その和（＋ノイズ）が途中で最小になること．上の図で，<i>λ</i> を小さくすると灰色の当てはめの束が広がること．</span></li>
+        <li>③で「データ A から 1 点」を何回か押し，注目する点 <i>s</i><sub>*</sub> をデータの無い所（たとえば 1.3）へ動かします．<span class="look">見る点：知識不足の帯 ±2(<b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b>)<sup>1/2</sup> はデータの近くで細く，離れると太くなること．観測値の帯はどこでもノイズの ±2<i>σ</i> より細くならないこと．</span></li>
+        <li>③で基底を「Gauss 基底」にして <i>s</i><sub>*</sub> を 1.4 にします．<span class="look">見る点：基底関数の無い所では <b>φ</b> ≈ <b>0</b> になり，知識不足の帯まで細くなること（データが無いのに自信があるように見える．基底の選び方の限界）．</span></li>
+      </ol>
+      <p>キーボードでは Tab でボタンとスライダーへ移り，Enter（または Space）で押し，矢印キーでスライダーを動かせます．タブは ←→ で切り替えられます．</p>
+
+      <h2>計算している式とアルゴリズム</h2>
+      <p>入力は焼成温度 <i>T</i>（°C）を標準化した <i>s</i> = (<i>T</i> − 1300)/200 ∈ [−1, 1] です．次数 <i>d</i> の多項式の基底は <i>φ</i><sub><i>j</i></sub>(<i>s</i>) = <i>s</i><sup><i>j</i></sup>（<i>j</i> = 0, …, <i>d</i>）の <i>M</i> = <i>d</i> + 1 個で，計画行列は <b>Φ</b> ∈ ℝ<sup><i>N</i>×<i>M</i></sup>，<i>Φ</i><sub><i>nj</i></sub> = <i>s</i><sub><i>n</i></sub><sup><i>j</i></sup> です．目標値は相対密度から固定の基準値 88 % を引いた値 <i>y</i><sub><i>n</i></sub> − 88 % で，画面の曲線には 88 % を足して表示します（基準値はデータから計算しません）．</p>
+      <p>①の Ridge 回帰は次の損失を最小にします（<i>λ</i> = 0 が最小二乗法）．</p>
+      <div class="eq"><math display="block"><mrow><mi>L</mi><mo stretchy="false">(</mo><mi>𝒘</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mrow><mo>‖</mo><mi>𝒚</mi><mo>−</mo><mi>𝚽</mi><mi>𝒘</mi><mo>‖</mo></mrow><mn>2</mn></msup><mo>+</mo><mfrac><mi>λ</mi><mn>2</mn></mfrac><msup><mrow><mo>‖</mo><mi>𝒘</mi><mo>‖</mo></mrow><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><mo stretchy="false">(</mo><msup><mi>𝚽</mi><mi mathvariant="normal">T</mi></msup><mi>𝚽</mi><mo>+</mo><mi>λ</mi><mi>𝑰</mi><mo stretchy="false">)</mo><mi>𝒘</mi><mo>=</mo><msup><mi>𝚽</mi><mi mathvariant="normal">T</mi></msup><mi>𝒚</mi></mrow></math></div>
+      <p>正規方程式は作らず，<i>λ</i> = 0 では <b>Φ</b> を，<i>λ</i> &gt; 0 では縦に積んだ行列 [<b>Φ</b>; √<i>λ</i> <b>I</b>] を Householder 法で QR 分解し，三角行列の後退代入で <b>w</b> を求めます（[<b>Φ</b>; √<i>λ</i> <b>I</b>] の最小二乗解が Ridge の解に一致します）．係数の数 <i>M</i> = <i>d</i> + 1 がデータ数 <i>N</i> より多く <i>λ</i> = 0 のときは，訓練誤差 0 の解が無数にあるので，特異値分解 <b>Φ</b> = <b>U</b> diag(<i>s</i><sub><i>i</i></sub>) <b>V</b><sup>T</sup> による最小ノルム解を表示し，そのことを画面に書きます．RMSE は</p>
+      <div class="eq"><math display="block"><mrow><mi>RMSE</mi><mo>=</mo><msqrt><mrow><mfrac><mn>1</mn><mi>N</mi></mfrac><munderover><mo>∑</mo><mrow><mi>n</mi><mo>=</mo><mn>1</mn></mrow><mi>N</mi></munderover><msup><mrow><mo stretchy="false">(</mo><msub><mi>y</mi><mi>n</mi></msub><mo>−</mo><mi>f</mi><mo stretchy="false">(</mo><msub><mi>s</mi><mi>n</mi></msub><mo>;</mo><mi>𝒘</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo></mrow><mn>2</mn></msup></mrow></msqrt></mrow></math></div>
+      <p>で，訓練 RMSE は訓練データ，検証 RMSE は同じ分布から別に引いた 200 点で計算します．</p>
+      <p>②のバイアス–分散分解：<i>l</i> 組目（<i>l</i> = 1, …, <i>L</i>）のデータ集合での当てはめを <i>f</i><sup>(<i>l</i>)</sup>(<i>s</i>)，その平均を <i>f̄</i>(<i>s</i>) = (1/<i>L</i>) Σ<sub><i>l</i>=1</sub><sup><i>L</i></sup> <i>f</i><sup>(<i>l</i>)</sup>(<i>s</i>) とし，<i>s</i> について [−1, 1] の一様分布で平均 ⟨·⟩<sub><i>s</i></sub> を取ります（中点則 200 点）．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mi>𝔼</mi><mo stretchy="false">[</mo><msup><mrow><mo stretchy="false">(</mo><mi>y</mi><mo>−</mo><mover><mi>f</mi><mo>^</mo></mover><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo stretchy="false">]</mo><mo>=</mo><munder><munder><mrow><msub><mrow><mo>⟨</mo><msup><mrow><mo stretchy="false">(</mo><mover><mi>f</mi><mo>¯</mo></mover><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo><mo>−</mo><mi>g</mi><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>⟩</mo></mrow><mi>s</mi></msub></mrow><mo>⏟</mo></munder><mrow><mo stretchy="false">(</mo><mtext>バイアス</mtext><msup><mo stretchy="false">)</mo><mn>2</mn></msup></mrow></munder><mo>+</mo><munder><munder><msub><mrow><mo>⟨</mo><mfrac><mn>1</mn><mi>L</mi></mfrac><munderover><mo>∑</mo><mrow><mi>l</mi><mo>=</mo><mn>1</mn></mrow><mi>L</mi></munderover><msup><mrow><mo stretchy="false">(</mo><msup><mi>f</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo><mo>−</mo><mover><mi>f</mi><mo>¯</mo></mover><mo stretchy="false">(</mo><mi>s</mi><mo stretchy="false">)</mo><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>⟩</mo></mrow><mi>s</mi></msub><mo>⏟</mo></munder><mtext>分散</mtext></munder><mo>+</mo><munder><munder><msup><mi>σ</mi><mn>2</mn></msup><mo>⏟</mo></munder><mtext>ノイズ</mtext></munder></mtd></mtr></mtable></math></div>
+      <p>交差項 2⟨(<i>f̄</i> − <i>g</i>)(<i>f</i><sup>(<i>l</i>)</sup> − <i>f̄</i>)⟩ は <i>l</i> について平均すると 0 になり，ノイズ <i>ε</i> は当てはめと独立なので，ノイズとの交差項も期待値が 0 になります．λ を掃引するときは，各データ集合で <b>Φ</b> の特異値分解を 1 回だけ行い，<b>w</b>(<i>λ</i>) = Σ<sub><i>i</i></sub> <b>v</b><sub><i>i</i></sub> <i>s</i><sub><i>i</i></sub>/(<i>s</i><sub><i>i</i></sub><sup>2</sup> + <i>λ</i>) <b>u</b><sub><i>i</i></sub><sup>T</sup><b>y</b> で全部の <i>λ</i> の解を作ります（QR による解と丸め誤差の範囲で一致します）．平均と分散は Welford 法で 1 組ずつ更新し，1 コマ 12 ms 以内に区切って計算します．</p>
+      <p>③のベイズ線形回帰：事前分布 <i>p</i>(<b>w</b>) = 𝒩(<b>w</b> | <b>0</b>, <i>σ</i><sub><i>w</i></sub><sup>2</sup><b>I</b>)，ノイズの分散 <i>σ</i><sup>2</sup>．事後分布は 𝒩(<b>w</b> | <b>m</b><sub><i>N</i></sub>, <b>S</b><sub><i>N</i></sub>) で，予測分布は次のとおりです．</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><msubsup><mi>𝑺</mi><mi>N</mi><mrow><mo>−</mo><mn>1</mn></mrow></msubsup><mo>=</mo><msubsup><mi>σ</mi><mi>w</mi><mrow><mo>−</mo><mn>2</mn></mrow></msubsup><mi>𝑰</mi><mo>+</mo><msup><mi>σ</mi><mrow><mo>−</mo><mn>2</mn></mrow></msup><msup><mi>𝚽</mi><mi mathvariant="normal">T</mi></msup><mi>𝚽</mi><mo>,</mo><mspace width="1em"/><msub><mi>𝒎</mi><mi>N</mi></msub><mo>=</mo><msup><mi>σ</mi><mrow><mo>−</mo><mn>2</mn></mrow></msup><msub><mi>𝑺</mi><mi>N</mi></msub><msup><mi>𝚽</mi><mi mathvariant="normal">T</mi></msup><mi>𝒚</mi></mtd></mtr><mtr><mtd><mi>p</mi><mo stretchy="false">(</mo><msub><mi>y</mi><mo>*</mo></msub><mo>∣</mo><msub><mi>s</mi><mo>*</mo></msub><mo>,</mo><mi>𝒟</mi><mo stretchy="false">)</mo><mo>=</mo><mi>𝒩</mi><mo stretchy="false">(</mo><msub><mi>y</mi><mo>*</mo></msub><mo>∣</mo><msubsup><mi>𝒎</mi><mi>N</mi><mi mathvariant="normal">T</mi></msubsup><msub><mi>𝝓</mi><mo>*</mo></msub><mo>,</mo><mspace width="0.3em"/><munder><munder><msup><mi>σ</mi><mn>2</mn></msup><mo>⏟</mo></munder><mtext>ノイズ</mtext></munder><mo>+</mo><munder><munder><mrow><msubsup><mi>𝝓</mi><mo>*</mo><mi mathvariant="normal">T</mi></msubsup><msub><mi>𝑺</mi><mi>N</mi></msub><msub><mi>𝝓</mi><mo>*</mo></msub></mrow><mo>⏟</mo></munder><mtext>知識不足</mtext></munder><mo stretchy="false">)</mo></mtd></mtr></mtable></math></div>
+      <p>知識不足の帯は予測平均 ± 2(<b>φ</b><sub>*</sub><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b><sub>*</sub>)<sup>1/2</sup>，観測値の帯は ± 2(<i>σ</i><sup>2</sup> + <b>φ</b><sub>*</sub><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b><sub>*</sub>)<sup>1/2</sup> です．<b>S</b><sub><i>N</i></sub> は作らず，縦に積んだ行列 [<b>Φ</b>/<i>σ</i>; <b>I</b>/<i>σ</i><sub><i>w</i></sub>] の QR 分解から <b>S</b><sub><i>N</i></sub><sup>−1</sup> = <b>R</b><sup>T</sup><b>R</b> を得て，<b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b> = ‖<b>R</b><sup>−T</sup><b>φ</b>‖<sup>2</sup> を三角行列の代入で計算します．事後分布からの標本は <b>w</b> = <b>m</b><sub><i>N</i></sub> + <b>R</b><sup>−1</sup><b>z</b>（<b>z</b> ~ 𝒩(<b>0</b>, <b>I</b>)）です．MAP 推定値 <b>m</b><sub><i>N</i></sub> は <i>λ</i> = <i>σ</i><sup>2</sup>/<i>σ</i><sub><i>w</i></sub><sup>2</sup> の Ridge 回帰の解と一致します（画面で差を表示します）．</p>
+      <p>Gauss 基底は <i>φ</i><sub><i>j</i></sub>(<i>s</i>) = exp[−(<i>s</i> − <i>c</i><sub><i>j</i></sub>)<sup>2</sup>/(2<i>r</i><sup>2</sup>)]，中心 <i>c</i><sub><i>j</i></sub> = −1, −0.75, …, 1 の 9 個，幅 <i>r</i> = 0.25（中心の間隔と同じ）です．定数の基底は入れていません．</p>
+
+      <h2>データと乱数の条件</h2>
+      <ul>
+        <li><strong>教育用の合成データ</strong>（データ A「焼成温度と相対密度」．実在の物質のデータではありません）：<i>s</i> を [−1, 1] の一様分布から引き，<i>y</i> = <i>g</i>(<i>s</i>) + <i>ε</i>，<i>g</i>(<i>s</i>) = 88 + 8<i>s</i> − 5<i>s</i><sup>2</sup> + 2 sin 3<i>s</i>（相対密度 %），<i>ε</i> ~ 𝒩(0, <i>σ</i><sup>2</sup>)．焼成温度は <i>T</i> = 1300 + 200<i>s</i>（°C）で 1100〜1500 °C に当たります．ノイズの標準偏差の既定は 1.0 %（①，②では 0〜3 % で変えられます．③の「データ A から引く」点は 1.0 % で固定）．</li>
+        <li>点は 1 個ずつ（<i>s</i> → <i>ε</i> の順に）引くので，同じ seed なら <i>N</i> を増やしても前からの点は変わりません．検証データ 200 点は seed + 1000003 の別の乱数列から引きます．</li>
+        <li>乱数は seed つきの生成器（mulberry32）です．既定の seed は ①②③とも 20261112．同じ seed でやり直すと同じデータになります．③の事後分布の標本は seed + 7 の乱数列から作った <b>z</b> を固定して使うので，データを足すと標本が連続的に変わります．</li>
+        <li>上限：訓練データ 5〜50 点，次数 0〜12，データ集合 10〜200 組，③の観測点 100 点，事後分布の標本 10 本．</li>
+      </ul>
+
+      <h2>簡略化している点</h2>
+      <ul>
+        <li>目標値から固定の 88 % を引いて回帰し，<b>w</b> のすべての成分（定数項 <i>w</i><sub>0</sub> も）に同じ罰則 (<i>λ</i>/2)‖<b>w</b>‖<sup>2</sup> または事前分布 𝒩(<b>0</b>, <i>σ</i><sub><i>w</i></sub><sup>2</sup><b>I</b>) をかけています．<i>λ</i> を大きくすると当てはめは 88 % の水平線に近づきます．実務では定数項に罰則をかけないことも多く，その場合は結果が少し変わります．</li>
+        <li>②のバイアスと分散は有限の <i>L</i> 組から推定した値で，バイアス<sup>2</sup> には分散/<i>L</i> 程度の推定の誤差が含まれます．<i>s</i> についての平均は [−1, 1] の一様分布（訓練データと同じ分布）で取っています．</li>
+        <li>③のノイズの分散 <i>σ</i><sup>2</sup> と事前分布の <i>σ</i><sub><i>w</i></sub> は与えたものとし，データから推定（第8章のエビデンス最大化など）はしていません．</li>
+        <li>多項式の基底は単項式 <i>s</i><sup><i>j</i></sup> です．直交多項式にすると次数が高いときの条件数が改善しますが，ここでは本文の式との対応を優先しました．</li>
+      </ul>
+
+      <h2>結果が不安定になる条件</h2>
+      <ul>
+        <li>正則化なしで次数が高いと，<b>Φ</b> の条件数が 10<sup>4</sup>〜10<sup>8</sup> 程度になり，係数が桁違いに大きくなります．QR 分解で解いているので計算そのものは安定ですが，データの小さな違いで曲線が大きく変わります（②の分散）．</li>
+        <li><i>d</i> + 1 &gt; <i>N</i> かつ <i>λ</i> = 0 では解が一つに決まりません（最小ノルム解を表示）．②でこの条件になると，分散が 10<sup>10</sup> を超えることがあり，図の上端で切れます．</li>
+        <li>③で <i>σ</i> を小さく，<i>σ</i><sub><i>w</i></sub> を大きくすると，予測平均が観測点をほぼ通り，多項式の次数が高いとデータの外で大きく振れます．計算が NaN や無限大になったら止めて理由を表示します．</li>
+        <li>③の Gauss 基底では，基底関数の中心から離れると <b>φ</b> ≈ <b>0</b> となり，知識不足の帯が 0 に近づきます．データが無いのに不確かさが小さく見えるのはモデルの仮定（基底の置き方）によるもので，外挿の信頼性を表しません．</li>
+      </ul>
+
+      <h2>本文の対応節</h2>
+      <ul>
+        <li><a href="../ch06_generalization.html#sec6-2" target="_top">第6章 6.2 過学習を見る</a>（①：次数 <i>d</i> = 0，1，3，9 と訓練・検証 RMSE，係数の大きさ）</li>
+        <li><a href="../ch06_generalization.html#sec6-3" target="_top">第6章 6.3 訓練・検証・テストデータの役割</a></li>
+        <li><a href="../ch06_generalization.html#sec6-4" target="_top">第6章 6.4 バイアス–分散分解</a>（②）</li>
+        <li><a href="../ch06_generalization.html#sec6-6" target="_top">第6章 6.6 正則化</a>（①の ln <i>λ</i>）</li>
+        <li><a href="../ch08_linear_regression.html#sec8-2" target="_top">第8章 8.2 最小二乗法と正規方程式</a>，<a href="../ch08_linear_regression.html#sec8-5" target="_top">8.5 数値解法</a>（QR 分解，条件数）</li>
+        <li><a href="../ch08_linear_regression.html#sec8-6" target="_top">第8章 8.6 Ridge 回帰</a></li>
+        <li><a href="../ch08_linear_regression.html#sec8-7" target="_top">第8章 8.7 ベイズ線形回帰</a>，<a href="../ch08_linear_regression.html#sec8-8" target="_top">8.8 予測分布</a>（③）</li>
+      </ul>
+
+      <h2>操作後に答える短い問い</h2>
+      <ol>
+        <li>①の既定（<i>N</i> = 10，seed 20261112，正則化なし）で <i>d</i> = 9 にすると訓練 RMSE はほぼ 0 になります．なぜですか．このとき検証 RMSE はいくつで，<i>d</i> = 3 と比べてどうですか．
+          <details class="ans"><summary>答えの例</summary><p>係数が <i>d</i> + 1 = 10 個で，訓練データも 10 点なので，<b>Φ</b> は 10×10 の正則な行列になり，<b>Φ</b><b>w</b> = <b>y</b> を満たす多項式がちょうど 1 つあります（全点を通る補間）．検証 RMSE は 14.8 % で，<i>d</i> = 3 の 1.23 % より 1 桁以上悪くなります．訓練データの間で曲線が大きく振れ，ノイズまで覚えてしまったためです．</p></details></li>
+        <li><i>d</i> = 9 で ln <i>λ</i> を −10，−5，0 としたとき，検証 RMSE と係数の最大の絶対値はどう変わりますか．<i>λ</i> を大きくしすぎるとなぜ悪くなりますか．
+          <details class="ans"><summary>答えの例</summary><p>検証 RMSE は 2.40 → 1.31 → 2.43 %，係数の最大の絶対値は 75.0 → 12.8 → 5.89 です．罰則 (<i>λ</i>/2)‖<b>w</b>‖<sup>2</sup> が係数を小さく保つので振れが抑えられますが，大きすぎると真の関数の曲がりまで表せなくなり（バイアスが増え），訓練 RMSE も 1.68 % まで上がります．</p></details></li>
+        <li>②の既定（<i>d</i> = 9，<i>N</i> = 15，<i>L</i> = 100）で，バイアス<sup>2</sup> + 分散 + ノイズが最小になる ln <i>λ</i> はどのあたりですか．そこより左と右で，大きい成分はどちらですか．
+          <details class="ans"><summary>答えの例</summary><p>ln <i>λ</i> ≈ −3 付近（バイアス<sup>2</sup> ≈ 0.16，分散 ≈ 0.73，ノイズ 1.00 で合計 ≈ 1.89 %<sup>2</sup>）．左（<i>λ</i> が小さい）では分散が，右（<i>λ</i> が大きい）ではバイアス<sup>2</sup> が大きくなります．</p></details></li>
+        <li>③で，観測点をいくら増やしても観測値の帯の幅が ±2<i>σ</i> より狭くならないのはなぜですか．知識不足の帯の幅はどうなりますか．
+          <details class="ans"><summary>答えの例</summary><p>観測値の予測分散 <i>σ</i><sup>2</sup> + <b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b> のうち <i>σ</i><sup>2</sup> は測定のノイズで，データを増やしても減りません．<b>S</b><sub><i>N</i></sub><sup>−1</sup> には観測ごとに <i>σ</i><sup>−2</sup><b>φ</b><b>φ</b><sup>T</sup> が足されるので，データのある所では <b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b> が小さくなり，知識不足の帯は 0 に近づきます．</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">機械学習 — 確率から GPT まで（目次）へ戻る</a>　｜　本文：<a href="../ch06_generalization.html#sec6-2" target="_top">第6章 6.2 節</a>，<a href="../ch08_linear_regression.html#sec8-6" target="_top">第8章 8.6 節</a>　｜　数式はブラウザ標準の MathML で組んでいます（外部ライブラリ不使用）．</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="regression.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.Regression;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var LIM = M.LIMITS;
+
+  /* ---- MathML の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  var BOLD = { w: '\uD835\uDC98', y: '\uD835\uDC9A', m: '\uD835\uDC8E', I: '\uD835\uDC70', S: '\uD835\uDC7A', 'Φ': '\uD835\uDEBD', 'φ': '\uD835\uDF53', '0': '\uD835\uDFCE' };
+  function mb(s) { return '<mi>' + (BOLD[s] || s) + '</mi>'; }   /* 太字は数学用英数字記号（MathML Core は mathvariant="bold" を無視する） */
+  function mn(v) { return '<mn>' + v + '</mn>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function sqrt(a) { return '<msqrt><mrow>' + a + '</mrow></msqrt>'; }
+  function sub(a, b) { return '<msub><mrow>' + a + '</mrow><mrow>' + b + '</mrow></msub>'; }
+  function sup(a, b) { return '<msup><mrow>' + a + '</mrow><mrow>' + b + '</mrow></msup>'; }
+  function subsup(a, b, c) { return '<msubsup><mrow>' + a + '</mrow><mrow>' + b + '</mrow><mrow>' + c + '</mrow></msubsup>'; }
+  function norm2(a) { return '<msup><mrow><mo>‖</mo>' + a + '<mo>‖</mo></mrow><mn>2</mn></msup>'; }
+  function sp(w) { return '<mspace width="' + (w || '0.8em') + '"/>'; }
+  function row(s) { return '<mtr><mtd>' + s + '</mtd></mtr>'; }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.6em">' + rows.join('') + '</mtable></math>'; }
+  /* 数を MathML へ（×10ⁿ は msup で） */
+  function num(x, d) {
+    var s = fmt(x, d || 3);
+    var m = /^(.*)×10([⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+)$/.exec(s);
+    if (!m) return mn(s);
+    var map = { '⁻': '−', '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
+    var e = m[2].split('').map(function (c) { return map[c]; }).join('');
+    return '<mrow>' + mn(m[1]) + mo('×') + sup(mn('10'), mn(e)) + '</mrow>';
+  }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  var PHI = mb('Φ'), WV = mb('w'), YV = mb('y'), TT = '<mi mathvariant="normal">T</mi>';
+  function lamText(useReg, ll) { return useReg ? 'e<sup>' + fx(ll, 1) + '</sup> = ' + U.fmtHTML(Math.exp(ll), 3) : '0（正則化なし）'; }
+  /* 帯の凡例（斜線） */
+  function addHatchLegend(el, html) { var s = U.el('span', 'lg', '<i class="hatch" aria-hidden="true"></i><span>' + html + '</span>'); el.appendChild(s); }
+  function yRange(ys) { var lo = 70, hi = 98; ys.forEach(function (v) { if (isFinite(v)) { lo = Math.min(lo, v - 2); hi = Math.max(hi, v + 2); } }); return [Math.floor(lo), Math.ceil(hi)]; }
+  var XL = '標準化した温度 s（T = 1300 + 200 s °C）';
+
+  /* =================================================================
+     ① 多項式回帰と正則化
+     ================================================================= */
+  function FitSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { N: 10, noise: 1.0, M: 3, reg: false, lnLambda: -5, showVal: false, seed: DEFAULT_SEED };
+    var train, val;
+    function regen() { train = M.makeDataA(C.rng(S.seed), S.N, S.noise); val = M.makeValidation(S.seed, S.noise); }
+    regen();
+    var redraw = function () { self.update(); };
+    var ctl = q('ctlFit');
+    var rN = U.range({ label: '訓練データ数 <i>N</i>', min: LIM.N[0], max: LIM.N[1], step: 1, value: S.N, fmt: String, onInput: function (v) { S.N = Math.round(v); regen(); redraw(); } });
+    var rS = U.range({ label: 'ノイズの標準偏差 <i>σ</i>（データの生成）', min: LIM.noise[0], max: LIM.noise[1], step: 0.1, value: S.noise, unit: '%', fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.noise = v; regen(); redraw(); } });
+    var rM = U.range({ label: '多項式の次数 <i>d</i>（係数は <i>d</i> + 1 個）', min: LIM.M[0], max: LIM.M[1], step: 1, value: S.M, fmt: String, onInput: function (v) { S.M = Math.round(v); redraw(); } });
+    var ckR = U.check({ label: '正則化なし（<i>λ</i> = 0，最小二乗法）', checked: !S.reg, onChange: function (v) { S.reg = !v; rL.input.disabled = !S.reg; redraw(); } });
+    var rL = U.range({ label: '正則化の強さ ln <i>λ</i>', min: LIM.lnLambda[0], max: LIM.lnLambda[1], step: 0.5, value: S.lnLambda, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.lnLambda = v; redraw(); } });
+    rL.input.disabled = !S.reg;
+    var ckV = U.check({ label: '検証データ（200 点）も描く', checked: S.showVal, onChange: function (v) { S.showVal = v; redraw(); } });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; regen(); redraw(); } });
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    [rN, rS].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(U.el('hr', 'sep'));
+    [rM].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(ckR.el); ctl.appendChild(rL.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(ckV.el);
+    ctl.appendChild(seed.el); ctl.appendChild(msg);
+
+    U.legendHTML(q('lgFit'), [
+      { label: '真の関数 <i>g</i>(<i>s</i>)', color: col.gray, dash: dash.dashed, width: 2 },
+      { label: '当てはめ <i>f</i>(<i>s</i>; <b>w</b>)', color: col.accent, width: 2.6 },
+      { label: '訓練データ（教育用の合成データ）', color: col.orange, shape: 'circle' },
+      { label: '検証データ（表示するとき）', color: col.gray, shape: 'plus' }]);
+    U.legendHTML(q('lgCurve'), [
+      { label: '訓練 RMSE', color: col.accent, kind: 'linemarker', shape: 'circle', width: 2.2 },
+      { label: '検証 RMSE（200 点）', color: col.orange, kind: 'linemarker', shape: 'square', dash: dash.dashed, width: 2.2 },
+      { label: 'ノイズの標準偏差 <i>σ</i>', color: col.gray, dash: dash.dotted, width: 1.8 },
+      { label: '現在の次数', color: col.purple, dash: dash.dashdot, width: 1.6 }]);
+
+    function drawFit(f) {
+      var F = U.fitCanvas(q('cvFit'), { aspect: 0.58, minHeight: 260, maxHeight: 430 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 48, r: 12, t: 14, b: 42 });
+      var yr = yRange(train.y.concat(S.showVal ? val.y : []));
+      var ax = U.axes(c, box, [-1, 1], yr, { xl: XL, yl: '相対密度 y (%)' });
+      var xs = C.linspace(-1, 1, 401), yt = xs.map(M.trueA), yf = M.evalPoly(f.w, xs);
+      if (S.showVal) U.points(c, ax, val.s, val.y, { shape: 'plus', size: 6, color: 'rgba(107,116,128,.55)' });
+      U.line(c, ax, xs, yt, { color: col.gray, dash: dash.dashed, width: 2 });
+      U.line(c, ax, xs, yf, { color: col.accent, width: 2.6 });
+      U.points(c, ax, train.s, train.y, { shape: 'circle', color: col.orange, size: 8 });
+      var L = U.labeler(c, box);
+      var fmax = Math.max.apply(null, yf), fmin = Math.min.apply(null, yf);
+      if (fmax > yr[1] || fmin < yr[0]) L.add('当てはめは枠の外まで振れています（' + fmt(fmin, 3) + '〜' + fmt(fmax, 3) + ' %）', (box[0] + box[2]) / 2, box[3] - 10, { color: col.red, size: 10.5, bold: true });
+      L.add('真の関数', ax.X(0.05), ax.Y(M.trueA(0.05)) + 16, { color: col.gray, size: 11 });
+      var k = Math.round(xs.length * 0.82), yk = yf[k];
+      if (yk >= yr[0] && yk <= yr[1]) L.add('当てはめ（d = ' + S.M + '）', ax.X(xs[k]), ax.Y(yk) - 14, { color: col.accent, size: 11, bold: true });
+      L.add('N = ' + S.N + '，σ = ' + fx(S.noise, 1) + ' %，λ = ' + (S.reg ? fmt(Math.exp(S.lnLambda), 3) : '0') + '，seed ' + S.seed, box[0] + 6, box[1] + 10, { color: col.sub, size: 10, align: 'left', dy: [0] });
+      U.setCanvasLabel(q('cvFit'), '次数 ' + S.M + ' の多項式の当てはめ．訓練データ ' + S.N + ' 点，ノイズ ' + fx(S.noise, 1) + ' %，' + (S.reg ? 'ln λ = ' + fx(S.lnLambda, 1) : '正則化なし') + '，seed ' + S.seed + '．訓練 RMSE ' + fmt(f.trainRMSE, 3) + ' %．');
+      q('capFit').innerHTML = '横軸は標準化した焼成温度 <i>s</i>（<i>s</i> = −1 が 1100 °C，<i>s</i> = 1 が 1500 °C），縦軸は相対密度（%）．<strong>教育用の合成データ</strong>（データ A）：<i>y</i> = <i>g</i>(<i>s</i>) + <i>ε</i>，<i>ε</i> ~ 𝒩(0, ' + fx(S.noise, 1) + '<sup>2</sup>)，<i>N</i> = ' + S.N + '，seed ' + S.seed + '．係数 ' + (S.M + 1) + ' 個，' + (S.reg ? 'ln <i>λ</i> = ' + fx(S.lnLambda, 1) : '正則化なし') + '．';
+    }
+    function drawCurve(curve, vNow) {
+      var F = U.fitCanvas(q('cvCurve'), { aspect: 0.42, minHeight: 210, maxHeight: 300 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 52, r: 12, t: 12, b: 40 });
+      var floor = 0.01, all = [];
+      curve.forEach(function (p) { all.push(p.train, p.val); });
+      var hi = Math.max(10, Math.max.apply(null, all.filter(isFinite)) * 1.6);
+      hi = Math.pow(10, Math.ceil(Math.log10(hi)));
+      var ax = U.axes(c, box, [-0.5, 12.5], [floor, hi], { ylog: true, xl: '多項式の次数 d', yl: 'RMSE (%)', xticks: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] });
+      var ms = curve.map(function (p) { return p.M; }), cl = function (v) { return Math.max(floor, v); };
+      if (S.noise > 0) U.hline(c, ax, S.noise, { color: col.gray, dash: dash.dotted, width: 1.6 });
+      U.vline(c, ax, S.M, { color: col.purple, dash: dash.dashdot, width: 1.5 });
+      U.line(c, ax, ms, curve.map(function (p) { return cl(p.train); }), { color: col.accent, width: 2.2 });
+      U.line(c, ax, ms, curve.map(function (p) { return cl(p.val); }), { color: col.orange, width: 2.2, dash: dash.dashed });
+      U.points(c, ax, ms, curve.map(function (p) { return cl(p.train); }), { shape: 'circle', color: col.accent, size: 7 });
+      U.points(c, ax, ms, curve.map(function (p) { return cl(p.val); }), { shape: 'square', color: col.orange, size: 7 });
+      var L = U.labeler(c, box);
+      var best = curve.reduce(function (a, b) { return b.val < a.val ? b : a; });
+      L.add('検証', ax.X(12) - 14, ax.Y(cl(curve[12].val)) - 12, { color: col.orange, size: 11, bold: true });
+      L.add('訓練', ax.X(1), ax.Y(cl(curve[1].train)) + 14, { color: col.accent, size: 11, bold: true });
+      if (S.noise > 0) L.add('σ = ' + fx(S.noise, 1) + ' %', ax.X(11.4), ax.Y(S.noise) + 10, { color: col.gray, size: 10 });
+      L.add('検証の最小：d = ' + best.M, ax.X(best.M), ax.Y(cl(best.val)) + 16, { color: col.orange, size: 10 });
+      U.setCanvasLabel(q('cvCurve'), '次数 0 から 12 に対する訓練 RMSE と検証 RMSE．検証 RMSE は次数 ' + best.M + ' で最小 ' + fmt(best.val, 3) + ' %．現在の次数 ' + S.M + ' の検証 RMSE ' + fmt(vNow, 3) + ' %．');
+    }
+    function readout(f, vR, tR) {
+      var meth = f.method === 'lstsq-qr' ? 'QR 分解（最小二乗）' : f.method === 'ridge-qr' ? '[Φ; √λ I] の QR 分解' : 'SVD の最小ノルム解';
+      q('readFit').innerHTML = kv([
+        ['訓練データ数 <i>N</i>／係数の数 <i>d</i> + 1', S.N + '／' + (S.M + 1)],
+        ['<i>λ</i>', lamText(S.reg, S.lnLambda)],
+        ['解き方', meth],
+        ['訓練 RMSE', fmt(f.trainRMSE, 3) + ' %'],
+        ['検証 RMSE（200 点）', fmt(vR, 3) + ' %'],
+        ['真の関数との RMSE（ノイズなし）', fmt(tR, 3) + ' %'],
+        ['‖<b>w</b>‖', fmt(f.normW, 3)],
+        ['max<sub><i>j</i></sub> |<i>w</i><sub><i>j</i></sub>|', fmt(f.maxAbsW, 3)],
+        ['<b>Φ</b> の条件数 <i>s</i><sub>max</sub>/<i>s</i><sub>min</sub>', isFinite(f.cond) ? fmt(f.cond, 3) : '∞（列が足りない）']]);
+      U.status(q('noteFit'), f.note, f.unique ? '' : 'warn');
+      var html = '<div class="tablewrap"><table class="grid coef"><thead><tr><th><i>j</i></th><th><i>w</i><sub><i>j</i></sub></th><th><i>j</i></th><th><i>w</i><sub><i>j</i></sub></th></tr></thead><tbody>';
+      var n = f.w.length, half = Math.ceil(n / 2);
+      for (var i = 0; i < half; i++) {
+        html += '<tr><td>' + i + '</td><td>' + fmt(f.w[i], 3) + '</td>';
+        html += (i + half < n) ? '<td>' + (i + half) + '</td><td>' + fmt(f.w[i + half], 3) + '</td>' : '<td></td><td></td>';
+        html += '</tr>';
+      }
+      q('coefFit').innerHTML = html + '</tbody></table></div>';
+    }
+    function eq(f, vR) {
+      var rows = [], lam = S.reg ? Math.exp(S.lnLambda) : 0, n = S.M + 1;
+      rows.push(row(PHI + mo('∈') + sup(mi('ℝ'), mn(S.N) + mo('×') + mn(n)) + mo(',') + sp('0.5em') + YV + mt(' の成分は ') + sub(mi('y'), mi('n')) + mo('−') + mn('88') + mt(' %')));
+      if (S.reg) { rows.push(row(mo('(') + sup(PHI, TT) + PHI + mo('+') + mi('λ') + mb('I') + mo(')') + WV + mo('=') + sup(PHI, TT) + YV)); rows.push(row(mi('λ') + mo('=') + sup(mi('e'), mn(fx(S.lnLambda, 1))) + mo('=') + num(lam))); }
+      else if (f.unique) { rows.push(row(sup(PHI, TT) + PHI + WV + mo('=') + sup(PHI, TT) + YV)); rows.push(row(mt('（正規方程式は作らず QR で解く）'))); }
+      else rows.push(row(mt('係数 ') + mn(n) + mt(' 個 ＞ データ ') + mn(S.N) + mt(' 点：最小ノルム解')));
+      rows.push(row(mi('L') + mo('(') + WV + mo(')') + mo('=') + frac(mn(1), mn(2)) + norm2(YV + mo('−') + PHI + WV) + mo('+') + frac(mi('λ'), mn(2)) + norm2(WV)));
+      rows.push(row(sp('1.5em') + mo('=') + frac(mn(1), mn(2)) + mo('×') + num(f.rss) + mo('+') + frac(num(lam), mn(2)) + mo('×') + num(f.normW2)));
+      rows.push(row(sp('1.5em') + mo('=') + num(f.loss)));
+      rows.push(row(sub(mi('RMSE'), mt('訓練')) + mo('=') + sqrt(frac(norm2(YV + mo('−') + PHI + WV), mi('N'))) + mo('=') + sqrt(frac(num(f.rss), mn(S.N)))));
+      rows.push(row(sp('1.5em') + mo('=') + num(f.trainRMSE) + mt(' %')));
+      rows.push(row(sub(mi('RMSE'), mt('検証')) + mo('=') + sqrt(frac(mn(1), mn(200)) + '<munderover><mo>∑</mo><mrow><mi>n</mi><mo>=</mo><mn>1</mn></mrow><mn>200</mn></munderover>' + sup(mo('(') + sub(mi('y'), mi('n')) + mo('−') + mi('f') + mo('(') + sub(mi('s'), mi('n')) + mo(';') + WV + mo(')') + mo(')'), mn(2)))));
+      rows.push(row(sp('1.5em') + mo('=') + num(vR) + mt(' %') + sp('0.5em') + mt('（') + mi('σ') + mo('=') + mn(fx(S.noise, 1)) + mt(' % と比べる）')));
+      q('eqFit').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        var lam = S.reg ? Math.exp(S.lnLambda) : 0;
+        var f = M.fitPoly(train.s, train.y, S.M, lam);
+        if (!f.w) { U.status(msg, '計算を止めました：' + f.reason, 'warn'); return; }
+        if (!U.guardFinite(f.w, msg, '係数')) return;
+        var vR = M.rmse(M.evalPoly(f.w, val.s), val.y), tR = M.trueRMSE(f.w);
+        if (!U.guardFinite([vR, tR, f.trainRMSE], msg, 'RMSE ')) return;
+        U.status(msg, '');
+        var curve = M.rmseCurve(train, val, lam, LIM.M[1]);
+        drawFit(f); drawCurve(curve, vR); readout(f, vR, tR); eq(f, vR);
+      },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② バイアスと分散
+     ================================================================= */
+  function BVSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { axis: 'lambda', M: 9, reg: true, lnLambda: -3, N: 15, noise: 1.0, L: 100, seed: DEFAULT_SEED };
+    var LNL = []; for (var t = -14; t <= 4 + 1e-9; t += 0.5) LNL.push(Math.round(t * 10) / 10);
+    var datasets = null, dsKey = '', job = null, res = null, timer = 0, t0 = 0, lastMs = 0;
+    var redraw = function () { start(); };
+    var ctl = q('ctlBV');
+    var pAx = U.pills({ label: '横軸', options: [{ value: 'lambda', label: 'ln λ（次数 d を固定）' }, { value: 'M', label: '次数 d（λ を固定）' }], value: S.axis, onChange: function (v) { S.axis = v; redraw(); } });
+    var rM = U.range({ label: '多項式の次数 <i>d</i>', min: LIM.M[0], max: LIM.M[1], step: 1, value: S.M, fmt: String, onInput: function (v) { S.M = Math.round(v); redraw(); } });
+    var ckR = U.check({ label: '正則化なし（<i>λ</i> = 0）', checked: !S.reg, onChange: function (v) { S.reg = !v; rL.input.disabled = !S.reg; redraw(); } });
+    var rL = U.range({ label: '正則化の強さ ln <i>λ</i>', min: -14, max: 4, step: 0.5, value: S.lnLambda, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.lnLambda = v; redraw(); } });
+    var rN = U.range({ label: '1 組の訓練データ数 <i>N</i>', min: LIM.N[0], max: LIM.N[1], step: 1, value: S.N, fmt: String, onInput: function (v) { S.N = Math.round(v); redraw(); } });
+    var rS = U.range({ label: 'ノイズの標準偏差 <i>σ</i>', min: 0.2, max: LIM.noise[1], step: 0.1, value: S.noise, unit: '%', fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.noise = v; redraw(); } });
+    var rLs = U.range({ label: 'データ集合の数 <i>L</i>', min: LIM.sets[0], max: LIM.sets[1], step: 10, value: S.L, fmt: String, onInput: function (v) { S.L = Math.round(v); redraw(); } });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; redraw(); } });
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    ctl.appendChild(pAx.el); ctl.appendChild(rM.el); ctl.appendChild(ckR.el); ctl.appendChild(rL.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(rN.el); ctl.appendChild(rS.el); ctl.appendChild(rLs.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(seed.el); ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', '計算量の上限：200 組 × 37 個の <i>λ</i>（または 13 個の次数）．1 コマ 12 ms 以内に区切って計算します．'));
+
+    U.legendHTML(q('lgBV'), [
+      { label: '各データ集合での当てはめ <i>f</i><sup>(<i>l</i>)</sup>(<i>s</i>)', color: col.sky, width: 1 },
+      { label: '当てはめの平均 <i>f̄</i>(<i>s</i>)', color: col.accent, width: 2.8 },
+      { label: '真の関数 <i>g</i>(<i>s</i>)', color: col.gray, dash: dash.dashed, width: 2 }]);
+    U.legendHTML(q('lgDec'), [
+      { label: '(バイアス)<sup>2</sup>', color: col.orange, kind: 'linemarker', shape: 'triangle', dash: dash.dashed, width: 2 },
+      { label: '分散', color: col.green, kind: 'linemarker', shape: 'square', dash: dash.dotted, width: 2.2 },
+      { label: 'ノイズ <i>σ</i><sup>2</sup>', color: col.gray, dash: dash.dashdot, width: 1.6 },
+      { label: '合計（予測の二乗誤差の期待値）', color: col.accent, kind: 'linemarker', shape: 'circle', width: 2.6 },
+      { label: '現在の設定', color: col.purple, dash: dash.long, width: 1.4 }]);
+
+    function curLambda() { return S.reg ? Math.exp(S.lnLambda) : 0; }
+    function start() {
+      clearTimeout(timer);
+      var key = [S.seed, S.L, S.N, S.noise].join('|');
+      if (key !== dsKey) { datasets = M.makeDatasets(S.seed, S.L, S.N, S.noise); dsKey = key; }
+      var spec, keep;
+      if (S.axis === 'lambda') {
+        var vals = LNL.map(Math.exp), cur = curLambda(), ki = -1;
+        if (S.reg) ki = LNL.indexOf(Math.round(S.lnLambda * 10) / 10);
+        if (ki < 0) { vals.push(cur); ki = vals.length - 1; }
+        spec = { axis: 'lambda', M: S.M, values: vals }; keep = ki;
+      } else {
+        spec = { axis: 'M', lambda: curLambda(), values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] }; keep = S.M;
+      }
+      job = M.bvJob(datasets, spec, keep); job.spec = spec; job.keep = keep;
+      t0 = performance.now();
+      U.status(msg, '計算中です（0/' + S.L + ' 組）．', '');
+      pump();
+    }
+    function pump() {
+      var s0 = performance.now();
+      while (!job.done() && performance.now() - s0 < 12) job.step();
+      if (!job.done()) { U.status(msg, '計算中です（' + job.count() + '/' + S.L + ' 組）．', ''); timer = setTimeout(pump, 0); return; }
+      lastMs = performance.now() - t0;
+      res = job.result();
+      var bad = res.some(function (r) { return !isFinite(r.bias2) || !isFinite(r.variance); });
+      U.status(msg, bad ? '一部の設定で値が無限大になりました（係数があふれています）．その点は図に描きません．' : '計算しました（' + S.L + ' 組，' + fx(lastMs, 0) + ' ms）．', bad ? 'warn' : 'ok');
+      draw();
+    }
+    function draw() {
+      if (!res) return;
+      var spec = job.spec, cur = res[job.keep], noise2 = S.noise * S.noise;
+      /* 上：当てはめを重ねる */
+      var F = U.fitCanvas(q('cvBV'), { aspect: 0.55, minHeight: 250, maxHeight: 400 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 48, r: 12, t: 14, b: 42 });
+      var ax = U.axes(c, box, [-1, 1], [66, 102], { xl: XL, yl: '相対密度 (%)' });
+      var g = job.grid;
+      job.kept.forEach(function (p) { U.line(c, ax, g, p, { color: col.sky, width: 1, alpha: Math.max(0.08, Math.min(0.35, 12 / job.kept.length)) }); });
+      U.line(c, ax, g, g.map(M.trueA), { color: col.gray, dash: dash.dashed, width: 2.2 });
+      U.line(c, ax, g, cur.mean, { color: col.accent, width: 2.8 });
+      var Lb = U.labeler(c, box);
+      Lb.add('平均の当てはめ', ax.X(0.55), ax.Y(cur.mean[Math.round(g.length * 0.775)]) - 16, { color: col.accent, size: 11, bold: true });
+      Lb.add('真の関数', ax.X(-0.35), ax.Y(M.trueA(-0.35)) + 18, { color: col.gray, size: 11 });
+      var setTxt = 'd = ' + (spec.axis === 'M' ? S.M : spec.M) + '，λ = ' + (spec.axis === 'M' ? fmt(spec.lambda, 3) : fmt(spec.values[job.keep], 3)) + '，N = ' + S.N + '，L = ' + S.L;
+      Lb.add(setTxt, box[0] + 6, box[1] + 10, { color: col.sub, size: 10, align: 'left', dy: [0] });
+      U.setCanvasLabel(q('cvBV'), S.L + ' 組のデータ集合での当てはめと，その平均，真の関数．' + setTxt + '．');
+      q('capBV').innerHTML = '<strong>教育用の合成データ</strong>（データ A）を <i>L</i> = ' + S.L + ' 組，各 <i>N</i> = ' + S.N + ' 点，ノイズ ' + fx(S.noise, 1) + ' %，seed ' + S.seed + ' で引いた当てはめです（薄い線ほど重なりが少ない）．縦軸の範囲 66〜102 % の外に出た部分は切れています．';
+      /* 下：分解 */
+      var F2 = U.fitCanvas(q('cvDec'), { aspect: 0.5, minHeight: 240, maxHeight: 360 }), c2 = F2.c;
+      var box2 = U.plotBox(F2.W, F2.H, { l: 56, r: 12, t: 14, b: 42 });
+      var isL = spec.axis === 'lambda', nAx = isL ? LNL.length : 13;
+      var xsA = isL ? LNL : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+      var R = res.slice(0, nAx);
+      var b2 = R.map(function (r) { return r.bias2; }), vv = R.map(function (r) { return r.variance; }), tot = R.map(function (r) { return r.bias2 + r.variance + noise2; });
+      var fin = b2.concat(vv, tot).filter(function (v) { return isFinite(v) && v > 0; });
+      var lo = Math.max(1e-3, Math.min.apply(null, fin.concat([noise2])) * 0.5), hi = Math.min(1e4, Math.max.apply(null, fin) * 2);
+      lo = Math.pow(10, Math.floor(Math.log10(lo))); hi = Math.pow(10, Math.ceil(Math.log10(Math.max(hi, noise2 * 10))));
+      var ax2 = U.axes(c2, box2, isL ? [-14, 4] : [-0.5, 12.5], [lo, hi], { ylog: true, xl: isL ? '正則化の強さ ln λ（次数 d = ' + spec.M + '）' : '多項式の次数 d（λ = ' + fmt(spec.lambda, 3) + '）', yl: '二乗誤差 (%²)', yf: function (v) { return (v >= 1e-3 && v < 1e4) ? U.mn(String(+v.toPrecision(3))) : fmt(v, 1); }, xticks: isL ? [-14, -12, -10, -8, -6, -4, -2, 0, 2, 4] : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] });
+      var cl = function (arr) { return arr.map(function (v) { return (isFinite(v) && v > 0) ? Math.min(Math.max(v, lo * 0.9), hi * 10) : NaN; }); };
+      var xCur = isL ? (S.reg ? S.lnLambda : null) : S.M;
+      U.hline(c2, ax2, noise2, { color: col.gray, dash: dash.dashdot, width: 1.6 });
+      U.line(c2, ax2, xsA, cl(b2), { color: col.orange, dash: dash.dashed, width: 2 });
+      U.line(c2, ax2, xsA, cl(vv), { color: col.green, dash: dash.dotted, width: 2.2 });
+      U.line(c2, ax2, xsA, cl(tot), { color: col.accent, width: 2.6 });
+      var step = isL ? 2 : 1, idx = xsA.map(function (_, i) { return i; }).filter(function (i) { return i % step === 0; });
+      U.points(c2, ax2, idx.map(function (i) { return xsA[i]; }), cl(idx.map(function (i) { return b2[i]; })), { shape: 'triangle', color: col.orange, size: 7 });
+      U.points(c2, ax2, idx.map(function (i) { return xsA[i]; }), cl(idx.map(function (i) { return vv[i]; })), { shape: 'square', color: col.green, size: 6 });
+      U.points(c2, ax2, idx.map(function (i) { return xsA[i]; }), cl(idx.map(function (i) { return tot[i]; })), { shape: 'circle', color: col.accent, size: 6 });
+      if (xCur !== null) U.vline(c2, ax2, xCur, { color: col.purple, dash: dash.long, width: 1.4 });
+      var bi = 0; tot.forEach(function (v, i) { if (isFinite(v) && v < tot[bi]) bi = i; });
+      U.marker(c2, ax2.X(xsA[bi]), ax2.Y(tot[bi]), 'diamond', 12, col.accent, false);
+      var L2 = U.labeler(c2, box2);
+      L2.add('最小 ' + (isL ? 'ln λ = ' + fx(xsA[bi], 1) : 'd = ' + xsA[bi]), ax2.X(xsA[bi]), ax2.Y(tot[bi]) - 16, { color: col.accent, size: 10.5, bold: true });
+      L2.add('ノイズ σ²', ax2.X(isL ? -9 : 11.5), ax2.Y(noise2) + 10, { color: col.gray, size: 10 });
+      var iR = isL ? nAx - 3 : 1, iVL = isL ? 2 : Math.min(11, nAx - 2);
+      if (isFinite(b2[iR])) L2.add('バイアス²', ax2.X(xsA[iR]), ax2.Y(cl([b2[iR]])[0]) - 14, { color: col.orange, size: 11, bold: true });
+      if (isFinite(vv[iVL])) L2.add('分散', ax2.X(xsA[iVL]), ax2.Y(cl([vv[iVL]])[0]) - 14, { color: col.green, size: 11, bold: true });
+      U.setCanvasLabel(q('cvDec'), (isL ? 'ln λ' : '次数') + ' に対するバイアスの二乗，分散，ノイズ，合計．合計は ' + (isL ? 'ln λ = ' + fx(xsA[bi], 1) : '次数 ' + xsA[bi]) + ' で最小 ' + fmt(tot[bi], 3) + '．');
+      q('capDec').innerHTML = '縦軸は二乗誤差（%<sup>2</sup>，対数目盛），' + (isL ? '横軸は ln <i>λ</i>（−14〜4，0.5 刻みの 37 点）' : '横軸は次数 <i>d</i>') + '．◇ は合計の最小．上限 10<sup>4</sup> を超える値は図の上端で切れます．' + (isL && !S.reg ? '現在の設定（<i>λ</i> = 0）は横軸の外なので縦線を描いていません．' : '');
+      readout(cur, noise2, xsA[bi], tot[bi], isL);
+      eq(cur, noise2);
+    }
+    function readout(cur, noise2, xb, tb, isL) {
+      var tot = cur.bias2 + cur.variance + noise2;
+      q('readBV').innerHTML = kv([
+        ['データ集合の数 <i>L</i>／1 組の点数 <i>N</i>', S.L + '／' + S.N],
+        ['次数 <i>d</i>，<i>λ</i>', (job.spec.axis === 'M' ? S.M : job.spec.M) + '，' + lamText(S.reg, S.lnLambda)],
+        ['(バイアス)<sup>2</sup>', fmt(cur.bias2, 3) + ' %<sup>2</sup>'],
+        ['分散', fmt(cur.variance, 3) + ' %<sup>2</sup>'],
+        ['ノイズ <i>σ</i><sup>2</sup>', fmt(noise2, 3) + ' %<sup>2</sup>'],
+        ['合計（期待二乗誤差）', fmt(tot, 3) + ' %<sup>2</sup>'],
+        ['その平方根（期待 RMSE）', fmt(Math.sqrt(tot), 3) + ' %'],
+        ['合計が最小の ' + (isL ? 'ln <i>λ</i>' : '<i>d</i>'), (isL ? fx(xb, 1) : xb) + '（' + fmt(tb, 3) + ' %<sup>2</sup>）'],
+        ['確認：⟨(<i>f</i><sup>(<i>l</i>)</sup> − <i>g</i>)<sup>2</sup>⟩ − バイアス<sup>2</sup> − 分散', fmt(cur.mseTrue - cur.bias2 - cur.variance, 2)]]);
+    }
+    function eq(cur, noise2) {
+      var rows = [];
+      rows.push(row(mi('𝔼') + mo('[') + sup(mo('(') + mi('y') + mo('−') + '<mover><mi>f</mi><mo>^</mo></mover>' + mo('(') + mi('s') + mo(')') + mo(')'), mn(2)) + mo(']') + mo('=') + mo('(') + mt('バイアス') + sup(mo(')'), mn(2)) + mo('+') + mt('分散') + mo('+') + sup(mi('σ'), mn(2))));
+      rows.push(row(mo('=') + num(cur.bias2) + mo('+') + num(cur.variance) + mo('+') + num(noise2) + mo('=') + num(cur.bias2 + cur.variance + noise2) + mt(' %²')));
+      rows.push(row(sub('<mrow><mo>⟨</mo>' + frac(mn(1), mi('L')) + '<munderover><mo>∑</mo><mrow><mi>l</mi><mo>=</mo><mn>1</mn></mrow><mi>L</mi></munderover>' + sup(mo('(') + sup(mi('f'), mo('(') + mi('l') + mo(')')) + mo('−') + mi('g') + mo(')'), mn(2)) + '<mo>⟩</mo></mrow>', mi('s')) + mo('=') + num(cur.mseTrue, 6)));
+      rows.push(row(mt('バイアス²＋分散 ') + mo('=') + num(cur.bias2 + cur.variance, 6) + sp('0.5em') + mt('（一致）')));
+      q('eqBV').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () { if (!job) start(); else if (job.done()) draw(); },
+      hide: function () { /* 計算は短いので止めずに終わらせる */ },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ③ ベイズ線形回帰
+     ================================================================= */
+  function BayesSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { kind: 'poly', M: 3, sigma: 1.0, sigmaW: 10, nS: 3, sStar: 1.2, seed: DEFAULT_SEED, pts: [] };
+    var rng, Z = [], zRound = 0, lastAx = null, cv = q('cvB'), SR = LIM.sPlotBayes;
+    function makeZ() { var r = C.rng((S.seed + 7 + 101 * zRound) >>> 0); Z = M.stdNormals(r, LIM.nSamples[1], 13); }
+    function regen() { rng = C.rng(S.seed); S.pts = []; addA(8, true); makeZ(); }
+    function addA(k, quiet) {
+      var room = LIM.bayesMaxPts - S.pts.length;
+      if (room <= 0) { U.status(msg, '観測点は ' + LIM.bayesMaxPts + ' 点までです．「データを消す」で最初からやり直してください．', 'warn'); return; }
+      k = Math.min(k, room);
+      var d = M.makeDataA(rng, k, 1.0);
+      /* makeDataA は並べ替えるので，引いた順は保てないが，点の集合は同じ */
+      for (var i = 0; i < k; i++) S.pts.push({ s: d.s[i], y: d.y[i], src: 'A' });
+      if (!quiet) U.status(msg, '');
+    }
+    var redraw = function () { self.update(); };
+    var ctl = q('ctlB');
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var pK = U.pills({ label: '基底関数', options: [{ value: 'poly', label: '多項式（次数 d）' }, { value: 'gauss', label: 'Gauss 基底（9 個）' }], value: S.kind, onChange: function (v) { S.kind = v; rM.input.disabled = v !== 'poly'; redraw(); } });
+    var rM = U.range({ label: '多項式の次数 <i>d</i>', min: LIM.M[0], max: LIM.M[1], step: 1, value: S.M, fmt: String, onInput: function (v) { S.M = Math.round(v); redraw(); } });
+    var rSg = U.range({ label: 'ノイズの標準偏差 <i>σ</i>（モデルが仮定する値）', min: LIM.sigma[0], max: LIM.sigma[1], step: 0.05, value: S.sigma, unit: '%', fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.sigma = v; redraw(); } });
+    var rSw = U.range({ label: '事前分布の標準偏差 <i>σ</i><sub><i>w</i></sub>（対数目盛）', min: LIM.sigmaW[0], max: LIM.sigmaW[1], step: 0.05, log: true, value: S.sigmaW, fmt: function (v) { return fmt(v, 3); }, onInput: function (v) { S.sigmaW = v; redraw(); } });
+    var rNs = U.range({ label: '事後分布からの関数の標本の数', min: LIM.nSamples[0], max: LIM.nSamples[1], step: 1, value: S.nS, fmt: String, onInput: function (v) { S.nS = Math.round(v); redraw(); } });
+    var bZ = U.button('標本を引き直す', function () { zRound++; makeZ(); redraw(); });
+    var rSt = U.range({ label: '注目する点 <i>s</i><sub>*</sub>（読み出しと式）', min: SR[0], max: SR[1], step: 0.05, value: S.sStar, fmt: function (v) { return fx(v, 2) + '（' + fx(M.sToT(v), 0) + ' °C）'; }, onInput: function (v) { S.sStar = v; redraw(); } });
+    var b1 = U.button('データ A から 1 点', function () { addA(1); redraw(); }, { title: '[−1,1] の一様な s で y = g(s) + ε（ノイズ 1.0 %）を引きます' });
+    var b5 = U.button('5 点', function () { addA(5); redraw(); }, { title: 'データ A から 5 点引きます' });
+    var bU = U.button('1 つ戻す', function () { if (S.pts.length) { S.pts.pop(); U.status(msg, ''); redraw(); } });
+    var bC = U.button('データを消す', function () { S.pts = []; U.status(msg, '観測点を消しました．事前分布だけの予測です．', ''); redraw(); });
+    var nS = U.number({ label: '観測する <i>s</i>', min: SR[0], max: SR[1], step: 0.05, value: 0.0, width: '6em' });
+    var bAt = U.button('この s で観測', function () {
+      if (S.pts.length >= LIM.bayesMaxPts) { U.status(msg, '観測点は ' + LIM.bayesMaxPts + ' 点までです．', 'warn'); return; }
+      var s = nS.get(); S.pts.push({ s: s, y: M.trueA(s) + 1.0 * rng.normal(), src: 'A' });
+      U.status(msg, 's = ' + fx(s, 2) + ' で y = g(s) + ε を観測しました．', ''); redraw();
+    }, { title: '真の関数にノイズ（1.0 %）を加えた値を観測します．s は [−1.4, 1.4]' });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; regen(); U.status(msg, 'seed ' + s + ' でデータ A の 8 点を引き直しました．', ''); redraw(); } });
+    ctl.appendChild(pK.el); ctl.appendChild(rM.el); ctl.appendChild(rSg.el); ctl.appendChild(rSw.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', '観測点を足す（図のクリックでも足せます）'));
+    ctl.appendChild(U.buttonRow([b1, b5])); ctl.appendChild(U.buttonRow([bU, bC]));
+    var ir = U.el('div', 'inline-row'); ir.appendChild(nS.el); ir.appendChild(bAt); ctl.appendChild(ir);
+    ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(rSt.el); ctl.appendChild(rNs.el); ctl.appendChild(U.buttonRow([bZ]));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(seed.el);
+    ctl.appendChild(U.el('span', 'hint', 'seed を操作すると観測点を消し，データ A の 8 点を引き直します．'));
+    regen();
+
+    var lg = q('lgB');
+    U.legendHTML(lg, [
+      { label: '真の関数 <i>g</i>(<i>s</i>)', color: col.gray, dash: dash.dashed, width: 2 },
+      { label: '予測平均 <b>m</b><sub><i>N</i></sub><sup>T</sup><b>φ</b>(<i>s</i>)', color: col.accent, width: 2.6 },
+      { label: '知識不足の帯 ±2(<b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b>)<sup>1/2</sup>', color: col.accent, kind: 'band', alpha: 0.32 }]);
+    addHatchLegend(lg, '観測値の帯 ±2(<i>σ</i><sup>2</sup> + <b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b>)<sup>1/2</sup>');
+    [{ label: '事後分布からの関数の標本', color: col.purple, dash: dash.dotted, width: 1.4 },
+     { label: 'データ A から引いた点（教育用の合成データ）', color: col.orange, shape: 'circle' },
+     { label: 'クリックで足した点', color: col.green, shape: 'diamond' },
+     { label: '注目する点 <i>s</i><sub>*</sub>', color: col.purple, dash: dash.long, width: 1.4 }].forEach(function (it) { var tmp = U.el('div'); U.legendHTML(tmp, [it]); lg.appendChild(tmp.firstChild); });
+
+    cv.addEventListener('click', function (e) {
+      if (!lastAx) return;
+      var r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+      if (!lastAx.inside(px, py)) return;
+      if (S.pts.length >= LIM.bayesMaxPts) { U.status(msg, '観測点は ' + LIM.bayesMaxPts + ' 点までです．', 'warn'); return; }
+      var s = lastAx.invX(px), y = lastAx.invY(py);
+      S.pts.push({ s: s, y: y, src: 'click' });
+      U.status(msg, 'クリックした点 (s = ' + fx(s, 2) + '，y = ' + fx(y, 1) + ' %) を足しました．', '');
+      redraw();
+    });
+
+    function compute() {
+      var B = M.basis(S.kind, S.M), s = S.pts.map(function (p) { return p.s; }), y = S.pts.map(function (p) { return p.y; });
+      var Phi = B.design(s), post = M.bayesPosterior(Phi, y, S.sigma, S.sigmaW, B.n);
+      return { B: B, Phi: Phi, s: s, y: y, post: post };
+    }
+    function draw(R) {
+      var B = R.B, post = R.post;
+      var F = U.fitCanvas(cv, { aspect: 0.6, minHeight: 280, maxHeight: 460 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 48, r: 12, t: 14, b: 42 });
+      var yr = [62, 108];
+      var ax = U.axes(c, box, SR, yr, { xl: XL, yl: '相対密度 y (%)' }); lastAx = ax;
+      /* データ A の範囲外を薄く */
+      c.save(); c.fillStyle = 'rgba(107,116,128,.07)'; c.fillRect(box[0], box[1], ax.X(-1) - box[0], box[3] - box[1]); c.fillRect(ax.X(1), box[1], box[2] - ax.X(1), box[3] - box[1]); c.restore();
+      var xs = C.linspace(SR[0], SR[1], 281), P = B.design(xs), pr = M.bayesPredictMany(post, P);
+      var mean = pr.map(function (p) { return p.mean; });
+      var loY = pr.map(function (p) { return p.mean - 2 * Math.sqrt(p.varY); }), hiY = pr.map(function (p) { return p.mean + 2 * Math.sqrt(p.varY); });
+      var loW = pr.map(function (p) { return p.mean - 2 * Math.sqrt(p.varW); }), hiW = pr.map(function (p) { return p.mean + 2 * Math.sqrt(p.varW); });
+      /* 観測値の帯は，知識不足の帯の外側の 2 本の細帯として斜線で描く（重ねて斜線が透けないように） */
+      U.band(c, ax, xs, loY, loW, { color: col.sky, alpha: 0.10, hatch: true });
+      U.band(c, ax, xs, hiW, hiY, { color: col.sky, alpha: 0.10, hatch: true });
+      U.line(c, ax, xs, loY, { color: col.sky, width: 1, dash: dash.dashed });
+      U.line(c, ax, xs, hiY, { color: col.sky, width: 1, dash: dash.dashed });
+      U.band(c, ax, xs, loW, hiW, { color: col.accent, alpha: 0.30 });
+      U.line(c, ax, xs, xs.map(M.trueA), { color: col.gray, dash: dash.dashed, width: 2 });
+      if (S.nS > 0) {
+        var Ws = M.bayesSamples(post, Z.slice(0, S.nS).map(function (z) { return z.slice(0, B.n); }));
+        Ws.forEach(function (w) { U.line(c, ax, xs, M.predict(P, w), { color: col.purple, dash: dash.dotted, width: 1.4 }); });
+      }
+      U.line(c, ax, xs, mean, { color: col.accent, width: 2.6 });
+      var pa = S.pts.filter(function (p) { return p.src === 'A'; }), pc = S.pts.filter(function (p) { return p.src !== 'A'; });
+      U.points(c, ax, pa.map(function (p) { return p.s; }), pa.map(function (p) { return p.y; }), { shape: 'circle', color: col.orange, size: 8 });
+      U.points(c, ax, pc.map(function (p) { return p.s; }), pc.map(function (p) { return p.y; }), { shape: 'diamond', color: col.green, size: 10 });
+      var ps = M.bayesPredict(post, B.design([S.sStar])[0]);
+      U.vline(c, ax, S.sStar, { color: col.purple, dash: dash.long, width: 1.4 });
+      U.marker(c, ax.X(S.sStar), ax.Y(ps.mean), 'circle', 9, col.purple, false);
+      var L = U.labeler(c, box);
+      L.add('データ A の範囲外', ax.X(-1.2), box[3] - 10, { color: col.sub, size: 10, dy: [0, -14] });
+      L.add('範囲外', ax.X(1.2), box[3] - 10, { color: col.sub, size: 10, dy: [0, -14] });
+      L.add('s* = ' + fx(S.sStar, 2), ax.X(S.sStar) + 4, box[1] + 9, { color: col.purple, size: 10.5, align: 'left' });
+      /* 帯の脇の直接ラベル：知識不足の帯がいちばん太い所と観測値の帯 */
+      var kW = -1; pr.forEach(function (p, i) { if (xs[i] > -0.95 && xs[i] < 0.95 && hiY[i] < yr[1] - 8 && (kW < 0 || p.varW > pr[kW].varW)) kW = i; });
+      if (kW < 0) kW = Math.round(xs.length * 0.5);
+      var kx = Math.round(xs.length * 0.375);
+      if (loY[kx] > yr[0] + 6 && loY[kx] < yr[1]) L.add('観測値の帯', ax.X(xs[kx]), ax.Y(loY[kx]) + 10, { color: '#1f6f9e', size: 10.5, bold: true });
+      if (hiW[kW] > yr[0] && hiW[kW] < yr[1]) L.add('知識不足の帯', ax.X(xs[kW]), ax.Y(hiW[kW]) - 10, { color: col.accent, size: 10.5, bold: true });
+      L.add((S.kind === 'poly' ? '多項式 d = ' + S.M : 'Gauss 基底 9 個') + '，σ = ' + fx(S.sigma, 2) + ' %，σw = ' + fmt(S.sigmaW, 3) + '，点 ' + S.pts.length, box[0] + 6, box[1] + 26, { color: col.sub, size: 10, align: 'left', dy: [0, 14] });
+      if (!S.pts.length) U.text(c, ax, 0, 98, '観測点がありません（事前分布だけの予測）', { color: col.sub, size: 11 });
+      U.setCanvasLabel(cv, 'ベイズ線形回帰の予測．' + (S.kind === 'poly' ? '多項式 次数 ' + S.M : 'Gauss 基底 9 個') + '，観測点 ' + S.pts.length + ' 点．s* = ' + fx(S.sStar, 2) + ' で予測平均 ' + fx(ps.mean, 2) + ' %，知識不足の標準偏差 ' + fmt(Math.sqrt(ps.varW), 3) + ' %，観測値の標準偏差 ' + fmt(Math.sqrt(ps.varY), 3) + ' %．クリックで点を足せます．');
+      q('capB').innerHTML = '横軸は標準化した焼成温度 <i>s</i>（灰色の地は 1100〜1500 °C の外＝外挿），縦軸は相対密度（%）．濃い帯が<strong>知識不足の帯</strong>（<b>w</b> を知らないことによる，±2 標準偏差），斜線の帯が<strong>観測値の帯</strong>（さらにノイズ <i>σ</i><sup>2</sup> を足した，次の測定値の ±2 標準偏差）．● は<strong>教育用の合成データ</strong>（データ A，ノイズ 1.0 %，seed ' + S.seed + '），◆ はクリックで足した点，点線は事後分布からの関数の標本です．縦軸 62〜108 % の外は切れています．';
+      return ps;
+    }
+    function readout(R, ps) {
+      var sig2 = S.sigma * S.sigma, rid = R.s.length ? M.ridgeEquivalent(R.Phi, R.y, S.sigma, S.sigmaW) : null, d = null;
+      if (rid) { d = 0; rid.forEach(function (w, j) { d = Math.max(d, Math.abs(w - R.post.mN[j])); }); }
+      q('readB').innerHTML = kv([
+        ['観測点の数 <i>N</i>', String(S.pts.length)],
+        ['基底の数', R.B.n + (R.B.kind === 'poly' ? '（多項式 次数 ' + S.M + '）' : '（Gauss 基底）')],
+        ['<i>s</i><sub>*</sub>（焼成温度）', fx(S.sStar, 2) + '（' + fx(M.sToT(S.sStar), 0) + ' °C）'],
+        ['予測平均 <b>m</b><sub><i>N</i></sub><sup>T</sup><b>φ</b><sub>*</sub> + 88', fx(ps.mean, 3) + ' %'],
+        ['真の関数 <i>g</i>(<i>s</i><sub>*</sub>)', fx(M.trueA(S.sStar), 3) + ' %'],
+        ['知識不足の分散 <b>φ</b><sub>*</sub><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b><sub>*</sub>', fmt(ps.varW, 3) + ' %<sup>2</sup>'],
+        ['観測値の分散 <i>σ</i><sup>2</sup> + <b>φ</b><sub>*</sub><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b><sub>*</sub>', fmt(ps.varY, 3) + ' %<sup>2</sup>'],
+        ['知識不足の帯の半幅', fmt(2 * Math.sqrt(ps.varW), 3) + ' %'],
+        ['観測値の帯の半幅', fmt(2 * Math.sqrt(ps.varY), 3) + ' %'],
+        ['対応する Ridge の <i>λ</i> = <i>σ</i><sup>2</sup>/<i>σ</i><sub><i>w</i></sub><sup>2</sup>', fmt(R.post.lambdaEq, 3)],
+        ['MAP（<b>m</b><sub><i>N</i></sub>）と Ridge の解の最大の差', d === null ? '—（観測点なし）' : fmt(d, 2)]]);
+      var f1 = sig2 / ps.varY, st = q('stackB');
+      st.innerHTML = '<span style="width:' + (100 * f1).toFixed(2) + '%;background:repeating-linear-gradient(45deg,#3a8fc8 0 5px,#9cc7e4 5px 9px)"></span><span style="width:' + (100 * (1 - f1)).toFixed(2) + '%;background:' + col.accent + '"></span>';
+      st.setAttribute('aria-label', '観測値の予測分散の内訳：ノイズ ' + U.fmtPct(f1) + '，知識不足 ' + U.fmtPct(1 - f1));
+      q('stackTextB').innerHTML = '斜線：ノイズ <i>σ</i><sup>2</sup> = ' + fmt(sig2, 3) + '（' + U.fmtPct(f1) + '）　塗り：知識不足 <b>φ</b><sup>T</sup><b>S</b><sub><i>N</i></sub><b>φ</b> = ' + fmt(ps.varW, 3) + '（' + U.fmtPct(1 - f1) + '）' + (ps.clipped ? '　※丸めで負になった分散を 0 にしました．' : '');
+    }
+    function eq(R, ps) {
+      var rows = [], N = S.pts.length;
+      rows.push(row(subsup(mb('S'), mi('N'), mo('−') + mn(1)) + mo('=') + frac(mb('I'), sup(mn(fmt(S.sigmaW, 3)), mn(2))) + mo('+') + frac(sup(PHI, TT) + PHI, sup(mn(fx(S.sigma, 2)), mn(2))) + mo(',') + sp('0.5em') + PHI + mo('∈') + sup(mi('ℝ'), mn(N) + mo('×') + mn(R.B.n))));
+      rows.push(row(mi('p') + mo('(') + sub(mi('y'), mo('*')) + mo('∣') + sub(mi('s'), mo('*')) + mo('=') + mn(fx(S.sStar, 2)) + mo(',') + '<mi>𝒟</mi>' + mo(')')));
+      rows.push(row(sp('1.5em') + mo('=') + '<mi>𝒩</mi>' + mo('(') + sub(mi('y'), mo('*')) + mo('∣') + mn(fx(ps.mean, 2)) + mo(',') + sp('0.3em') + num(S.sigma * S.sigma) + mo('+') + num(ps.varW) + mo(')')));
+      rows.push(row(mt('知識不足の帯：') + mn(fx(ps.mean, 2)) + mo('±') + mn(2) + sqrt(num(ps.varW))));
+      rows.push(row(sp('1.5em') + mo('=') + mn(fx(ps.mean, 2)) + mo('±') + num(2 * Math.sqrt(ps.varW)) + mt(' %')));
+      rows.push(row(mt('観測値の帯：') + mn(fx(ps.mean, 2)) + mo('±') + mn(2) + sqrt(num(S.sigma * S.sigma) + mo('+') + num(ps.varW))));
+      rows.push(row(sp('1.5em') + mo('=') + mn(fx(ps.mean, 2)) + mo('±') + num(2 * Math.sqrt(ps.varY)) + mt(' %')));
+      rows.push(row(mi('λ') + mo('=') + frac(sup(mi('σ'), mn(2)), subsup(mi('σ'), mi('w'), mn(2))) + mo('=') + frac(sup(mn(fx(S.sigma, 2)), mn(2)), sup(mn(fmt(S.sigmaW, 3)), mn(2))) + mo('=') + num(R.post.lambdaEq)));
+      rows.push(row(mt('（MAP ＝ この λ の Ridge の解）')));
+      q('eqB').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        var R = compute();
+        if (!R.post.ok) { U.status(msg, '計算を止めました：' + R.post.reason, 'warn'); return; }
+        if (!U.guardFinite(R.post.mN, msg, '事後平均 ')) return;
+        var ps = draw(R); readout(R, ps); eq(R, ps);
+        bU.disabled = !S.pts.length; bC.disabled = !S.pts.length;
+      },
+      state: S
+    };
+    rM.input.disabled = S.kind !== 'poly';
+    return self;
+  }
+
+  U.boot(app, { panels: { fit: FitSim, biasvar: BVSim, bayes: BayesSim }, initial: 'fit' });
+})();
+</script>
+</body>
+</html>

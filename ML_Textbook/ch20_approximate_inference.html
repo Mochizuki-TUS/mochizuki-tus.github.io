@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>第20章 近似推論 — 解けない積分を近似する — 機械学習</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => '20.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">機械学習 — 目次</a>
+  <span class="series">第VI部 近似推論とサンプリング / 第20章</span>
+</header>
+<main>
+<h1><span class="chapter-no">第20章</span>近似推論 — 解けない積分を近似する</h1>
+
+<div class="lead">
+<div class="question">
+<strong>この章で答える問い</strong>
+<ul>
+  <li>焼成温度を変えた 8 個の試料のうち 5 個が緻密化した．ロジスティック回帰の事後分布の式は 1 行で書けるのに，その平均も誤差棒も手では計算できない．何を諦めれば計算できるようになるか．</li>
+  <li>近似した事後分布から求めた誤差棒は，本当の誤差棒より広いのか狭いのか．どの近似が，どちら向きに不確かさを歪めるのか．</li>
+  <li>近似の良さの目安として使われる ELBO が大きければ，その近似は正しいと言ってよいか．</li>
+</ul>
+</div>
+<p>ベイズ推定の処方箋は単純である．事前分布に尤度を掛け，全体の面積が 1 になるように割れば事後分布が得られる（<a href="ch04_bayesian_inference.html#sec4-3">第4章 4.3</a>）．ところが「割る」ための数，すなわち<strong>周辺尤度</strong>（marginal likelihood．証拠（エビデンス）とも呼ぶ）$p(\data)$ $=\int p(\data\mid\bm{\theta})p(\bm{\theta})\,\dd\bm{\theta}$ は積分であり，事前分布と尤度の組が特別な形（共役）でなければ閉じた式にならない．パラメーターが 2 個なら格子を張って数値積分すればよいが，10 個になると格子点の数は $100^{10}=10^{20}$ に達し，計算機でも終わらない．</p>
+<p>本章では，この積分を<strong>近似</strong>で乗り切る二つの方法を学ぶ．一つは，事後分布の山の頂上（MAP 推定値）の周りを 2 次式で近似する <strong>Laplace（ラプラス）近似</strong>である．もう一つは，扱いやすい分布の族 $q$ の中から事後分布に最も近いものを最適化で探す<strong>変分推論</strong>（variational inference）である．変分推論の要は，対数周辺尤度を $\ln p(\data)$ $=\ELBO(q)+\KL(q\,\|\,p(\bm{\theta}\mid\data))$ と分ける恒等式であり，これは統計力学の自由エネルギーの変分原理（Gibbs–Bogoliubov の不等式）と同じ形をしている．近似には必ず歪みがある．Laplace 近似は山の頂上を中心にするので非対称な分布の平均を外し，平均場近似は相関のある方向の分散を小さく見積もる．材料のパラメーター推定では，その歪みがそのまま「誤差棒の大きさ」の誤りとして現れる．</p>
+<div class="goals">
+  <strong>この章で学ぶこと</strong>
+  <ul>
+    <li>周辺尤度の積分が難しい理由を，共役でない事後分布と格子積分の計算量で説明できる．</li>
+    <li>対数事後分布のモードの周りの Taylor 展開から Laplace 近似と周辺尤度の近似式を導き，$\mathrm{Beta}(3,9)$ やロジスティック回帰で手計算できる．</li>
+    <li>$\ln p(\data)=\ELBO(q)+\KL$ を 1 行ずつ導き，ELBO が対数周辺尤度の下界であること，ELBO の最大化が KL の最小化であることを説明できる．</li>
+    <li>平均場近似の更新式 $\ln q_j^{*}$ $=\Ex_{i\ne j}[\ln p(\data,\bm{\theta})]+\text{定数}$ を導き，2 次元 Gauss 分布で分散の過小評価 $1/\Lambda_{ii}$ を示せる．</li>
+    <li>$\KL(q\,\|\,p)$ と $\KL(p\,\|\,q)$ の最小化が，双峰の分布に対してまったく違う近似を与えることを数値で確かめられる．</li>
+    <li>ELBO と Helmholtz の自由エネルギーの対応 $\ELBO=-\beta A[q]$ を導ける．</li>
+    <li>Laplace 近似・変分推論・MCMC の長所と短所を比べ，材料のパラメーター推定で誤差棒がどう変わるかを判断できる．</li>
+  </ul>
+</div>
+<div class="prereq"><strong>前提：</strong>本書の<a href="ch04_bayesian_inference.html#sec4-3">第4章 4.3</a>（事前分布・尤度・事後分布）と<a href="ch04_bayesian_inference.html#sec4-6">4.6</a>（Gauss 分布の平均のベイズ推定），<a href="ch05_information.html#sec5-4">第5章 5.4</a>（KL ダイバージェンス）と<a href="ch05_information.html#sec5-6">5.6</a>（KL の向き），<a href="ch03_distributions.html#sec3-6">第3章 3.6</a>（多変量 Gauss 分布），<a href="ch09_linear_classification.html#sec9-3">第9章 9.3</a>（ロジスティック回帰）．数学は Taylor 展開（<a href="../UnivMath_Textbook/ch04_taylor_expansion.html#sec4-2">大学数学 第4章 4.2</a>），2 変数の Taylor の定理と 2 次形式（<a href="../UnivMath_Textbook/ch06_partial_derivatives.html#sec6-6">大学数学 第6章 6.6</a>），Gauss 積分（<a href="../UnivMath_Textbook/ch07_multiple_integrals.html#sec7-5">大学数学 第7章 7.5</a>），ベータ関数（<a href="../UnivMath_Textbook/ch32_gamma_beta.html#sec32-4">大学数学 第32章 32.4</a>）．20.8 節では分配関数と自由エネルギー（<a href="../UnivPhys_Textbook/ch50_canonical_ensemble.html#sec50-3">大学基礎物理学 第50章 50.3</a>）を，20.11 節では 2 準位系の比熱（<a href="../UnivPhys_Textbook/ch51_canonical_applications.html#sec51-3">大学基礎物理学 第51章 51.3</a>）を使う．統計力学を学んでいなくても読めるように，必要なことはその場で説明する．</div>
+<p class="route"><strong>入門ルートで読む節：</strong>この章は詳しいルートの章である．入門ルートでは <a href="#sec20-13">20.13</a>（まとめ）だけを読み，第22章へ進んでよい．</p>
+</div>
+
+<nav class="chapter-toc">
+  <strong>この章の目次</strong>
+  <ol>
+    <li><a href="#sec20-1">20.1 なぜ厳密な推論が難しいか — 周辺尤度の積分</a></li>
+    <li><a href="#sec20-2">20.2 Laplace 近似 — モードの周りの Gauss 分布</a></li>
+    <li><a href="#sec20-3">20.3 変分推論の考え方 — 対数周辺尤度を ELBO と KL に分ける</a></li>
+    <li><a href="#sec20-4">20.4 ELBO の二つの形 — 当てはまりと事前分布からの離れ</a></li>
+    <li><a href="#sec20-5">20.5 平均場近似 — 因子ごとに最適化する</a></li>
+    <li><a href="#sec20-6">20.6 例：相関のある 2 次元 Gauss 分布の平均場近似</a></li>
+    <li><a href="#sec20-7">20.7 KL の向きと近似の性質</a></li>
+    <li><a href="#sec20-8">20.8 統計力学の変分原理との対応</a></li>
+    <li><a href="#sec20-9">20.9 確率的な変分推論と変分オートエンコーダーの入口</a></li>
+    <li><a href="#sec20-10">20.10 近似の選び方による不確かさの違い</a></li>
+    <li><a href="#sec20-11">20.11 材料工学・物性物理学との接点 — Schottky 比熱のパラメーター推定</a></li>
+    <li><a href="#sec20-12">20.12 誤解しやすい点と適用限界</a></li>
+    <li><a href="#sec20-13">20.13 まとめ・次章への接続・演習・参考文献</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="sec20-1">20.1 なぜ厳密な推論が難しいか — 周辺尤度の積分<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.1.1 事後分布の式は書ける，計算はできない</h3>
+
+<p>パラメーターをまとめて $\bm{\theta}\in\R^{M}$（$M$ 個の実数を並べた列ベクトル）と書く．データ $\data$ を観測した後の事後分布は，Bayes の定理（<a href="ch04_bayesian_inference.html#sec4-3">第4章 4.3</a>）により</p>
+\begin{equation}
+\begin{aligned}
+p(\bm{\theta}\mid\data)&=\frac{p(\data\mid\bm{\theta})\,p(\bm{\theta})}{p(\data)},\\
+p(\data)&=\int_{\R^{M}}p(\data\mid\bm{\theta})\\
+&\qquad\times p(\bm{\theta})\,\dd\bm{\theta}
+\end{aligned} \label{eq:20-evidence}
+\end{equation}
+<p>である．分子の $p(\data,\bm{\theta})$ $=p(\data\mid\bm{\theta})p(\bm{\theta})$（同時分布）は，モデルを決めれば $\bm{\theta}$ の関数として<strong>いつでも値を計算できる</strong>．難しいのは分母の<strong>周辺尤度</strong> $p(\data)$ で，これは $M$ 次元の積分である．事後平均 $\Ex[\bm{\theta}\mid\data]$ $=\int\bm{\theta}\,p(\bm{\theta}\mid\data)\,\dd\bm{\theta}$ や事後分散も同じ種類の積分であり，周辺尤度が計算できなければこれらも計算できない．</p>
+
+<p>本書でこれまでに周辺尤度を厳密に計算できたのは，事前分布と尤度の組が<strong>共役</strong>だった場合である．Beta 分布と Bernoulli 分布（<a href="ch04_bayesian_inference.html#sec4-4">第4章 4.4</a>），Gauss 分布の平均（<a href="ch04_bayesian_inference.html#sec4-6">4.6</a>），ベイズ線形回帰（<a href="ch08_linear_regression.html#sec8-7">第8章 8.7</a>），ガウス過程回帰（<a href="ch12_gaussian_process.html#sec12-7">第12章 12.7</a>）では，事後分布が事前分布と同じ族に入り，積分が公式で求まった．共役でない最も身近な例は<strong>ロジスティック回帰</strong>である．</p>
+
+<h3>20.1.2 走る例：緻密化の成否のロジスティック回帰</h3>
+
+<p>本章では次の例を何度も使う（教育用の合成データ）．焼成温度 $T$ を規格化した $s$ $=(T-1300\ ^{\circ}\mathrm{C})/(200\ ^{\circ}\mathrm{C})$（第8章などのデータ A と同じ規格化）を 8 水準 $s_n=-0.875,-0.625,\dots,0.875$（0.25 刻み）に変えて試料を 1 個ずつ焼き，相対密度が 95 % 以上になったら $y_n=1$（緻密化した），そうでなければ $y_n=0$ とする．得られた結果は</p>
+<div class="tablewrap">
+<table id="tab20-1">
+<caption>表20.1　走る例のデータ（教育用の合成データ．$y$ は真の模型 $p(y=1\mid s)=\sigma(4s+0.5)$ から seed 20261137 の一様乱数で生成した）</caption>
+<thead><tr><th>$s_n$</th><td>−0.875</td><td>−0.625</td><td>−0.375</td><td>−0.125</td><td>0.125</td><td>0.375</td><td>0.625</td><td>0.875</td></tr></thead>
+<tbody><tr><th>$y_n$</th><td>0</td><td>0</td><td>1</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td></tr></tbody>
+</table>
+</div>
+<p>である．$s=-0.375$ で緻密化し $s=-0.125$ で緻密化しなかったので，2 つのクラスは直線（1 点の閾値）では分けられない．モデルは傾き $w$ と切片 $b$ を持つロジスティック回帰</p>
+$$
+\begin{gathered}
+p(y_n=1\mid s_n,w,b)=\sigma(ws_n+b),\\
+\sigma(a)=\frac{1}{1+e^{-a}}
+\end{gathered}
+$$
+<p>とし（$\sigma(a)$ は sigmoid 関数．本章では必ず引数を付けて書き，標準偏差の $\sigma$ と区別する），パラメーター $\bm{\theta}$ $=(w,b)^{\tp}\in\R^{2}$ には独立な事前分布 $w,b\sim\Normal(0,\sigma_w^{2})$，$\sigma_w^{2}=4$ を置く．同時分布の対数は</p>
+\begin{equation}
+\begin{aligned}
+&\ln p(\data,\bm{\theta})\\
+&\ =\sum_{n=1}^{8}\Bigl[y_n\ln\sigma(ws_n+b)\\
+&\qquad+(1-y_n)\\
+&\qquad\quad\times\ln\bigl\{1-\sigma(ws_n+b)\bigr\}\Bigr]\\
+&\quad-\frac{w^{2}+b^{2}}{2\sigma_w^{2}}\\
+&\quad-\ln(2\pi\sigma_w^{2})
+\end{aligned} \label{eq:20-logit-joint}
+\end{equation}
+<p>である．右辺はどの $(w,b)$ でもすぐに計算できる．しかし $e^{\ln p(\data,\bm{\theta})}$ を $w,b$ について積分した結果は，初等関数でも既知の特殊関数でも書けない．sigmoid の積と Gauss 関数の積は，平方完成のような変形で 1 つの Gauss 関数にまとまらないからである．</p>
+
+<p>この例はパラメーターが 2 個なので，$w$ を 1301 点，$b$ を 1001 点の格子に区切り，各点で式 \eqref{eq:20-logit-joint} を計算して足し合わせれば，事後分布を十分な精度で求められる．結果は $\ln p(\data)=-5.0645$，事後平均 $(\Ex[w],\Ex[b])$ $=(2.424,\ 0.667)$，事後標準偏差 $(1.338,\ 0.836)$ であった．一方，事後分布の最大点（MAP 推定値．Newton 法で求める．<a href="ch07_optimization.html#sec7-9">第7章 7.9</a>）は $(w,b)=(2.107,\ 0.580)$ で，事後平均とずれている（<a href="#fig20-1">図20.1</a>(b)）．事後分布が右（$w$ の大きい側）に長い裾を引いているためである．以下の節では，この格子の結果を「正解」として，近似の良し悪しを測る．</p>
+
+<figure id="fig20-1">
+<img src="figs/ch20_fig20-1.svg" alt="上下 2 段の図．上は規格化した温度 s に対する緻密化の成否 8 点と，格子で計算した事後予測確率の実線，MAP 推定値を代入した破線．下は傾き w と切片 b の事後分布の 50，90，99 パーセントの等高線で，右に長く伸びた形をしており，MAP の三角と事後平均の白丸がずれている．" style="max-width:440px;width:100%">
+<figcaption>図20.1　走る例（教育用の合成データ．<a href="#tab20-1">表20.1</a>，事前分布 $w,b\sim\Normal(0,4)$）．(a) 観測（三角）と，格子で求めた事後予測確率 $p(y$ $=1\mid s,\data)$ $=\int\sigma(ws+b)\,p(w,b\mid\data)\,\dd w\,\dd b$（実線），MAP 推定値を代入した $\sigma(w_{\mathrm{MAP}}s+b_{\mathrm{MAP}})$（破線）．(b) 事後分布 $p(w,b\mid\data)$ の最高密度領域の 50 %・90 %・99 % の等高線．三角は MAP 推定値 $(2.107,\,0.580)$，白丸は事後平均 $(2.424,\,0.667)$．等高線は $w$ の大きい側に伸びている．</figcaption>
+</figure>
+
+<h3>20.1.3 格子積分は次元とともに破綻する</h3>
+
+<p>格子による数値積分の手間は，各軸の格子点の数を <span style="white-space:nowrap">$G$，</span>パラメーターの数を $M$ とすると $G^{M}$ 回の関数評価である．1 回の評価でデータ $N$ 個分の尤度を足すなら，演算の回数はおよそ $NG^{M}$ に比例する．$M$ が 1 増えるごとに $G$ 倍になる，この指数関数的な増え方を<strong>次元の呪い</strong>と呼ぶ．材料のモデルでは，数個から数十個のパラメーターは珍しくない（原子間ポテンシャルの係数，結晶場のパラメーター，ニューラルネットワークの重みなら数万以上）．格子積分が使えるのは $M$ がせいぜい 3〜4 までである．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.1　格子積分の計算量と，1 個の観測の周辺尤度</p>
+<p>(1) 各軸 $G=100$ 点の格子，データ $N=1000$ 個とし，1 個のデータの尤度の計算を 1 回の演算と数える．毎秒 $10^{9}$ 回の演算ができる計算機で，$M=2$ と $M=10$ の格子積分にかかる時間を見積もれ．<br>
+(2) 傾きだけのロジスティック回帰 $p(y=1\mid x,w)=\sigma(wx)$ で，事前分布を $w\sim\Normal(0,1)$ とし，$x=1$ で $y=1$ を 1 回だけ観測した．周辺尤度 $p(\data)$ $=\int_{-\infty}^{\infty}\sigma(w)\Normal(w\mid0,1)\,\dd w$ を求めよ．</p>
+<p><strong>解答</strong>　(1) 演算の回数は $NG^{M}$．$M=2$ なら $1000\times100^{2}=10^{7}$ 回で $10^{7}/10^{9}$ $=0.01\ \mathrm{s}$．$M=10$ なら $1000\times100^{10}=10^{23}$ 回で $10^{23}/10^{9}$ $=10^{14}\ \mathrm{s}$．1 年は約 $3.16\times10^{7}\ \mathrm{s}$ なので約 $3\times10^{6}$ 年かかる．<br>
+(2) sigmoid 関数には $\sigma(-w)$ $=\dfrac{1}{1+e^{w}}$ $=\dfrac{e^{-w}}{e^{-w}+1}$ $=1-\sigma(w)$ という対称性がある．$\Normal(w\mid0,1)$ は $w\to-w$ で変わらないので，$w\to-w$ と変数を置き換えると</p>
+$$
+\begin{aligned}
+p(\data)&=\int\sigma(-w)\Normal(w\mid0,1)\,\dd w\\
+&=\int\bigl(1-\sigma(w)\bigr)\Normal(w\mid0,1)\,\dd w\\
+&=1-p(\data).
+\end{aligned}
+$$
+<p>よって $p(\data)=1/2$ である．このように対称性で解ける特別な場合を除き，sigmoid と Gauss 関数の積の積分は閉じた式にならない．観測が 2 個以上あれば，もう対称性も使えない．</p>
+</div>
+
+<p>計算できない積分への対処は大きく二つに分かれる．一つは事後分布を<strong>扱いやすい関数で置き換える</strong>方法（決定論的な近似．本章の Laplace 近似と変分推論），もう一つは事後分布から<strong>標本を引いて平均で積分を置き換える</strong>方法（確率的な近似．<a href="ch21_sampling.html#sec21-1">第21章 21.1</a>の Monte Carlo 法と<a href="ch21_sampling.html#sec21-6">21.6</a>の MCMC）である．前者は速いが偏りが残り，後者は時間をかければ偏りを減らせるが遅い．20.10 節でこの二つを同じ例で比べる．</p>
+
+<!-- ============================================================ -->
+<h2 id="sec20-2">20.2 Laplace 近似 — モードの周りの Gauss 分布<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.2.1 考え方：対数をとった山を放物線で近似する</h3>
+
+<p>事後分布が 1 つの山を持ち，その山がおおむね左右対称なら，山を Gauss 分布で置き換えても大きくは外れないだろう．Gauss 分布の対数は 2 次式（放物線）なので，「対数事後分布を山の頂上の周りで 2 次まで Taylor 展開する」のが自然である．これが <strong>Laplace 近似</strong>である（<a href="#fig20-2">図20.2</a>(b)）．</p>
+
+<p>まず 1 変数 $\theta$ で導く．正規化されていない密度 $\tilde{p}(\theta)\equiv p(\data,\theta)$ と，その正規化定数 $Z\equiv\int\tilde{p}(\theta)\,\dd\theta$ $=p(\data)$ を使うと，事後分布は $p(\theta\mid\data)$ $=\tilde{p}(\theta)/Z$ と書ける．$\ln\tilde{p}$ と $\ln p(\theta\mid\data)$ は定数 $\ln Z$ だけ違うので，<strong>$\theta$ についての微分は同じ</strong>である．これが，$Z$ を知らなくても Laplace 近似ができる理由である．</p>
+
+<div class="box derive">
+<p class="box-title">導出：1 変数の Laplace 近似</p>
+<p>$\ln\tilde{p}(\theta)$ が最大になる点（モード）を $\theta^{*}$ とする．事後分布のモードなので $\theta^{*}$ $=\theta_{\mathrm{MAP}}$ である．$\theta^{*}$ の周りで 2 次まで Taylor 展開する（<a href="../UnivMath_Textbook/ch04_taylor_expansion.html#sec4-2">大学数学 第4章 4.2</a>）：</p>
+$$
+\begin{aligned}
+\ln\tilde{p}(\theta)\approx{}&\ln\tilde{p}(\theta^{*})+\left.\diff{\ln\tilde{p}}{\theta}\right|_{\theta^{*}}(\theta-\theta^{*})\\
+&+\frac12\left.\frac{\dd^{2}\ln\tilde{p}}{\dd\theta^{2}}\right|_{\theta^{*}}(\theta-\theta^{*})^{2}.
+\end{aligned}
+$$
+<p>$\theta^{*}$ は最大点なので 1 階微分は 0 である．2 階微分は最大点では 0 以下なので，正の数</p>
+$$
+\Lambda\equiv-\left.\frac{\dd^{2}\ln\tilde{p}(\theta)}{\dd\theta^{2}}\right|_{\theta=\theta^{*}}\ \ (\gt0)
+$$
+<p>を定義する（$\Lambda$ は山の頂上での「曲がり具合」で，曲率と呼ぶ．下で見るように近似の Gauss 分布の分散の逆数，すなわち<a href="ch04_bayesian_inference.html#sec4-6">第4章 4.6</a> の<strong>精度</strong>になるので，精度行列と同じ文字 $\Lambda$ を使う）．すると</p>
+$$
+\ln\tilde{p}(\theta)\approx\ln\tilde{p}(\theta^{*})-\frac{\Lambda}{2}(\theta-\theta^{*})^{2},
+$$
+<p>両辺の指数をとって</p>
+$$
+\tilde{p}(\theta)\approx\tilde{p}(\theta^{*})\exp\!\left[-\frac{\Lambda}{2}(\theta-\theta^{*})^{2}\right].
+$$
+<p>右辺は平均 $\theta^{*}$，分散 $1/\Lambda$ の Gauss 分布の形である．Gauss 積分 $\int e^{-\Lambda u^{2}/2}\,\dd u$ $=\sqrt{2\pi/\Lambda}$（<a href="../UnivMath_Textbook/ch07_multiple_integrals.html#sec7-5">大学数学 第7章 7.5</a>）を使うと，正規化定数も近似できる：</p>
+$$
+Z=\int\tilde{p}(\theta)\,\dd\theta\approx\tilde{p}(\theta^{*})\sqrt{\frac{2\pi}{\Lambda}} .
+$$
+<p>近似した $\tilde{p}$ をこの $Z$ で割ると，$\tilde p(\theta^{*})$ が約分されて $\sqrt{\Lambda/(2\pi)}\exp[-\Lambda(\theta-\theta^{*})^{2}/2]$ $=\Normal(\theta\mid\theta^{*},\Lambda^{-1})$ が残る．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>多変数 $\bm{\theta}\in\R^{M}$ でも同じ手順で，2 階微分が Hesse 行列に，Gauss 積分が多次元の Gauss 積分 $\int\exp(-\tfrac12\bm{u}^{\tp}\bm{\Lambda}\bm{u})\,\dd\bm{u}$ $=(2\pi)^{M/2}\abs{\bm{\Lambda}}^{-1/2}$ に置き換わる（2 次形式の符号は<a href="../UnivMath_Textbook/ch06_partial_derivatives.html#sec6-6">大学数学 第6章 6.6</a>）．</p>
+
+<div class="box thm">
+<p class="box-title">公式20.1　Laplace 近似</p>
+<p>$\ln p(\data,\bm{\theta})$ の最大点を $\bm{\theta}_{\mathrm{MAP}}\in\R^{M}$ とし，そこでの Hesse 行列の符号を変えた行列を $\bm{\Lambda}\in\R^{M\times M}$ とする（対称で正定値と仮定する．近似分布の精度行列になる）．このとき，事後分布の近似 $q(\bm{\theta})$ と周辺尤度の近似は次の式 \eqref{eq:20-laplace-q}，\eqref{eq:20-laplace-Z} で与えられる．</p>
+</div>
+\begin{equation}
+\begin{aligned}
+q(\bm{\theta})&=\Normal\bigl(\bm{\theta}\mid\bm{\theta}_{\mathrm{MAP}},\,\bm{\Lambda}^{-1}\bigr),\\
+\bm{\Lambda}&=-\nabla\nabla\ln p(\bm{\theta}\mid\data)\big|_{\bm{\theta}_{\mathrm{MAP}}}
+\end{aligned} \label{eq:20-laplace-q}
+\end{equation}
+\begin{equation}
+\begin{aligned}
+&\ln p(\data)\\
+&\ \approx\ln p(\data,\bm{\theta}_{\mathrm{MAP}})\\
+&\qquad+\frac{M}{2}\ln2\pi-\frac12\ln\abs{\bm{\Lambda}}
+\end{aligned} \label{eq:20-laplace-Z}
+\end{equation}
+<p>ここで $\nabla\nabla$ は 2 階偏微分 $\partial^{2}/\partial\theta_i\partial\theta_j$ を並べた $M\times M$ の行列を表す．$\bm{\Lambda}$ は $-\ln p(\data,\bm{\theta})$ の Hesse 行列と同じである（$\ln Z$ は $\bm{\theta}$ によらない）．事前分布が $\Normal(\bm{0},\sigma_w^{2}\bm{I})$ なら，$\bm{\Lambda}$ は「尤度の Hesse 行列（符号を変えたもの）」に $\bm{I}/\sigma_w^{2}$ を足したものになる．式 \eqref{eq:20-laplace-Z} の右辺の第 2・3 項は，山の「体積」の対数であり，第12章の周辺尤度（<a href="ch12_gaussian_process.html#sec12-7">12.7</a>）でも現れた $-\tfrac12\ln\abs{\cdot}$ と同じ役割をする．</p>
+
+<h3>20.2.2 手計算：$\mathrm{Beta}(3,9)$ を Gauss 分布で近似する</h3>
+
+<p>正解が分かっている分布で Laplace 近似を試す．成功率 $x\in(0,1)$ の事後分布が $\mathrm{Beta}(3,9)$ の場合を考える．たとえば一様な事前分布 $\mathrm{Beta}(1,1)$ のもとで 10 回中 2 回成功したときの事後分布がこれである（<a href="ch04_bayesian_inference.html#sec4-4">第4章 4.4</a>）．Beta 分布については<a href="ch03_distributions.html#sec3-8">第3章 3.8</a>．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.2　$\mathrm{Beta}(3,9)$ の Laplace 近似</p>
+<p>$\tilde{p}(x)=x^{2}(1-x)^{8}$（$0\lt x\lt1$）の Laplace 近似を求め，(1) モード $x^{*}$ と曲率 $\Lambda$，(2) 近似の平均・分散と真の平均・分散，(3) 正規化定数の近似と真の値 $Z=B(3,9)$，(4) 近似した Gauss 分布が $x\lt0$ に置く確率，を求めよ．</p>
+<p><strong>解答</strong>　(1) $\ln\tilde{p}=2\ln x+8\ln(1-x)$．1 階微分 $\dfrac{2}{x}-\dfrac{8}{1-x}=0$ から $2(1-x)=8x$，$x^{*}=0.2$．2 階微分は $-\dfrac{2}{x^{2}}-\dfrac{8}{(1-x)^{2}}$ なので</p>
+$$
+\Lambda=\frac{2}{0.2^{2}}+\frac{8}{0.8^{2}}=50+12.5=62.5 .
+$$
+<p>(2) 近似は $q(x)$ $=\Normal(x\mid0.2,\ 1/62.5)$．平均 0.2，分散 $1/62.5=0.016$（標準偏差 0.1265）．真の値は，$\mathrm{Beta}(a,b)$ の平均 $a/(a+b)$ と分散 $ab/[(a+b)^{2}(a+b+1)]$ から，平均 $3/12=0.25$，分散 $27/(144\times13)$ $=27/1872$ $=0.014423$（標準偏差 0.1201）．<br>
+(3) $\ln\tilde{p}(x^{*})$ $=2\ln0.2+8\ln0.8$ $=-3.2189-1.7851$ $=-5.0040$．$\tfrac12\ln(2\pi/62.5)$ $=\tfrac12\ln0.10053$ $=-1.1486$．よって $\ln Z\approx-6.1527$．真の値は $B(3,9)$ $=\dfrac{2!\,8!}{11!}$ $=\dfrac{1}{495}$，$\ln Z=-\ln495=-6.2046$．$Z$ の比にすると $e^{-6.1527+6.2046}=1.053$ で，5 % 過大である．<br>
+(4) $q$ のもとで $x\lt0$ となる確率は，標準化 $z=(0-0.2)/0.1265=-1.581$ の累積分布関数 $\Phi(-1.581)=0.0569$．約 5.7 % の確率を，成功率としてありえない負の値に置いている．</p>
+</div>
+
+<figure id="fig20-2">
+<img src="figs/ch20_fig20-2.svg" alt="上下 2 段の図．上は Beta(3,9) の密度（実線と灰色の塗り），Laplace 近似の Gauss 分布（一点鎖線），平均と分散を合わせた Gauss 分布（破線）を重ねた図．Laplace 近似はモード 0.2 に中心があり，x が負の範囲にも確率を置く．下は対数密度の差と，その 2 次近似の放物線を比べた図で，モード 0.2 から離れると右側で放物線が下に外れる．" style="max-width:440px;width:100%">
+<figcaption>図20.2　$\mathrm{Beta}(3,9)$ の Laplace 近似（式で与えた分布．乱数は使わない）．(a) 実線と灰色の塗りは真の密度 $p(x)$，一点鎖線は Laplace 近似 $\Normal(x\mid0.2,\,0.016)$，破線は平均と分散を真の値に合わせた Gauss 分布 $\Normal(x\mid0.25,\,0.01442)$．斜線は Laplace 近似が $x\lt0$ に置く確率（0.057）．(b) 実線は $\ln\tilde{p}(x)-\ln\tilde{p}(x^{*})$，一点鎖線はその 2 次近似 $-\tfrac{\Lambda}{2}(x-x^{*})^{2}$（$\Lambda=62.5$）．モードから右に離れると，真の対数密度は放物線よりゆっくり下がる（右の裾が重い）．</figcaption>
+</figure>
+
+<p><a href="#fig20-2">図20.2</a> から，Laplace 近似の性格が読み取れる．頂上の位置と曲がり具合だけを合わせるので，(i) 中心は平均ではなくモードに来る．$\mathrm{Beta}(3,9)$ は右に長い裾を持つので，平均 0.25 より左の 0.2 に中心が来る．(ii) 分散も頂上の局所的な曲がりで決まり，裾の重さを反映しない．(iii) Gauss 分布は全実数に確率を置くので，台（確率が正の範囲）が $0\lt x\lt1$ に限られる分布では，台の外に確率が漏れる．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.3　1 個の観測のロジスティック回帰を Laplace 近似する</p>
+<p>例題20.1 (2) の事後分布 $p(w\mid\data)\propto\sigma(w)\Normal(w\mid0,1)$ を Laplace 近似する．(1) Newton 法を $w_0=0$ から 2 回行って MAP 推定値を求めよ．(2) 曲率 $\Lambda$ と近似の標準偏差を求めよ．(3) 式 \eqref{eq:20-laplace-Z} で周辺尤度を近似し，厳密な値 $1/2$ と比べよ．</p>
+<p><strong>解答</strong>　$\ln\tilde{p}(w)$ $=\ln\sigma(w)-\tfrac12w^{2}-\tfrac12\ln2\pi$．$\diff{}{w}\ln\sigma(w)$ $=1-\sigma(w)$（<a href="ch09_linear_classification.html#sec9-3">第9章 9.3</a>の sigmoid の微分 $\sigma'=\sigma(1-\sigma)$ を $\sigma$ で割ったもの）なので</p>
+$$
+\begin{aligned}
+g(w)&\equiv\diff{\ln\tilde{p}}{w}=1-\sigma(w)-w,\\
+-\frac{\dd^{2}\ln\tilde{p}}{\dd w^{2}}&=\sigma(w)\bigl(1-\sigma(w)\bigr)+1 .
+\end{aligned}
+$$
+<p>(1) Newton 法の更新は $w\leftarrow w+g(w)\big/\bigl[\sigma(w)(1-\sigma(w))+1\bigr]$．$w_0=0$：$\sigma=0.5$，$g=0.5$，分母 $1.25$ なので $w_1=0.4$．$w_1=0.4$：$\sigma(0.4)=0.59869$，$g=1-0.59869-0.4=0.00131$，分母 $0.59869\times0.40131+1$ $=1.24026$ なので $w_2$ $=0.4+0.00131/1.24026$ $=0.40106$．次の更新の変化は $10^{-8}$ 程度なので $w^{*}=0.4011$．<br>
+(2) $\sigma(w^{*})=0.59894$ を入れて $\Lambda$ $=0.59894\times0.40106+1$ $=1.2402$．近似の標準偏差は $1/\sqrt{1.2402}=0.898$．（格子で計算した真の事後平均は 0.413，標準偏差は 0.911 で，近似はやや小さい．）<br>
+(3) $\tilde{p}(w^{*})\sqrt{2\pi/\Lambda}$ $=\sigma(w^{*})\dfrac{e^{-w^{*2}/2}}{\sqrt{2\pi}}\sqrt{\dfrac{2\pi}{\Lambda}}$ $=\dfrac{0.59894\times e^{-0.08042}}{\sqrt{1.2402}}$ $=\dfrac{0.59894\times0.92273}{1.11364}$ $=0.4963$．厳密な値 0.5 より 0.7 % 小さい．</p>
+</div>
+
+<p>走る例（<a href="#tab20-1">表20.1</a>）でも同じ手順で，Newton 法の収束点 $\bm{\theta}_{\mathrm{MAP}}$ $=(2.107,\ 0.580)^{\tp}$ と</p>
+$$
+\begin{aligned}
+\bm{\Lambda}&=\begin{pmatrix}\sum_n r_n s_n^{2}+\sigma_w^{-2} & \sum_n r_n s_n\\ \sum_n r_n s_n & \sum_n r_n+\sigma_w^{-2}\end{pmatrix}\\
+&=\begin{pmatrix}0.6332&-0.1872\\-0.1872&1.6919\end{pmatrix}
+\end{aligned}
+$$
+<p>が得られる（$r_n=\hat{y}_n(1-\hat{y}_n)$，$\hat{y}_n$ $=\sigma(w_{\mathrm{MAP}}s_n+b_{\mathrm{MAP}})$．第9章 9.3 の Hesse 行列に事前分布の $\bm{I}/\sigma_w^{2}$ を足したもの）．$\bm{\Lambda}^{-1}$ の対角成分の平方根から，近似の標準偏差は $w$ が 1.278，$b$ が 0.782 となる．格子の値 1.338，0.836 より 5 % ほど小さく，中心も事後平均 $(2.424,0.667)$ から左にずれている．周辺尤度の近似は式 \eqref{eq:20-laplace-Z} から $\ln p(\data)\approx-5.118$（格子では $-5.0645$）である．</p>
+
+<h3>20.2.3 Laplace 近似の限界</h3>
+
+<ul>
+  <li><strong>歪み（非対称）</strong>：中心がモードに来るので，裾の長い側の確率を取りこぼす．$\mathrm{Beta}(3,9)$ では平均を 0.25 から 0.2 へ，走る例では $w$ を 2.42 から 2.11 へ小さく見積もった．</li>
+  <li><strong>多峰</strong>：展開する山は 1 つだけである．峰が 2 つあれば，どちらの峰で展開したかで結果が変わり，もう一方の峰の確率を丸ごと失う（20.7 節の双峰の例で数値を示す）．</li>
+  <li><strong>境界</strong>：台が限られた変数（成功率 $0\lt x\lt1$，分散や濃度 $\gt0$）では，Gauss 分布が台の外に確率を置く．このとき $\KL(q\,\|\,p)$ は無限大になる（$p=0$ の所で $q\gt0$ なので $\ln(q/p)=\infty$．20.7 節）．対策は，台が全実数になる変数に変換してから近似することである（成功率ならロジット（logit）$u=\ln[x/(1-x)]$，正の量なら $\ln x$．演習20.2，20.11 節）．</li>
+  <li><strong>変数の取り方による</strong>：密度は変数変換で形が変わる（<a href="ch02_probability.html#sec2-6">第2章 2.6</a>）ので，モードの位置も近似の良さも，どの変数で展開するかで変わる．</li>
+</ul>
+<p>逆に，データが多いと事後分布は Gauss 分布に近づく（Bernstein–von Mises の定理として知られる性質．モデルが滑らかで，真のパラメーターが事前分布の台の内側にあるなどの条件のもとで成り立つ．ここでは言明だけにとどめ，証明は van der Vaart (1998) の 10 章に譲る）ので，Laplace 近似は良くなる．Laplace 近似で事後モーメントを高精度に近似する工夫は Tierney &amp; Kadane (1986) に始まる．</p>
+
+<p>次のシミュレーターで，Laplace 近似と真の分布の違いを数値で確かめる．装置の標的は 1 次元で，横軸の変数を $x$，正規化されていない密度を $\tilde{p}(x)$，正規化定数を $Z$ と書いている．本文の $\theta$，$p(\data,\theta)$，$p(\data)$ にそれぞれ当たる．装置は正解を示すために $Z$ を格子の上の数値積分（区間 4000 の Simpson 則）で求めている．実際の推論では $Z$ が計算できないから近似を使うのであり，この点が装置の簡略化である．</p>
+
+<div class="box sim" id="sim20-1">
+<p class="box-title">シミュレーター20.1　Laplace 近似と真の分布を比べる</p>
+<p>1 次元の標的分布を Laplace 近似と 2 種類の Gauss 近似で置き換え，平均・分散・KL・正規化定数の近似値を真の値と並べて確かめる装置である．</p>
+<iframe class="qsim-embed" src="sim/inference-mcmc.html?embed=1&amp;only=approx" title="近似推論と MCMC シミュレーター（近似分布を比べる）" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/inference-mcmc.html#approx" target="_blank" rel="noopener noreferrer">別ウィンドウで大きく開く &rarr;</a></p>
+<p><strong>操作と観察</strong></p>
+<ol class="sim-steps">
+  <li>開いた直後の既定（標的分布「歪んだ単峰 Beta」，Beta の $a=3$，$b=9$）のまま，表「近似の数値」の「$p$（真）」と「Laplace」の列を読む → 平均 0.2500 と 0.2000，分散 0.01442 と 0.01600．例題20.2 (2) と同じ値である．上の図で，Laplace 近似（▲の破線）が $x\lt0$ の斜線の範囲にはみ出していることを見る．</li>
+  <li>同じ表の Laplace の KL($q$‖$p$) の欄 → 「∞※」と表示され，表の下の注に「$q$ が $0\lt x\lt1$ の外に確率 0.0569 を置くので KL($q$‖$p$) = ∞」とある．例題20.2 (4) の 0.0569 と比べる．</li>
+  <li>「式に入れる $q$」を「Laplace」にして「いまの数値を式に入れると」を読む → モード $x^{*}=0.2$，$\Lambda=2/0.2^{2}+8/0.8^{2}=62.5$，$\ln Z\approx-6.1527$ と，格子で求めた $\ln Z=-6.2046$ が並ぶ．式 \eqref{eq:20-laplace-Z}（$M=1$）と比べる．</li>
+  <li>Beta の $a$，$b$ をどちらも 10 にする（対称な単峰）→ Laplace の平均は真の平均と同じ 0.5000 になるが，分散は 0.01389 で真の 0.01190 より大きい．$\ln Z$ の近似は $-13.696$（真は $-13.736$）．</li>
+</ol>
+<p><strong>操作後の問い</strong></p>
+<ol class="sim-questions">
+  <li>手順 1 で，Laplace 近似の平均が真の平均より小さいのはなぜか．
+    <details class="ans"><summary>答えの例</summary><p>Laplace 近似の中心はモード $x^{*}=(a-1)/(a+b-2)=0.2$ であり，平均 $a/(a+b)=0.25$ ではない．$\mathrm{Beta}(3,9)$ は右に長い裾を持つので，平均はモードより右にある．Laplace 近似は頂上の位置と曲がり具合だけを見るので，裾の重みを取りこぼす．</p></details></li>
+  <li>手順 4 の対称な $\mathrm{Beta}(10,10)$ では平均は一致するのに，分散が真の値より大きくなるのはなぜか．
+    <details class="ans"><summary>答えの例</summary><p>$\mathrm{Beta}(10,10)$ の密度は $x^{9}(1-x)^{9}$ で，$x=0$，$1$ の端で 0 に落ちるため，同じ頂上の曲率を持つ Gauss 分布より裾が軽い（$x=0.5$ から離れると放物線より速く下がる）．Laplace 近似の分散 $1/\Lambda=1/72$ は頂上の曲率だけで決まり，裾の軽さを反映しないので，真の分散 $100/(400\times21)=0.01190$ より大きくなる．対称でも，Gauss 分布でない限り Laplace 近似の分散は一般に真の値と一致しない．</p></details></li>
+</ol>
+<noscript><p>JavaScript が無効のため，この装置は動きません．何を確かめる装置かは上の説明と本文の式を読んでください．</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-3">20.3 変分推論の考え方 — 対数周辺尤度を ELBO と KL に分ける<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.3.1 近似を「最適化の問題」にする</h3>
+
+<p>Laplace 近似は 1 点（モード）の情報だけから Gauss 分布を作った．分布全体を見て「最も近い」近似を選ぶにはどうすればよいか．<strong>変分推論</strong>は，扱いやすい分布の集まり（<strong>族</strong>）$\mathcal{Q}$ を先に決め，その中で事後分布に最も近い $q$ を探す．近さの尺度には KL ダイバージェンス（<a href="ch05_information.html#sec5-4">第5章 5.4</a>）を使う：</p>
+$$
+\begin{gathered}
+q^{*}=\argmin_{q\in\mathcal{Q}}\ \KL\bigl(q(\bm{\theta})\,\|\,p(\bm{\theta}\mid\data)\bigr),\\
+\KL(q\,\|\,p)=\int q(\bm{\theta})\ln\frac{q(\bm{\theta})}{p(\bm{\theta}\mid\data)}\,\dd\bm{\theta} .
+\end{gathered}
+$$
+<p>ここで困るのは，KL の中に計算できない $p(\bm{\theta}\mid\data)$ があることである．ところが次の恒等式により，$\KL$ を最小にすることは，計算できる量（ELBO）を最大にすることと同じになる．「変分」の名は，関数 $q$ を少しずつ変えて汎関数の最大を探す変分法に由来する．</p>
+
+<h3>20.3.2 恒等式の導出</h3>
+
+<div class="box derive">
+<p class="box-title">導出：$\ln p(\data)$ $=\ELBO(q)+\KL(q\,\|\,p(\bm{\theta}\mid\data))$</p>
+<p>$q(\bm{\theta})$ を任意の確率密度とする（$\int q\,\dd\bm{\theta}=1$）．$\ln p(\data)$ は $\bm{\theta}$ によらない定数なので，$q$ で期待値をとっても変わらない：</p>
+$$
+\ln p(\data)=\int q(\bm{\theta})\ln p(\data)\,\dd\bm{\theta}=\Ex_{q}\bigl[\ln p(\data)\bigr].
+$$
+<p>乗法定理 $p(\data,\bm{\theta})$ $=p(\bm{\theta}\mid\data)\,p(\data)$ から $p(\data)$ $=p(\data,\bm{\theta})/p(\bm{\theta}\mid\data)$ を代入する：</p>
+$$
+\ln p(\data)=\Ex_{q}\!\left[\ln\frac{p(\data,\bm{\theta})}{p(\bm{\theta}\mid\data)}\right].
+$$
+<p>対数の中の分子と分母に同じ $q(\bm{\theta})$ を掛ける（値は変わらない）：</p>
+$$
+\ln p(\data)=\Ex_{q}\!\left[\ln\frac{p(\data,\bm{\theta})}{q(\bm{\theta})}\cdot\frac{q(\bm{\theta})}{p(\bm{\theta}\mid\data)}\right].
+$$
+<p>積の対数を和に分け，期待値の線形性を使う：</p>
+$$
+\begin{aligned}
+\ln p(\data)={}&\underbrace{\Ex_{q}\!\left[\ln\frac{p(\data,\bm{\theta})}{q(\bm{\theta})}\right]}_{\ELBO(q)}\\
+&+\underbrace{\Ex_{q}\!\left[\ln\frac{q(\bm{\theta})}{p(\bm{\theta}\mid\data)}\right]}_{\KL(q\,\|\,p(\bm{\theta}\mid\data))}.
+\end{aligned}
+$$
+<p>第 2 項は KL ダイバージェンスの定義そのものである．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+&\ln p(\data)\\
+&\ =\ELBO(q)\\
+&\qquad+\KL\bigl(q\,\|\,p(\bm{\theta}\mid\data)\bigr),\\
+&\ELBO(q)\\
+&\ =\Ex_{q}[\ln p(\data,\bm{\theta})]\\
+&\qquad-\Ex_{q}[\ln q(\bm{\theta})]
+\end{aligned} \label{eq:20-decomp}
+\end{equation}
+</div>
+
+<p>この分解から三つのことが分かる．</p>
+<ol>
+  <li><strong>ELBO は下界</strong>：KL は常に 0 以上（Gibbs の不等式．<a href="ch05_information.html#sec5-4">第5章 5.4</a>）なので $\ELBO(q)\le\ln p(\data)$．等号は $q=p(\bm{\theta}\mid\data)$ のときだけ成り立つ．ELBO は evidence lower bound（証拠の下界．evidence は周辺尤度の別名）の略である．</li>
+  <li><strong>ELBO は計算できる</strong>：$\ELBO(q)$ に現れるのは $p(\data,\bm{\theta})$ と $q$ だけで，どちらも値を計算できる．期待値 $\Ex_q$ は，$q$ を扱いやすく選べば解析的に，そうでなくても $q$ から引いた標本で計算できる（20.9 節）．</li>
+  <li><strong>ELBO の最大化 ＝ KL の最小化</strong>：左辺 $\ln p(\data)$ は $q$ によらない定数なので，$q$ を変えて ELBO を 1 増やせば KL はちょうど 1 減る．</li>
+</ol>
+
+<p>同じ不等式 $\ELBO\le\ln p(\data)$ は，Jensen の不等式（凹関数 $\ln$ では $\Ex[\ln X]\le\ln\Ex[X]$）からも 1 行で出る（演習20.3）．ただしその導き方では，差が KL であることまでは見えない．EM 法の「対数尤度は ELBO と KL の和」（<a href="ch17_clustering_em.html#sec17-7">第17章 17.7</a>）は，この分解を潜在変数について使ったものである．</p>
+
+<figure id="fig20-3">
+<svg role="img" aria-label="横軸に nat 単位の値をとり，対数周辺尤度 ln p(D) = −2.079 の縦線を引いた図．3 つの近似分布 q について，ELBO の位置の丸から縦線までの斜線の帯が KL を表す．q が事後分布から遠いほど帯が長く，q が事後分布に一致すると帯の長さは 0 になる．" viewBox="0 0 620 270" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図20.3　対数周辺尤度は ELBO と KL の和</title>
+<defs>
+<pattern id="hatch-fig20-3" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" stroke="#5b2a5e" stroke-width="2"></line></pattern>
+</defs>
+<line x1="60" y1="215" x2="590" y2="215" stroke="#1a1a1a" stroke-width="1.2"></line>
+<line x1="60" y1="215" x2="60" y2="221" stroke="#1a1a1a"></line><text x="60" y="238" font-size="13" text-anchor="middle" fill="#1a1a1a">−2.40</text>
+<line x1="185" y1="215" x2="185" y2="221" stroke="#1a1a1a"></line><text x="185" y="238" font-size="13" text-anchor="middle" fill="#1a1a1a">−2.30</text>
+<line x1="310" y1="215" x2="310" y2="221" stroke="#1a1a1a"></line><text x="310" y="238" font-size="13" text-anchor="middle" fill="#1a1a1a">−2.20</text>
+<line x1="435" y1="215" x2="435" y2="221" stroke="#1a1a1a"></line><text x="435" y="238" font-size="13" text-anchor="middle" fill="#1a1a1a">−2.10</text>
+<line x1="560" y1="215" x2="560" y2="221" stroke="#1a1a1a"></line><text x="560" y="238" font-size="13" text-anchor="middle" fill="#1a1a1a">−2.00</text>
+<text x="325" y="262" font-size="14" text-anchor="middle" fill="#1a1a1a">値 / nat</text>
+<line x1="461" y1="20" x2="461" y2="215" stroke="#1a1a1a" stroke-width="2"></line>
+<text x="466" y="34" font-size="14" fill="#1a1a1a">ln <tspan font-style="italic" font-family="Times New Roman, STIXGeneral, serif">p</tspan>(𝒟) = −2.079</text>
+<rect x="181" y="62" width="280" height="22" fill="url(#hatch-fig20-3)" stroke="#5b2a5e" stroke-width="1"></rect>
+<circle cx="181" cy="73" r="7" fill="#5b2a5e"></circle>
+<text x="60" y="56" font-size="14" fill="#1a1a1a"><tspan font-style="italic" font-family="Times New Roman, STIXGeneral, serif">q</tspan> = (0.5, 0.5)：ELBO = −2.303</text>
+<text x="300" y="104" font-size="14" fill="#5b2a5e" text-anchor="middle">KL = 0.223</text>
+<rect x="415" y="132" width="46" height="22" fill="url(#hatch-fig20-3)" stroke="#5b2a5e" stroke-width="1"></rect>
+<circle cx="415" cy="143" r="7" fill="#5b2a5e"></circle>
+<text x="60" y="137" font-size="14" fill="#1a1a1a"><tspan font-style="italic" font-family="Times New Roman, STIXGeneral, serif">q</tspan> = (0.9, 0.1)：ELBO = −2.116</text>
+<text x="395" y="172" font-size="14" fill="#5b2a5e" text-anchor="end">KL = 0.037</text>
+<circle cx="461" cy="197" r="7" fill="#fff" stroke="#5b2a5e" stroke-width="2"></circle>
+<text x="448" y="202" font-size="14" fill="#1a1a1a" text-anchor="end"><tspan font-style="italic" font-family="Times New Roman, STIXGeneral, serif">q</tspan> = 事後分布 (0.8, 0.2)：KL = 0</text>
+</svg>
+<figcaption>図20.3　対数周辺尤度は ELBO と KL の和（例題20.4 の 2 つの仮説の例）．塗りつぶした丸が各 $q$ の ELBO の位置，縦の実線が $\ln p(\data)$ で，その間の斜線の帯の長さが $\KL(q\,\|\,p(\theta\mid\data))$ である．$q$ を事後分布に近づけると帯が縮み，一致すると ELBO が $\ln p(\data)$ に達する（白丸）．</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題20.4　2 つの仮説で ELBO と KL を数える</p>
+<p>ある粉末の主相が相 1 か相 2 かを考える（$\theta\in\{1,2\}$）．事前確率は $p(\theta=1)=p(\theta=2)=0.5$，ある回折ピークの観測 $\data$ の尤度は $p(\data\mid\theta=1)=0.2$，$p(\data\mid\theta=2)=0.05$ とする（教育用の数値）．(1) $p(\data)$ と事後分布を求めよ．(2) $q=(0.5,0.5)$ と $q=(0.9,0.1)$ について，ELBO と KL を求め，和が $\ln p(\data)$ になることを確かめよ．</p>
+<p><strong>解答</strong>　(1) 同時確率は $p(\data,\theta$ $=1)$ $=0.5\times0.2$ $=0.1$，$p(\data,\theta$ $=2)$ $=0.5\times0.05$ $=0.025$．和をとって $p(\data)=0.125$，$\ln p(\data)=-2.0794$．事後分布は $(0.1,\ 0.025)/0.125$ $=(0.8,\ 0.2)$．<br>
+(2) 離散の場合，$\ELBO(q)$ $=\sum_{\theta}q(\theta)\ln\dfrac{p(\data,\theta)}{q(\theta)}$，$\KL$ $=\sum_{\theta}q(\theta)\ln\dfrac{q(\theta)}{p(\theta\mid\data)}$ である．<br>
+$q=(0.5,0.5)$：$\ELBO$ $=0.5\ln\dfrac{0.1}{0.5}+0.5\ln\dfrac{0.025}{0.5}$ $=0.5(-1.6094)+0.5(-2.9957)$ $=-2.3026$．$\KL$ $=0.5\ln\dfrac{0.5}{0.8}+0.5\ln\dfrac{0.5}{0.2}$ $=0.5(-0.4700)+0.5(0.9163)$ $=0.2231$．和は $-2.0794$．<br>
+$q=(0.9,0.1)$：$\ELBO$ $=0.9\ln\dfrac{0.1}{0.9}+0.1\ln\dfrac{0.025}{0.1}$ $=0.9(-2.1972)+0.1(-1.3863)$ $=-2.1161$．$\KL$ $=0.9\ln\dfrac{0.9}{0.8}+0.1\ln\dfrac{0.1}{0.2}$ $=0.9(0.1178)+0.1(-0.6931)$ $=0.0367$．和は $-2.0794$．<br>
+どちらの $q$ でも和は同じ $\ln p(\data)$ であり，事後分布に近い $q=(0.9,0.1)$ のほうが ELBO が大きく KL が小さい（<a href="#fig20-3">図20.3</a>）．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-4">20.4 ELBO の二つの形 — 当てはまりと事前分布からの離れ<span class="route-tag adv">詳しいルート</span></h2>
+
+<p>ELBO の定義 \eqref{eq:20-decomp} の $\ln p(\data,\bm{\theta})$ を分けると，二つの見方ができる．</p>
+
+<div class="box derive">
+<p class="box-title">導出：ELBO の二つの形</p>
+<p>(i) 第 2 項 $-\Ex_q[\ln q]$ は $q$ のエントロピー $H[q]$（<a href="ch05_information.html#sec5-2">第5章 5.2</a>．連続なら微分エントロピー．<a href="ch05_information.html#sec5-3">5.3</a>）である．よって</p>
+$$
+\ELBO(q)=\Ex_{q}[\ln p(\data,\bm{\theta})]+H[q].
+$$
+<p>(ii) 乗法定理 $\ln p(\data,\bm{\theta})$ $=\ln p(\data\mid\bm{\theta})+\ln p(\bm{\theta})$ を代入して，事前分布の項を $q$ の項と組にする：</p>
+$$
+\begin{aligned}
+\ELBO(q)={}&\Ex_{q}[\ln p(\data\mid\bm{\theta})]\\
+&+\Ex_{q}[\ln p(\bm{\theta})]-\Ex_{q}[\ln q(\bm{\theta})]\\
+={}&\Ex_{q}[\ln p(\data\mid\bm{\theta})]-\Ex_{q}\!\left[\ln\frac{q(\bm{\theta})}{p(\bm{\theta})}\right]\\
+={}&\Ex_{q}[\ln p(\data\mid\bm{\theta})]\\
+&-\KL\bigl(q(\bm{\theta})\,\|\,p(\bm{\theta})\bigr).
+\end{aligned}
+$$
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+&\ELBO(q)\\
+&\ =\Ex_{q}[\ln p(\data,\bm{\theta})]+H[q]\\
+&\ =\Ex_{q}[\ln p(\data\mid\bm{\theta})]\\
+&\qquad-\KL\bigl(q(\bm{\theta})\,\|\,p(\bm{\theta})\bigr)
+\end{aligned} \label{eq:20-elbo2}
+\end{equation}
+</div>
+
+<p>第 2 の形は，ELBO の最大化が二つの要求の綱引きであることを示す．第 1 項（期待対数尤度）は $q$ をデータをよく説明する $\bm{\theta}$ に集めたがり，第 2 項は $q$ を事前分布から離しすぎないように引き戻す．データが多いほど第 1 項が強くなり，$q$ は狭くなる．符号の取り違えが起こりやすいので，表にまとめる．</p>
+
+<div class="tablewrap">
+<table id="tab20-2">
+<caption>表20.2　ELBO の各項の符号と役割（$q$ を動かして ELBO を最大にするとき）</caption>
+<thead><tr><th>形</th><th>項</th><th>ELBO への符号</th><th>その項を大きくするために $q$ がしたがること</th></tr></thead>
+<tbody>
+<tr><td rowspan="2">(i)</td><td>$\Ex_q[\ln p(\data,\bm{\theta})]$</td><td>$+$</td><td>同時分布の大きい所（MAP の近く）に集まる</td></tr>
+<tr><td>$H[q]=-\Ex_q[\ln q]$</td><td>$+$</td><td>広がる（エントロピーを大きくする）</td></tr>
+<tr><td rowspan="2">(ii)</td><td>$\Ex_q[\ln p(\data\mid\bm{\theta})]$</td><td>$+$</td><td>尤度の大きい所に集まる（当てはまり）</td></tr>
+<tr><td>$\KL(q\,\|\,p(\bm{\theta}))$</td><td>$-$</td><td>事前分布に近いままでいる</td></tr>
+<tr><td>恒等式</td><td>$\KL(q\,\|\,p(\bm{\theta}\mid\data))$</td><td>$\ln p(\data)=\ELBO+\KL$</td><td>ELBO を上げることは，この KL を下げること</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>形 (i) は「集まりたい力」と「広がりたい力」の釣り合いであり，20.8 節で統計力学の「エネルギー」と「エントロピー」の釣り合いに対応させる．形 (ii) は変分オートエンコーダー（20.9 節）で「再構成の当てはまり − 事前分布からの離れ」として使われる．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.5　Gauss 分布の平均：ELBO の最大化は厳密な事後分布を再現する</p>
+<p>測定値 $x_n\sim\Normal(\mu,\sigma^{2})$（$\sigma^{2}=1$ は既知），事前分布 $\mu\sim\Normal(\mu_0,\sigma_0^{2})$（$\mu_0=0$，$\sigma_0^{2}=1$）とし，データ $\data=\{0.5,\,1.0,\,1.5\}$（$N=3$）を得た（教育用の数値）．近似の族を Gauss 分布 $q(\mu)$ $=\Normal(\mu\mid m,s^{2})$ とする．(1) 式 \eqref{eq:20-elbo2} の第 2 の形で $\ELBO(m,s)$ を書け．(2) ELBO を最大にする $m,s^{2}$ を求め，<a href="ch04_bayesian_inference.html#sec4-6">第4章 4.6</a>の厳密な事後分布と比べよ．(3) 最大の ELBO の値を求めよ．</p>
+<p><strong>解答</strong>　(1) $\ln p(\data\mid\mu)$ $=-\dfrac N2\ln(2\pi\sigma^{2})-\dfrac{1}{2\sigma^{2}}\sum_n(x_n-\mu)^{2}$．$q$ のもとで $\Ex_q[(x_n-\mu)^{2}]$ $=(x_n-m)^{2}+s^{2}$（$\mu=m+(\mu-m)$ と分けると交差項の期待値は 0）なので</p>
+$$
+\begin{aligned}
+&\Ex_{q}[\ln p(\data\mid\mu)]\\
+&\ =-\frac N2\ln(2\pi\sigma^{2})\\
+&\qquad-\frac{1}{2\sigma^{2}}\Bigl[\sum_n(x_n-m)^{2}+Ns^{2}\Bigr].
+\end{aligned}
+$$
+<p>1 変数 Gauss 分布どうしの KL（<a href="ch05_information.html#sec5-6">第5章 5.6</a>）から $\KL(q\,\|\,p(\mu))$ $=\ln\dfrac{\sigma_0}{s}+\dfrac{s^{2}+(m-\mu_0)^{2}}{2\sigma_0^{2}}-\dfrac12$．ELBO はこの 2 つの差である．<br>
+(2) $m$ で偏微分して 0 とおく：$\dfrac{1}{\sigma^{2}}\sum_n(x_n-m)-\dfrac{m-\mu_0}{\sigma_0^{2}}$ $=0$，すなわち $m\Bigl(\dfrac{N}{\sigma^{2}}+\dfrac{1}{\sigma_0^{2}}\Bigr)$ $=\dfrac{N\bar{x}}{\sigma^{2}}+\dfrac{\mu_0}{\sigma_0^{2}}$．$s$ で偏微分して 0 とおく：$-\dfrac{Ns}{\sigma^{2}}+\dfrac1s-\dfrac{s}{\sigma_0^{2}}$ $=0$，すなわち $\dfrac{1}{s^{2}}$ $=\dfrac{N}{\sigma^{2}}+\dfrac{1}{\sigma_0^{2}}$．これは第4章の厳密な事後分布 $\mu_N$，$\sigma_N^{2}$ の式と同じである．数値は $1/s^{2}=3+1=4$ より $s^{2}=0.25$，$m$ $=0.25\times(3\times1.0+0)$ $=0.75$．<br>
+(3) $\sum_n(x_n-0.75)^{2}$ $=0.0625+0.0625+0.5625$ $=0.6875$．期待対数尤度は $-\tfrac32\ln2\pi-\tfrac12(0.6875+3\times0.25)$ $=-2.7568-0.7188$ $=-3.4756$．$\KL$ $=\ln\dfrac{1}{0.5}+\dfrac{0.25+0.5625}{2}-\dfrac12$ $=0.6931+0.4063-0.5$ $=0.5994$．ELBO $=-3.4756-0.5994=-4.0750$．厳密な $\ln p(\data)$（$\bm{x}\sim\Normal(\bm{0},\sigma^{2}\bm{I}+\sigma_0^{2}\bm{1}\bm{1}^{\tp})$ の対数密度）も $-4.0750$ で一致する．真の事後分布が族の中にあれば $\KL=0$ まで下がり，ELBO は対数周辺尤度に等しくなる．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-5">20.5 平均場近似 — 因子ごとに最適化する<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.5.1 分解の仮定</h3>
+
+<p>変分推論で最もよく使われる族は，パラメーターをいくつかの組 $\bm{\theta}$ $=(\bm{\theta}_1,\dots,\bm{\theta}_K)$ に分け，組どうしは独立だと仮定するものである：</p>
+\begin{equation}
+q(\bm{\theta})=\prod_{i=1}^{K}q_i(\bm{\theta}_i) \label{eq:20-mf}
+\end{equation}
+<p>これを<strong>平均場近似</strong>（mean-field approximation）という．各 $q_i$ の形（Gauss 分布など）は仮定しない．仮定するのは「独立」だけである．名前は，統計力学で 1 つのスピンに対する他のスピンの影響を「平均の場」で置き換える近似に由来する（20.8 節）．</p>
+
+<h3>20.5.2 最適な因子の導出</h3>
+
+<div class="box derive">
+<p class="box-title">導出：$\ln q_j^{*}(\bm{\theta}_j)$ $=\Ex_{i\ne j}[\ln p(\data,\bm{\theta})]+\text{定数}$</p>
+<p>$q_j$ 以外の因子を固定し，ELBO を $q_j$ の関数として見る．$\ln q=\sum_i\ln q_i$ なので，ELBO の第 2 項は</p>
+$$
+-\Ex_{q}[\ln q]=-\Ex_{q_j}[\ln q_j]-\sum_{i\ne j}\Ex_{q_i}[\ln q_i],
+$$
+<p>右辺の和は $q_j$ によらない．第 1 項は，$q_j$ 以外の因子での期待値を先にとる（積分の順序を入れ替える）：</p>
+$$
+\begin{aligned}
+&\Ex_{q}[\ln p(\data,\bm{\theta})]\\
+&\ =\int q_j(\bm{\theta}_j)\underbrace{\left[\int\ln p(\data,\bm{\theta})\prod_{i\ne j}q_i\,\dd\bm{\theta}_i\right]}_{\Ex_{i\ne j}[\ln p(\data,\bm{\theta})]}\dd\bm{\theta}_j .
+\end{aligned}
+$$
+<p>括弧の中は $\bm{\theta}_j$ だけの関数である．そこで，正規化した分布 $\tilde{q}_j(\bm{\theta}_j)\equiv\exp\bigl(\Ex_{i\ne j}[\ln p(\data,\bm{\theta})]\bigr)/C_j$ を定義する（$C_j$ は $\int\tilde{q}_j\,\dd\bm{\theta}_j$ $=1$ にする定数）．$\Ex_{i\ne j}[\ln p]$ $=\ln\tilde{q}_j+\ln C_j$ を代入すると</p>
+$$
+\begin{aligned}
+\ELBO&=\int q_j\ln\tilde{q}_j\,\dd\bm{\theta}_j-\int q_j\ln q_j\,\dd\bm{\theta}_j+\text{定数}\\
+&=-\KL\bigl(q_j\,\|\,\tilde{q}_j\bigr)+\text{定数}.
+\end{aligned}
+$$
+<p>ここで「定数」は $q_j$ によらない量（$\ln C_j$ と $i\ne j$ のエントロピー）である．KL は 0 以上で，$q_j=\tilde{q}_j$ のとき 0 になるので，ELBO を最大にする $q_j$ は $q_j^{*}=\tilde{q}_j$ である．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+\ln q_j^{*}(\bm{\theta}_j)&=\Ex_{i\ne j}\bigl[\ln p(\data,\bm{\theta})\bigr]\\
+&\quad+\text{定数}
+\end{aligned} \label{eq:20-mf-opt}
+\end{equation}
+</div>
+
+<p>右辺の $\Ex_{i\ne j}$ は「$j$ 番目以外の因子 $q_i$ で平均する」ことを表す．定数は正規化で決まるので，実際には右辺の $\bm{\theta}_j$ への依存の形（2 次式なら Gauss 分布，など）を読み取ればよい．$\ln p(\data,\bm{\theta})$ が計算できれば使え，$p(\data)$ は要らない．</p>
+
+<p>式 \eqref{eq:20-mf-opt} の右辺は他の因子に依存するので，一度には解けない．そこで $j=1,\dots,K$ の順に，他を固定して $q_j$ を更新することを繰り返す（<strong>座標上昇法</strong>．CAVI と呼ばれることもある）．各更新は ELBO を下げない（その $q_j$ について最大にしているから）ので，ELBO は単調に増えて収束する．ただし収束先は局所的な最大であり，出発点によって変わりうる（例題20.6，20.7 節）．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.6　2 値の 2 変数を平均場で近似する</p>
+<p>2 つの 2 値変数 $\theta_1,\theta_2\in\{0,1\}$ の分布が $p(0,0)=p(1,1)=0.45$，$p(0,1)=p(1,0)=0.05$ であるとする（強く同調する 2 変数．教育用の数値）．平均場 $q(\theta_1,\theta_2)$ $=q_1(\theta_1)q_2(\theta_2)$ で近似し，$a\equiv q_1(1)$，$b\equiv q_2(1)$ と書く．(1) 式 \eqref{eq:20-mf-opt} から $a$ の更新式を導け．(2) $b=0.7$ から出発して $a$ を 1 回更新せよ．(3) 収束先と，そのときの $\KL(q\,\|\,p)$ を，$a=b=0.5$（一様な $q$）と比べよ．</p>
+<p><strong>解答</strong>　(1) $\ln q_1^{*}(\theta_1)$ $=\sum_{\theta_2}q_2(\theta_2)\ln p(\theta_1,\theta_2)+\text{定数}$．$\theta_1=1$ と $\theta_1=0$ の差をとると定数が消える：</p>
+$$
+\begin{aligned}
+\ln\frac{a}{1-a}&=b\ln\frac{0.45}{0.05}+(1-b)\ln\frac{0.05}{0.45}\\
+&=(2b-1)\ln9 .
+\end{aligned}
+$$
+<p>よって $a$ $=\sigma\bigl((2b-1)\ln9\bigr)$（$\sigma(\cdot)$ は sigmoid 関数）．対称性から $b$ $=\sigma\bigl((2a-1)\ln9\bigr)$．<br>
+(2) $(2\times0.7-1)\ln9$ $=0.4\times2.1972$ $=0.8789$．$e^{0.8789}=2.408$ なので $a=2.408/3.408=0.7066$．<br>
+(3) 更新を繰り返すと $a=b=0.75$ に収束する（$a=0.75$ なら $(2a-1)\ln9=0.5\ln9=\ln3$，$\sigma(\ln3)=3/4$ で釣り合う）．このとき $q(1,1)=0.5625$，$q(0,0)=0.0625$，$q(0,1)=q(1,0)=0.1875$ で，$\KL(q\,\|\,p)=0.498$．一様な $q$（<span style="white-space:nowrap">$a=b=0.5$．</span>これも更新式の固定点）では $\KL=0.511$ なので，片方の状態 $(1,1)$ に寄った近似のほうが KL は小さい．$b=0.3$ から出発すれば，対称な $a=b=0.25$ に収束する．真の分布は $(0,0)$ と $(1,1)$ を同じ重みで持つのに，平均場近似は一方を選ぶ．この「対称性の破れ」は 20.7 節の「一方の峰に寄る」性質と，20.8 節の強磁性体の平均場理論に通じる．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-6">20.6 例：相関のある 2 次元 Gauss 分布の平均場近似<span class="route-tag adv">詳しいルート</span></h2>
+
+<p>平均場近似の性格を，解析的に解ける例で調べる．標的を 2 次元 Gauss 分布 $p(\bm{\theta})$ $=\Normal(\bm{\theta}\mid\bm{\mu},\bm{\Lambda}^{-1})$ とする．$\bm{\theta}$ $=(\theta_1,\theta_2)^{\tp}$，$\bm{\mu}\in\R^{2}$ は平均，$\bm{\Lambda}\in\R^{2\times2}$ は共分散行列の逆行列（<strong>精度行列</strong>）で，対称・正定値である．精度行列を使うと対数密度が簡単に書ける：</p>
+$$
+\begin{aligned}
+\ln p(\bm{\theta})={}&-\frac12\Lambda_{11}(\theta_1-\mu_1)^{2}\\
+&-\Lambda_{12}(\theta_1-\mu_1)(\theta_2-\mu_2)\\
+&-\frac12\Lambda_{22}(\theta_2-\mu_2)^{2}+\text{定数}.
+\end{aligned}
+$$
+<p>（実際の推論でこの $p$ が事後分布として出てくれば平均場近似は要らないが，正解が分かっているので，近似の歪みを正確に測れる．）</p>
+
+<div class="box derive">
+<p class="box-title">導出：最適な因子 $q_1^{*}$</p>
+<p>式 \eqref{eq:20-mf-opt} で $j=1$ とし，$q_2$ についての期待値をとる．$\theta_1$ を含まない項は定数に入れる．$q_2$ の平均を $m_2\equiv\Ex_{q_2}[\theta_2]$ と書くと，$\theta_1$ を含む項の期待値は</p>
+$$
+\begin{aligned}
+\ln q_1^{*}(\theta_1)={}&-\frac12\Lambda_{11}(\theta_1-\mu_1)^{2}\\
+&-\Lambda_{12}(\theta_1-\mu_1)(m_2-\mu_2)+\text{定数}.
+\end{aligned}
+$$
+<p>（交差項は $\theta_2$ について 1 次なので，期待値で $\theta_2$ が $m_2$ に置き換わる．）$\theta_1$ の 2 次式なので $q_1^{*}$ は Gauss 分布である．平方完成する：</p>
+$$
+\begin{aligned}
+\ln q_1^{*}(\theta_1)&=-\frac{\Lambda_{11}}{2}\Bigl[\theta_1-\mu_1+\frac{\Lambda_{12}}{\Lambda_{11}}(m_2-\mu_2)\Bigr]^{2}\\
+&\quad+\text{定数}.
+\end{aligned}
+$$
+<p>よって $q_1^{*}(\theta_1)$ $=\Normal(\theta_1\mid m_1,\ \Lambda_{11}^{-1})$，$m_1$ $=\mu_1-\Lambda_{11}^{-1}\Lambda_{12}(m_2-\mu_2)$．$q_2^{*}$ も添字を入れ替えて同じ形になる．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>平均の更新式 $m_1$ $=\mu_1-\Lambda_{11}^{-1}\Lambda_{12}(m_2-\mu_2)$，$m_2$ $=\mu_2-\Lambda_{22}^{-1}\Lambda_{12}(m_1-\mu_1)$ は，$m_1=\mu_1$，$m_2=\mu_2$ で同時に満たされる（$\Lambda_{11}\Lambda_{22}\ne\Lambda_{12}^{2}$ なら解はこれだけ）．したがって<strong>平均は正しく求まる</strong>．問題は分散である．</p>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+\Var_{q^{*}}[\theta_i]&=\frac{1}{\Lambda_{ii}}\\
+&\le\Var_{p}[\theta_i]\\
+&=(\bm{\Lambda}^{-1})_{ii}
+\end{aligned} \label{eq:20-mf-var}
+\end{equation}
+</div>
+
+<p>不等号は 2×2 の場合に直接確かめられる．$(\bm{\Lambda}^{-1})_{11}$ $=\Lambda_{22}/(\Lambda_{11}\Lambda_{22}-\Lambda_{12}^{2})$ なので，$(\bm{\Lambda}^{-1})_{11}-1/\Lambda_{11}$ $=\Lambda_{12}^{2}/[\Lambda_{11}(\Lambda_{11}\Lambda_{22}-\Lambda_{12}^{2})]\ge0$ で，等号は $\Lambda_{12}=0$（無相関）のときだけである．$1/\Lambda_{11}$ は「$\theta_2$ を固定したときの $\theta_1$ の条件付き分散」（<a href="ch03_distributions.html#sec3-6">第3章 3.6</a> の条件付き分布の分散）に等しい．平均場近似の各因子は，相手を平均値に固定したときの狭い分布しか見ない．</p>
+
+<p>標準化した場合（$\Var_p[\theta_1]$ $=\Var_p[\theta_2]$ $=1$，相関係数 $\rho$）を具体的に書くと，$\bm{\Sigma}$ $=\begin{pmatrix}1&\rho\\\rho&1\end{pmatrix}$，$\bm{\Lambda}$ $=\dfrac{1}{1-\rho^{2}}\begin{pmatrix}1&-\rho\\-\rho&1\end{pmatrix}$ なので，<span style="white-space:nowrap">$1/\Lambda_{11}=1-\rho^{2}$．</span>$\rho=0.9$ なら近似の分散は 0.19，標準偏差は $\sqrt{0.19}=0.44$ で，真の標準偏差 1 の半分以下になる．誤差棒が 2 倍以上も狭く報告される．</p>
+
+<figure id="fig20-4">
+<img src="figs/ch20_fig20-4.svg" alt="相関係数 0.8 の 2 次元 Gauss 分布の 1 シグマと 2 シグマの楕円（実線）に，平均場近似の円（一点鎖線，半径 0.6 と 1.2）と，周辺分布の積の円（破線，半径 1 と 2）を重ねた図．平均の座標上昇の経路が，出発点から階段状に原点へ近づく．" style="max-width:640px;width:100%">
+<figcaption>図20.4　相関係数 $\rho=0.8$ の 2 次元 Gauss 分布 $p$（実線．$\bm{\mu}=\bm{0}$，分散 1．内側から Mahalanobis 距離 1 と 2 の楕円）の近似（式で与えた分布．乱数は使わない）．一点鎖線は平均場近似 $q^{*}$（$\KL(q\,\|\,p)$ の最小．各分散 $1-\rho^{2}=0.36$），破線は周辺分布の積（$\KL(p\,\|\,q)$ の最小．各分散 1．20.7 節）．折れ線は平均の座標上昇 <span style="white-space:nowrap">$m_1\leftarrow\rho m_2$，</span>$m_2\leftarrow\rho m_1$ の経路（出発点 <span style="white-space:nowrap">$(-1.5,\,1.0)$）．</span></figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題20.7　$\rho=0.8$ の 2 次元 Gauss 分布の平均場近似</p>
+<p>$\bm{\mu}=\bm{0}$，分散 1，相関係数 $\rho=0.8$ の 2 次元 Gauss 分布を平均場で近似する．(1) $q^{*}$ の各因子の分散と標準偏差を求めよ．(2) 平均の座標上昇を $m_2=1$ から始め，$m_1,m_2,m_1,m_2$ の順に 4 回更新せよ．1 往復ごとに平均の誤差は何倍になるか．(3) $\KL(q^{*}\,\|\,p)$ を求めよ．</p>
+<p><strong>解答</strong>　(1) $1/\Lambda_{11}$ $=1-\rho^{2}$ $=1-0.64$ $=0.36$，標準偏差 0.6（真の値は 1）．<br>
+(2) $\Lambda_{12}/\Lambda_{11}$ $=-\rho$ なので更新は <span style="white-space:nowrap">$m_1\leftarrow\rho m_2$，</span>$m_2\leftarrow\rho m_1$．$m_1=0.8$，$m_2=0.64$，$m_1=0.512$，$m_2=0.4096$．1 往復で $\rho^{2}=0.64$ 倍になり，正解 $\bm{0}$ へ等比数列で近づく（<a href="#fig20-4">図20.4</a>の階段状の経路）．$\rho$ が 1 に近いほど収束は遅い（$\rho=0.99$ では誤差を $10^{-3}$ にするのに約 340 往復）．<br>
+(3) 2 つの $D$ 次元 Gauss 分布 $\Normal_0=\Normal(\bm{\mu}_0,\bm{\Sigma}_0)$，$\Normal_1=\Normal(\bm{\mu}_1,\bm{\Sigma}_1)$ の KL は，第5章の 1 次元の式の多次元版</p>
+$$
+\begin{aligned}
+\KL(\Normal_0\,\|\,\Normal_1)={}&\tfrac12\Bigl[\tr(\bm{\Sigma}_1^{-1}\bm{\Sigma}_0)-D\\
+&+(\bm{\mu}_1-\bm{\mu}_0)^{\tp}\bm{\Sigma}_1^{-1}(\bm{\mu}_1-\bm{\mu}_0)\\
+&+\ln\bigl(\abs{\bm{\Sigma}_1}/\abs{\bm{\Sigma}_0}\bigr)\Bigr]
+\end{aligned}
+$$
+<p>である．$\bm{\Sigma}_0$ $=(1-\rho^{2})\bm{I}$，$\bm{\Sigma}_1^{-1}$ $=\bm{\Lambda}$，平均は同じなので，$\tr(\bm{\Lambda}\bm{\Sigma}_0)$ $=(1-\rho^{2})\times\dfrac{2}{1-\rho^{2}}$ $=2$，$\abs{\bm{\Sigma}_1}$ $=1-\rho^{2}$，$\abs{\bm{\Sigma}_0}$ $=(1-\rho^{2})^{2}$．よって</p>
+$$
+\begin{aligned}
+\KL(q^{*}\,\|\,p)&=\frac12\Bigl[2-2+\ln\frac{1-\rho^{2}}{(1-\rho^{2})^{2}}\Bigr]\\
+&=-\frac12\ln(1-\rho^{2}),
+\end{aligned}
+$$
+<p>$\rho=0.8$ では $-\tfrac12\ln0.36=0.511$ nat．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-7">20.7 KL の向きと近似の性質<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.7.1 二つの向きの復習</h3>
+
+<p>変分推論は $\KL(q\,\|\,p)$ を最小にした．逆向きの $\KL(p\,\|\,q)$ を最小にする近似も考えられる．<a href="ch05_information.html#sec5-6">第5章 5.6</a>で見たとおり，二つの向きは性格が違う．</p>
+<ul>
+  <li>$\KL(q\,\|\,p)$ $=\Ex_q[\ln q-\ln p]$ は <strong>$q$ で平均する</strong>．$p\approx0$ の所に $q$ が確率を置くと $-\ln p$ が巨大になるので，$q$ は $p$ の小さい所を避け，1 つの峰に寄り，幅が狭めになる（<strong>峰に寄る</strong>近似）．</li>
+  <li>$\KL(p\,\|\,q)$ $=\Ex_p[\ln p-\ln q]$ は <strong>$p$ で平均する</strong>．$p$ が確率を持つ所で $q\approx0$ だと罰せられるので，$q$ は $p$ の全体を覆い，幅が広めになる（<strong>全体を覆う</strong>近似）．</li>
+</ul>
+<p>$q$ を Gauss 分布に限ると，$\KL(p\,\|\,q)$ の最小は「$q$ の平均と分散を $p$ の平均と分散に合わせる」ことで得られる（モーメントの一致．1 次元の導出は第5章 5.6）．多次元でも，$q=\Normal(\bm{m},\bm{S})$ なら $\bm{m}=\Ex_p[\bm{\theta}]$，$\bm{S}=\Cov_p[\bm{\theta}]$ である．平均場の族 $q=\prod_i q_i$ に対しては，次のように最小解が<strong>周辺分布の積</strong>になる．</p>
+
+<div class="box derive">
+<p class="box-title">導出：$\KL(p\,\|\,\prod_i q_i)$ を最小にする因子は周辺分布</p>
+<p>$\KL(p\,\|\,q)$ $=\Ex_p[\ln p]-\sum_i\Ex_p[\ln q_i(\theta_i)]$．第 1 項は $q$ によらない．$\ln q_i(\theta_i)$ は $\theta_i$ だけの関数なので，$p$ での期待値は周辺分布 $p_i(\theta_i)$ $=\int p\prod_{k\ne i}\dd\theta_k$ での期待値に等しい：</p>
+$$
+\KL(p\,\|\,q)=\text{定数}-\sum_i\int p_i(\theta_i)\ln q_i(\theta_i)\,\dd\theta_i .
+$$
+<p>各 $i$ の項は「$p_i$ と $q_i$ の交差エントロピー」で，$H[p_i,q_i]$ $=H[p_i]+\KL(p_i\,\|\,q_i)$ と分けると，$q_i=p_i$ のとき最小になる．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<p>20.6 節の 2 次元 Gauss 分布では，周辺分布は $\Normal(\theta_i\mid\mu_i,(\bm{\Lambda}^{-1})_{ii})$ なので，$\KL(p\,\|\,q)$ の最小解は分散が正しい（<a href="#fig20-4">図20.4</a>の破線）．ただし相関を表せないので，楕円の外の「$p$ がほとんど 0 の角」にも確率を置く．</p>
+
+<h3>20.7.2 双峰の標的での比べ方</h3>
+
+<p>二つの向きの違いが最も大きく出るのは，峰が 2 つある標的である．$p(x)$ $=w\,\Normal(x\mid-d/2,1)+(1-w)\,\Normal(x\mid d/2,1)$，$w=0.6$，$d=6$ を 1 つの Gauss 分布 $q=\Normal(x\mid m,s^{2})$ で近似する（式で与えた教育用の例．第5章 5.6 の対称な双峰と違い，峰の重みが不等で，峰の間隔が広い）．</p>
+
+<figure id="fig20-5">
+<img src="figs/ch20_fig20-5.svg" alt="上下 2 段の図．上は双峰の標的 p（黒実線と灰色の塗り）に，KL(q‖p) の 3 つの局所解（左の峰に寄るもの，右の峰に寄るもの，両方を覆う広いもの）と，KL(p‖q) を最小にする広い Gauss 分布を重ねた図．下は q の平均 m と標準偏差 s の平面で KL(q‖p) の等高線を描き，3 つの局所的な最小に印を付けた図．" style="max-width:440px;width:100%">
+<figcaption>図20.5　双峰の標的 $p(x)$ $=0.6\,\Normal(x\mid-3,1)+0.4\,\Normal(x\mid3,1)$ の Gauss 近似（式で与えた分布．乱数は使わない）．(a) 黒実線と灰色の塗りが $p$．①一点鎖線：$\KL(q\,\|\,p)$ の局所解（左の峰，大域的な最小），②点線：同（右の峰），③二点鎖線：同（両方を覆う広い解），④破線：$\KL(p\,\|\,q)$ の最小（モーメントの一致）．(b) $q$ の平均 $m$ と標準偏差 $s$（対数目盛）の平面での $\KL(q\,\|\,p)$ の等高線（細い灰色，数字は nat）．①〜③の印が局所的な最小，白抜きの四角が④の位置．</figcaption>
+</figure>
+
+<div class="tablewrap">
+<table id="tab20-3">
+<caption>表20.3　双峰の標的（$w=0.6$，$d=6$，$\ln Z=0.91894$）の Gauss 近似の数値（数値積分による．単位は nat）</caption>
+<thead><tr><th>近似</th><th>$m$</th><th>$s$</th><th>$\KL(q\,\|\,p)$</th><th>ELBO</th><th>$\KL(p\,\|\,q)$</th></tr></thead>
+<tbody>
+<tr><td>① $\KL(q\,\|\,p)$ 局所解（左の峰）</td><td>−2.988</td><td>1.019</td><td>0.507</td><td>0.412</td><td>6.241</td></tr>
+<tr><td>② 同（右の峰）</td><td>2.980</td><td>1.029</td><td>0.911</td><td>0.008</td><td>9.456</td></tr>
+<tr><td>③ 同（広い解）</td><td>−0.471</td><td>2.703</td><td>0.846</td><td>0.073</td><td>0.486</td></tr>
+<tr><td>④ $\KL(p\,\|\,q)$ 最小</td><td>−0.600</td><td>3.105</td><td>0.943</td><td>−0.024</td><td>0.464</td></tr>
+<tr><td>Laplace（左のモード）</td><td>−3.000</td><td>1.000</td><td>0.508</td><td>0.411</td><td>6.531</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><a href="#tab20-3">表20.3</a>と<a href="#fig20-5">図20.5</a>から次のことが分かる．</p>
+<ul>
+  <li>$\KL(q\,\|\,p)$ には<strong>局所解が 3 つ</strong>ある．どれに着くかは最適化の出発点で決まる．①と②は 1 つの峰だけを覆い，もう一方の峰の確率（0.4 または 0.6）を完全に無視する．①の ELBO 0.412 は $\ln Z=0.919$ より 0.507 低い．</li>
+  <li>④は $p$ の平均 $-0.6$ と分散 $9.64$ に合わせた広い分布で，中心は<strong>2 つの峰の間の谷</strong>（$p$ の小さい所）にある．$\KL(p\,\|\,q)$ は最小だが，$\KL(q\,\|\,p)$ は大きい．「最もありそうな値」としては最悪の所に中心を置いている．</li>
+  <li>Laplace 近似は展開した峰（ここでは左）だけを見る．その結果は①とほぼ同じである（各峰が分散 1 の Gauss 分布で，峰の重なりが小さいため）．</li>
+</ul>
+
+<div class="box ex">
+<p class="box-title">例題20.8　双峰の分布のモーメントの一致</p>
+<p>$p(x)$ $=w\,\Normal(x\mid-d/2,1)+(1-w)\,\Normal(x\mid d/2,1)$ について，(1) 平均と分散を $w$ と $d$ の式で求め，$w=0.6$，$d=6$ の値を出せ．(2) $\KL(p\,\|\,q)$ を最小にする Gauss 分布 $q$ の中心で，$p$ の密度は峰の頂上での密度の何分の 1 か．</p>
+<p><strong>解答</strong>　(1) 混合分布の期待値は成分の期待値の重み付き和である．$\Ex[x]$ $=w(-d/2)+(1-w)(d/2)$ $=(1-2w)d/2$．$\Ex[x^{2}]$ は各成分で $1+(d/2)^{2}$ なので $\Ex[x^{2}]=1+d^{2}/4$．よって</p>
+$$
+\begin{aligned}
+\Var[x]&=1+\frac{d^{2}}{4}-\frac{(1-2w)^{2}d^{2}}{4}\\
+&=1+w(1-w)d^{2}.
+\end{aligned}
+$$
+<p>（$1-(1-2w)^{2}$ $=4w-4w^{2}$ $=4w(1-w)$ を使った．）$w=0.6$，$d=6$ では平均 $(1-1.2)\times3=-0.6$，分散 $1+0.24\times36=9.64$（標準偏差 3.105）．<br>
+(2) $x=-0.6$ での密度は $0.6\,\Normal(-0.6\mid-3,1)+0.4\,\Normal(-0.6\mid3,1)$ $=0.6\times0.3989\,e^{-2.88}+0.4\times0.3989\,e^{-6.48}$ $=0.01344+0.00024=0.0137$．左の峰の頂上 $x=-3$ での密度はほぼ $0.6\times0.3989=0.239$ なので，約 $1/17.5$ である．平均と分散だけを合わせた近似は，「ほとんど起こらない値」を中心に選んでしまう．</p>
+</div>
+
+<p>実際の変分推論は $\KL(q\,\|\,p)$ を使う．$\KL(p\,\|\,q)$ は $p$ での期待値を含み，それが計算できないこと自体がそもそもの問題だからである．ただし，因子ごとに局所的に $\KL(p\,\|\,q)$ を小さくする工夫として期待値伝播法（expectation propagation．Minka 2001）がある．ここでは名前の紹介にとどめる．</p>
+
+<div class="box sim" id="sim20-2">
+<p class="box-title">シミュレーター20.2　KL の向きと ELBO ＋ KL ＝ ln Z</p>
+<p>双峰と二重井戸の標的で，$\KL(q\,\|\,p)$ の局所解が出発点で変わること，$\KL(p\,\|\,q)$ の最小が全体を覆うこと，どの $q$ でも ELBO ＋ $\KL(q\,\|\,p)$ が $\ln Z$ になることを確かめる装置である．</p>
+<iframe class="qsim-embed" src="sim/inference-mcmc.html?embed=1&amp;only=approx" title="近似推論と MCMC シミュレーター（KL の向きを比べる）" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/inference-mcmc.html#approx" target="_blank" rel="noopener noreferrer">別ウィンドウで大きく開く &rarr;</a></p>
+<p><strong>操作と観察</strong></p>
+<ol class="sim-steps">
+  <li>標的分布を「双峰（Gauss 混合）」にする（既定 $w=0.60$，$d=6.0$）→ 表「近似の数値」の「KL($q$‖$p$) 最小」の列が KL($q$‖$p$) 0.5074，「KL($p$‖$q$) 最小」の列が平均 −0.6000，分散 9.640 になる．<a href="#tab20-3">表20.3</a>の①と④，例題20.8 (1) と比べる．</li>
+  <li>「KL($q$‖$p$) 最小化の初期値」を「右の峰の近くから」「広く中央から」と切り替える → KL($q$‖$p$) を最小にした $q$ が右の峰（KL 0.9107）や両方を覆う広い形（KL 0.8457）に移る．図の緑の一点鎖線の位置の変化を<a href="#fig20-5">図20.5</a>(a) の②，③と比べる．</li>
+  <li>「式に入れる $q$」を「KL(q‖p) 最小」「KL(p‖q) 最小」「Laplace」と切り替え，「いまの数値を式に入れると」の最後の行を読む → どの $q$ でも ELBO ＋ KL($q$‖$p$) が同じ $\ln Z=0.91894$ になる．下の ELBO の棒の図で，斜線の帯（KL）の長さが $q$ ごとに違うことを見る．式 \eqref{eq:20-decomp} と比べる．</li>
+  <li>標的分布を「二重井戸」にする（障壁 $b=3.00$）→ Laplace 近似（モード $x^{*}=\pm1$，$\Lambda=8b=24$，分散 0.04167）と KL($q$‖$p$) 最小（平均 −0.9239，分散 0.04882）は片方の井戸だけを覆い，KL($p$‖$q$) 最小（平均 0，分散 0.8893）は 2 つの井戸の間の確率の小さい所に中心を置く．</li>
+</ol>
+<p><strong>操作後の問い</strong></p>
+<ol class="sim-questions">
+  <li>手順 2 の 3 つの局所解のうち，ELBO が最も大きいのはどれか．それは「最も良い近似」と言えるか．
+    <details class="ans"><summary>答えの例</summary><p>左の峰に寄る解（KL 0.5074，ELBO 0.4116）である．$\ln Z$ は共通なので，ELBO が最大のものが KL($q$‖$p$) 最小である．ただし右の峰の確率 0.4 を完全に無視しており，「$x\gt0$ である確率」のような量はまったく予測できない．KL($q$‖$p$) の意味で最良でも，知りたい量によっては使えない近似である．</p></details></li>
+  <li>手順 3 で，ELBO ＋ KL が毎回同じ値になるのはなぜか．$\ln Z$ を知らずに ELBO だけを計算しているとき，その差（KL）は分かるか．
+    <details class="ans"><summary>答えの例</summary><p>$\ln Z=\ELBO(q)+\KL(q\,\|\,p)$ は任意の $q$ について成り立つ恒等式（式 <span style="white-space:nowrap">\eqref{eq:20-decomp}）</span>だからである．装置は $\ln Z$ を数値積分で知っているので KL を表示できるが，実際の推論では $\ln Z$ が分からないので KL も分からない．ELBO が分かっても，近似がどれだけ外れているかは分からない（20.12 節）．</p></details></li>
+  <li>手順 4 の二重井戸の標的は，統計力学の何に当たるか．
+    <details class="ans"><summary>答えの例</summary><p>エネルギー $E(x)$ $=E_{\mathrm b}(x^{2}-1)^{2}$ の二重井戸ポテンシャルの中の粒子の Boltzmann 分布 $p\propto e^{-E/(k_{\mathrm B}T)}$ で，$b$ $=E_{\mathrm b}/(k_{\mathrm B}T)$ は温度で割った障壁の高さである．片方の井戸だけを覆う近似は，2 つの安定な状態（たとえば 2 つの構造や 2 つの磁化の向き）の一方しか見ていないことに当たる．</p></details></li>
+</ol>
+<noscript><p>JavaScript が無効のため，この装置は動きません．何を確かめる装置かは上の説明と本文の式を読んでください．</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-8">20.8 統計力学の変分原理との対応<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.8.1 自由エネルギーの変分原理</h3>
+
+<p>統計力学では，温度 $T$ の熱平衡にある系が微視的な状態 $\bm{x}$（原子の配置やスピンの向き）をとる確率は Boltzmann 分布</p>
+$$
+\begin{gathered}
+p(\bm{x})=\frac{e^{-\beta E(\bm{x})}}{Z},\qquad \beta=\frac{1}{k_{\mathrm B}T},\\
+Z=\sum_{\bm{x}}e^{-\beta E(\bm{x})}
+\end{gathered}
+$$
+<p>に従う（$E(\bm{x})$ は状態のエネルギー，$Z$ は分配関数．<a href="ch05_information.html#sec5-8">第5章 5.8</a>，<a href="../UnivPhys_Textbook/ch50_canonical_ensemble.html#sec50-3">大学基礎物理学 第50章 50.3</a>）．Helmholtz の自由エネルギーは $A=-k_{\mathrm B}T\ln Z$ である（$F$ と書く本も多い）．分配関数は状態についての和で，状態の数は粒子の数とともに指数関数的に増えるので，周辺尤度 $p(\data)$ と同じく直接は計算できない．</p>
+
+<p>任意の分布 $q(\bm{x})$ について，その分布の「試しの自由エネルギー」を</p>
+$$
+\begin{gathered}
+A[q]\equiv\Ex_{q}[E]-T\,S[q],\\
+S[q]=-k_{\mathrm B}\sum_{\bm{x}}q(\bm{x})\ln q(\bm{x})
+\end{gathered}
+$$
+<p>と定義する（$S[q]$ は Gibbs のエントロピー）．</p>
+
+<div class="box derive">
+<p class="box-title">導出：$A[q]-A$ $=k_{\mathrm B}T\,\KL(q\,\|\,p)\ge0$</p>
+<p>$\ln p(\bm{x})$ $=-\beta E(\bm{x})-\ln Z$ を KL の定義に代入する：</p>
+$$
+\begin{aligned}
+\KL(q\,\|\,p)&=\sum_{\bm{x}}q\ln q-\sum_{\bm{x}}q\ln p\\
+&=-\frac{S[q]}{k_{\mathrm B}}+\beta\,\Ex_{q}[E]+\ln Z .
+\end{aligned}
+$$
+<p>両辺に $k_{\mathrm B}T=1/\beta$ を掛ける：</p>
+$$
+\begin{aligned}
+k_{\mathrm B}T\,\KL(q\,\|\,p)&=\Ex_{q}[E]-TS[q]+k_{\mathrm B}T\ln Z\\
+&=A[q]-A .
+\end{aligned}
+$$
+<p>KL は 0 以上なので $A[q]\ge A$．等号は $q=p$（Boltzmann 分布そのもの）のときに限る．</p>
+<p style="text-align:right">（導出終わり）</p>
+</div>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+A&=-k_{\mathrm B}T\ln Z\\
+&\le A[q]\\
+&=\Ex_{q}[E]-T\,S[q]
+\end{aligned} \label{eq:20-gb}
+\end{equation}
+</div>
+
+<p>式 \eqref{eq:20-gb} は <strong>Gibbs–Bogoliubov の不等式</strong>（自由エネルギーの変分原理）と呼ばれる．古典統計力学では Gibbs が，量子統計力学では Bogoliubov が示したことからこの名がある（この名を題にした論文に Isihara 1968，歴史と統計力学での使われ方の総説に Kuzemsky 2015 がある）．試しの分布の自由エネルギーは真の自由エネルギーより低くならないので，$q$ を動かして $A[q]$ を最小にすれば，$A[q]$ は上から真の $A$ に近づく．</p>
+
+<h3>20.8.2 ELBO は符号を変えた自由エネルギー</h3>
+
+<p>変分推論の言葉に置き換える．非正規化の密度を $\tilde{p}(\bm{x})$ $=e^{-\beta E(\bm{x})}$，正規化定数を $Z$ と見れば，ELBO の第 1 の形（式 \eqref{eq:20-elbo2}）は</p>
+$$
+\begin{aligned}
+\ELBO(q)&=\Ex_{q}[\ln\tilde{p}]+H[q]\\
+&=-\beta\,\Ex_{q}[E]+\frac{S[q]}{k_{\mathrm B}}=-\beta\,A[q]
+\end{aligned}
+$$
+<p>となる（$H[q]=S[q]/k_{\mathrm B}$．第5章 5.8）．$\ln Z=-\beta A$ なので，$\ELBO\le\ln Z$ は $A[q]\ge A$ と同じ不等式である．逆に言えば，ベイズ推定の $-\ln p(\data,\bm{\theta})$ を「エネルギー」と読み，温度を $k_{\mathrm B}T=1$ とおけば，事後分布は Boltzmann 分布，周辺尤度は分配関数，$-\ELBO$ は試しの自由エネルギーになる．</p>
+
+<div class="tablewrap">
+<table id="tab20-4">
+<caption>表20.4　変分推論と統計力学の対応（$k_{\mathrm B}T=1$ とおいたとき）</caption>
+<thead><tr><th>変分推論</th><th>統計力学</th></tr></thead>
+<tbody>
+<tr><td>パラメーター $\bm{\theta}$</td><td>微視的な状態 $\bm{x}$</td></tr>
+<tr><td>$-\ln p(\data,\bm{\theta})$</td><td>エネルギー $E(\bm{x})$</td></tr>
+<tr><td>事後分布 $p(\bm{\theta}\mid\data)$</td><td>Boltzmann 分布 $e^{-\beta E}/Z$</td></tr>
+<tr><td>周辺尤度 $p(\data)$，$-\ln p(\data)$</td><td>分配関数 <span style="white-space:nowrap">$Z$，</span>自由エネルギー $\beta A$</td></tr>
+<tr><td>$-\ELBO(q)$</td><td>試しの自由エネルギー $\beta A[q]$</td></tr>
+<tr><td>$\Ex_q[\ln p(\data,\bm{\theta})]$ と $H[q]$ の綱引き</td><td>エネルギー $\Ex_q[E]$ とエントロピー $TS[q]$ の綱引き</td></tr>
+<tr><td>平均場近似 $q=\prod_i q_i$</td><td>平均場理論（Weiss の分子場）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>20.8.3 Ising 模型の平均場近似</h3>
+
+<p>Ising 模型（<a href="ch19_graphical_models.html#sec19-5">第19章 19.5</a>）のスピン $s_i\in\{+1,-1\}$ に，エネルギー $E(\bm{s})$ $=-J\sum_{\langle ij\rangle}s_is_j-h\sum_i s_i$ を与える（$J\gt0$ は隣り合うスピンをそろえる相互作用，$h$ は外部磁場の項．どちらもエネルギーの単位）．平均場 $q(\bm{s})=\prod_iq_i(s_i)$ を式 \eqref{eq:20-mf-opt} に入れ，$\ln p=-\beta E-\ln Z$ を使う．$s_i$ を含む項は $\beta(J\sum_{j\in\mathrm{nb}(i)}s_j+h)s_i$ で（$\mathrm{nb}(i)$ は $i$ の隣のスピンの集合），他のスピンを $q$ で平均すると $s_j$ は平均の磁化 $m_j\equiv\Ex_q[s_j]$ に置き換わる：</p>
+$$
+\ln q_i^{*}(s_i)=\beta\Bigl(J\sum_{j\in\mathrm{nb}(i)}m_j+h\Bigr)s_i+\text{定数}.
+$$
+<p>$s_i=\pm1$ の 2 つの値の確率は $e^{\pm\beta h_{\mathrm{eff}}}$ に比例するので（$h_{\mathrm{eff}}=J\sum_jm_j+h$），$m_i$ $=\dfrac{e^{\beta h_{\mathrm{eff}}}-e^{-\beta h_{\mathrm{eff}}}}{e^{\beta h_{\mathrm{eff}}}+e^{-\beta h_{\mathrm{eff}}}}$ $=\tanh(\beta h_{\mathrm{eff}})$．周りのスピンからの影響を「平均の場」$h_{\mathrm{eff}}$ で置き換えた，強磁性体の平均場理論の自己無撞着方程式そのものである．平均場理論の詳しい議論は<a href="ch27_materials_statmech.html#sec27-4">第27章 27.4</a>で行う．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.9　スピン 2 個の Ising 模型：厳密解と平均場近似</p>
+<p>2 個のスピン $s_1,s_2\in\{\pm1\}$ のエネルギーを $E=-Js_1s_2-h(s_1+s_2)$ とし，<span style="white-space:nowrap">$\beta J=0.5$，</span>$\beta h=0.2$ とする．(1) 分配関数 <span style="white-space:nowrap">$Z$，</span>$\beta A=-\ln Z$，磁化 $\Ex[s_1]$ を厳密に求めよ．(2) 平均場近似の方程式 $m=\tanh(\beta Jm+\beta h)$ を $m=0$ から反復して解け．(3) 平均場の $\beta A[q]$ を求め，式 \eqref{eq:20-gb} を確かめよ．</p>
+<p><strong>解答</strong>　(1) 4 つの状態の $-\beta E$ は，$(+,+)$：$0.5+0.4=0.9$，$(-,-)$：$0.5-0.4=0.1$，$(+,-)$ と $(-,+)$：$-0.5$．$Z$ $=e^{0.9}+e^{0.1}+2e^{-0.5}$ $=2.45960+1.10517+1.21306$ <span style="white-space:nowrap">$=4.77783$，</span>$\beta A=-\ln Z=-1.5640$．$\Ex[s_1]$ $=(e^{0.9}-e^{0.1})/Z$ $=1.3544/4.7779$ $=0.2835$．<br>
+(2) $m_1=\tanh(0.2)=0.1974$，$m_2$ $=\tanh(0.5\times0.1974+0.2)$ $=0.2901$，続けて $0.3320$，$0.3505$，$0.3586,\dots$ と増え，$m=0.3648$ に収束する．厳密な 0.2835 より大きい．平均場近似は 2 つのスピンが相手の揺らぎを無視して「平均の場」だけを感じるので，そろう傾向を強めに見積もる．<br>
+(3) $q$ のもとでスピンは独立なので $\Ex_q[s_1s_2]=m^{2}$．$\beta\Ex_q[E]$ $=-0.5\times0.3648^{2}-0.2\times2\times0.3648$ $=-0.0665-0.1459$ $=-0.2125$．1 個のスピンのエントロピーは $\dfrac{S_1}{k_{\mathrm B}}$ $=-\sum_{\pm}\dfrac{1\pm m}{2}\ln\dfrac{1\pm m}{2}$ で，$\tfrac{1+m}{2}=0.6824$，$\tfrac{1-m}{2}=0.3176$ から $0.6824\times0.3821+0.3176\times1.1470$ $=0.6250$．2 個で $1.2501$．よって $\beta A[q]$ $=\beta\Ex_q[E]-S[q]/k_{\mathrm B}$ $=-0.2125-1.2501$ $=-1.4626$．$\beta A[q]$ $=-1.4626\ge\beta A$ $=-1.5640$ であり，差 $0.1014$ が $\KL(q\,\|\,p)$ である．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-9">20.9 確率的な変分推論と変分オートエンコーダーの入口<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.9.1 ELBO の勾配を標本で見積もる</h3>
+
+<p>平均場の更新式 \eqref{eq:20-mf-opt} が閉じた形で解けるのは，事前分布と尤度が共役に近い特別なモデルだけである．一般には，$q$ を Gauss 分布 $q_{\bm{\phi}}(\bm{\theta})$ $=\Normal(\bm{\theta}\mid\bm{\mu},\diag(\bm{\sigma}^{2}))$ などの形に決め，その<strong>変分パラメーター</strong> $\bm{\phi}$ $=(\bm{\mu},\bm{\sigma})$ について ELBO を勾配法（<a href="ch07_optimization.html#sec7-2">第7章 7.2</a>）で最大にする．ところが ELBO は $q_{\bm{\phi}}$ による期待値なので，$\bm{\phi}$ を変えると「平均をとる分布」そのものが変わり，微分と期待値の順序をそのまま入れ替えられない．</p>
+
+<p><strong>再パラメーター化</strong>（reparameterization）はこれを解決する．$\bm{\theta}\sim q_{\bm{\phi}}$ を，$\bm{\phi}$ によらない乱数 $\bm{\epsilon}\sim\Normal(\bm{0},\bm{I})$ の変換として書く：</p>
+\begin{equation}
+\begin{aligned}
+&\bm{\theta}=\bm{\mu}+\bm{\sigma}\odot\bm{\epsilon},\\
+&\Ex_{q_{\bm{\phi}}}[f(\bm{\theta})]\\
+&\ =\Ex_{\bm{\epsilon}}\bigl[f(\bm{\mu}+\bm{\sigma}\odot\bm{\epsilon})\bigr]
+\end{aligned} \label{eq:20-reparam}
+\end{equation}
+<p>（$\odot$ は成分ごとの積）．右辺の期待値は $\bm{\phi}$ によらない分布でとるので，微分を期待値の中に入れられる．1 次元なら，連鎖律で</p>
+$$
+\begin{aligned}
+\pdiff{}{\mu}\Ex_{q}[f(\theta)]&=\Ex_{\epsilon}\bigl[f'(\mu+\sigma\epsilon)\bigr],\\
+\pdiff{}{\sigma}\Ex_{q}[f(\theta)]&=\Ex_{\epsilon}\bigl[f'(\mu+\sigma\epsilon)\,\epsilon\bigr].
+\end{aligned}
+$$
+<p>期待値を $S$ 個の標本 $\epsilon_1,\dots,\epsilon_S$ の平均で置き換えれば，勾配の<strong>不偏な推定量</strong>（期待値が真の勾配に等しい推定量）が得られる．$f$ には $\ln p(\data,\theta)$ を，$H[q]$ は Gauss 分布なら閉じた式 $\tfrac12\ln(2\pi e\sigma^{2})$ を使う．$\ln p$ の勾配は誤差逆伝播と自動微分（<a href="ch15_backpropagation.html#sec15-9">第15章 15.9</a>）で自動的に計算できる．</p>
+
+<figure id="fig20-6">
+<svg role="img" aria-label="再パラメーター化の計算の流れ．変分パラメーター mu と sigma，パラメーターによらない乱数 epsilon から，theta = mu + sigma epsilon を作り，ln p(D, theta) を計算する．勾配は破線の矢印で theta から mu と sigma へ戻り，epsilon へは戻らない．" viewBox="0 0 620 250" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>図20.6　再パラメーター化の計算の流れ</title>
+<defs>
+<marker id="arr-fig20-6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker>
+<marker id="arrb-fig20-6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d55e00"></path></marker>
+</defs>
+<rect x="20" y="30" width="110" height="46" rx="8" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="75" y="60" font-size="16" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif"><tspan font-style="italic">μ</tspan></text>
+<rect x="20" y="102" width="110" height="46" rx="8" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="75" y="132" font-size="16" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif"><tspan font-style="italic">σ</tspan></text>
+<rect x="20" y="174" width="110" height="46" rx="8" fill="#fff" stroke="#1a1a1a" stroke-width="1.6" stroke-dasharray="6 4"></rect>
+<text x="75" y="202" font-size="15" text-anchor="middle" fill="#1a1a1a"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">ε</tspan> ~ 𝒩(0, 1)</text>
+<text x="75" y="20" font-size="14" text-anchor="middle" fill="#5b2a5e">変分パラメーター</text>
+<text x="75" y="242" font-size="14" text-anchor="middle" fill="#1a1a1a">乱数（固定の分布）</text>
+<rect x="225" y="95" width="150" height="60" rx="8" fill="#fff" stroke="#1a1a1a" stroke-width="1.6"></rect>
+<text x="300" y="131" font-size="16" text-anchor="middle" fill="#1a1a1a" font-family="Times New Roman, STIXGeneral, serif"><tspan font-style="italic">θ</tspan> = <tspan font-style="italic">μ</tspan> + <tspan font-style="italic">σε</tspan></text>
+<rect x="450" y="95" width="150" height="60" rx="8" fill="#5b2a5e" stroke="#5b2a5e" stroke-width="1.6"></rect>
+<text x="525" y="131" font-size="16" text-anchor="middle" fill="#fff" font-family="Times New Roman, STIXGeneral, serif">ln <tspan font-style="italic">p</tspan>(𝒟, <tspan font-style="italic">θ</tspan>)</text>
+<line x1="132" y1="58" x2="222" y2="110" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig20-6)"></line>
+<line x1="132" y1="125" x2="222" y2="125" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig20-6)"></line>
+<line x1="132" y1="192" x2="222" y2="142" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig20-6)"></line>
+<line x1="377" y1="125" x2="446" y2="125" stroke="#1a1a1a" stroke-width="1.6" marker-end="url(#arr-fig20-6)"></line>
+<path d="M 450 165 C 400 215, 300 215, 250 160" fill="none" stroke="#d55e00" stroke-width="1.8" stroke-dasharray="7 4" marker-end="url(#arrb-fig20-6)"></path>
+<path d="M 228 92 C 200 60, 170 50, 136 46" fill="none" stroke="#d55e00" stroke-width="1.8" stroke-dasharray="7 4" marker-end="url(#arrb-fig20-6)"></path>
+<path d="M 226 104 C 190 104, 165 110, 136 116" fill="none" stroke="#d55e00" stroke-width="1.8" stroke-dasharray="7 4" marker-end="url(#arrb-fig20-6)"></path>
+<text x="350" y="228" font-size="14" text-anchor="middle" fill="#b34d00">勾配（誤差逆伝播）</text>
+<text x="525" y="80" font-size="14" text-anchor="middle" fill="#1a1a1a">期待値を標本平均で</text>
+</svg>
+<figcaption>図20.6　再パラメーター化の計算の流れ（模式図）．実線の矢印は値の計算，破線の矢印は勾配の流れを表す．乱数 $\epsilon$ は変分パラメーター $\mu,\sigma$ によらない分布から引くので，勾配は $\theta$ を通って $\mu$ と $\sigma$ に届き，$\epsilon$ には戻らない．</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">例題20.10　再パラメーター化による勾配の推定</p>
+<p>$q$ $=\Normal(\theta\mid\mu,\sigma^{2})$，$f(\theta)=\theta^{2}$ とする．(1) $\Ex_q[f]$ を $\mu,\sigma$ で表し，$\mu,\sigma$ についての厳密な偏微分を求めよ．(2) $\mu=1$，$\sigma=0.5$ とし，標準 Gauss 乱数 $\epsilon=0.3,\,-1.1,\,0.8$ の 3 個で，再パラメーター化による勾配の推定値を計算せよ．</p>
+<p><strong>解答</strong>　(1) $\Ex_q[\theta^{2}]$ $=\Var[\theta]+\Ex[\theta]^{2}$ $=\sigma^{2}+\mu^{2}$．偏微分は $\partial/\partial\mu=2\mu$，$\partial/\partial\sigma$ $=2\sigma$．$\mu=1$，$\sigma=0.5$ では 2 と 1．<br>
+(2) $\theta_s=1+0.5\epsilon_s$ は $1.15,\ 0.45,\ 1.40$．$f'(\theta)=2\theta$ なので，$\mu$ についての推定値は $(2.30+0.90+2.80)/3=2.00$．$\sigma$ についての推定値は $2\theta_s\epsilon_s$ の平均で，$(0.69-0.99+2.24)/3=0.647$．真の値 1 からずれているが，期待値は 1 に等しい（不偏）．標本を増やすか，多くの更新で平均されることで，ずれは打ち消し合う．</p>
+</div>
+
+<h3>20.9.2 ミニバッチと確率的な変分推論</h3>
+
+<p>データが $N$ 個あると，$\ln p(\data\mid\bm{\theta})$ $=\sum_{n=1}^{N}\ln p(y_n\mid\bm{\theta})$ の計算に $N$ 回かかる．確率的勾配降下法（<a href="ch07_optimization.html#sec7-5">第7章 7.5</a>）と同じく，大きさ $B$ のミニバッチ $\mathcal{B}$ で $\dfrac{N}{B}\sum_{n\in\mathcal{B}}\ln p(y_n\mid\bm{\theta})$ と見積もれば，期待値は全データの和に等しい．再パラメーター化の乱数とミニバッチの乱数の両方で ELBO の勾配を見積もり，確率的に最適化するのが<strong>確率的な変分推論</strong>の考え方である（大規模なトピックモデルへの適用は Hoffman ら 2013）．</p>
+
+<h3>20.9.3 変分オートエンコーダー</h3>
+
+<p>各データ $\bm{x}_n$ ごとに潜在変数 $\bm{z}_n$（観測できない低次元の表現．<a href="ch18_latent_variables.html#sec18-7">第18章 18.7</a>）を持つモデル $p_{\bm{\vartheta}}(\bm{x}\mid\bm{z})p(\bm{z})$ を考える（$\bm{\vartheta}$ は生成側のニューラルネットワークの重み）．データごとに別々の $q(\bm{z}_n)$ を最適化する代わりに，$\bm{x}$ を入れると $q$ の平均と標準偏差を出すニューラルネットワーク $q_{\bm{\phi}}(\bm{z}\mid\bm{x})$ $=\Normal(\bm{z}\mid\bm{\mu}_{\bm{\phi}}(\bm{x}),\diag\bm{\sigma}_{\bm{\phi}}^{2}(\bm{x}))$ を学習する．1 個のデータの ELBO は，式 \eqref{eq:20-elbo2} の第 2 の形そのものである：</p>
+$$
+\begin{aligned}
+\ELBO(\bm{x})={}&\Ex_{q_{\bm{\phi}}(\bm{z}\mid\bm{x})}\bigl[\ln p_{\bm{\vartheta}}(\bm{x}\mid\bm{z})\bigr]\\
+&-\KL\bigl(q_{\bm{\phi}}(\bm{z}\mid\bm{x})\,\|\,p(\bm{z})\bigr).
+\end{aligned}
+$$
+<p>第 1 項は「$\bm{z}$ から $\bm{x}$ をどれだけ再構成できるか」，第 2 項は「符号 $\bm{z}$ を事前分布 $\Normal(\bm{0},\bm{I})$ から離しすぎない」罰則である．$q_{\bm{\phi}}$ を符号化器（encoder），$p_{\bm{\vartheta}}$ を復号化器（decoder）と見れば，<a href="ch18_latent_variables.html#sec18-8">第18章 18.8</a> のオートエンコーダーに確率の解釈を与えたものになる．$\bm{\phi}$ と $\bm{\vartheta}$ を再パラメーター化の勾配で同時に学習するこの方法が，<strong>変分オートエンコーダー</strong>（variational autoencoder，VAE．Kingma &amp; Welling 2013）である．ここでは位置づけの紹介にとどめる．</p>
+
+<!-- ============================================================ -->
+<h2 id="sec20-10">20.10 近似の選び方による不確かさの違い<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.10.1 方法の比較</h3>
+
+<div class="tablewrap">
+<table id="tab20-5">
+<caption>表20.5　近似推論の方法の比較（$M$ はパラメーターの数）</caption>
+<thead><tr><th>方法</th><th>計算の手間</th><th>偏り</th><th>多峰への対応</th><th>周辺尤度の推定</th><th>主な弱点</th></tr></thead>
+<tbody>
+<tr><td>格子の数値積分</td><td>$G^{M}$．$M\le3$ 程度まで</td><td>格子が細かければ小さい</td><td>可</td><td>可</td><td>次元の呪い</td></tr>
+<tr><td>Laplace 近似</td><td>最適化 1 回＋Hesse 行列（$M^{2}$ 個の 2 階微分）</td><td>あり（中心がモード，裾を無視）</td><td>展開した峰だけ</td><td>式 \eqref{eq:20-laplace-Z}</td><td>非対称・境界・変数の取り方</td></tr>
+<tr><td>平均場の変分推論</td><td>座標上昇・勾配法．速い</td><td>あり（分散の過小評価）</td><td>1 つの峰に寄る</td><td>下界（ELBO）</td><td>相関を失う，局所解</td></tr>
+<tr><td>相関を持つ Gauss 族の変分推論</td><td>$q$ の共分散 $M(M+1)/2$ 個を最適化</td><td>あり（Gauss の形に限る）</td><td>1 つの峰に寄る</td><td>下界（ELBO）</td><td>$M$ が大きいと重い</td></tr>
+<tr><td>MCMC（<a href="ch21_sampling.html#sec21-6">第21章 21.6</a>）</td><td>標本数に比例．遅い</td><td>標本を増やせば 0 に近づく</td><td>原理的には可（障壁があると実際には難しい）</td><td>直接は得られない</td><td>収束の判定</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>20.10.2 走る例で比べる</h3>
+
+<p>走る例（<a href="#tab20-1">表20.1</a>）の事後分布を，格子（基準），Laplace 近似，平均場の変分推論（$q$ $=\Normal(w\mid m_1,s_1^{2})\Normal(b\mid m_2,s_2^{2})$ の $\KL(q\,\|\,p)$ を最小にしたもの），相関を持つ Gauss 族の変分推論，Metropolis–Hastings 法（MH 法．第21章）で求めた．MH 法は提案の標準偏差 1.2 のランダムウォーク，連鎖 4 本 × 20000 ステップ，初めの 2000 ステップを捨て，seed 20261113 の乱数を使った（受理率 0.48）．</p>
+
+<div class="tablewrap">
+<table id="tab20-6">
+<caption>表20.6　走る例の事後分布の要約（教育用の合成データ．$w$ は傾き，$b$ は切片）</caption>
+<thead><tr><th>方法</th><th>$w$ の平均</th><th>$w$ の標準偏差</th><th>$w$ の 95 % 区間</th><th>$P(w\lt0\mid\data)$</th><th>$b$ の平均（標準偏差）</th><th>ELBO</th></tr></thead>
+<tbody>
+<tr><td>格子（基準）</td><td>2.424</td><td>1.338</td><td>[−0.04, 5.20]</td><td>0.027</td><td>0.667（0.836）</td><td>$\ln p(\data)=-5.065$</td></tr>
+<tr><td>Laplace 近似</td><td>2.107</td><td>1.278</td><td>[−0.40, 4.61]</td><td>0.050</td><td>0.580（0.782）</td><td>−5.111</td></tr>
+<tr><td>平均場の変分推論</td><td>2.407</td><td>1.303</td><td>[−0.15, 4.96]</td><td>0.032</td><td>0.647（0.813）</td><td>−5.088</td></tr>
+<tr><td>相関つき Gauss の変分推論</td><td>2.417</td><td>1.312</td><td>[−0.15, 4.99]</td><td>0.033</td><td>0.666（0.820）</td><td>−5.079</td></tr>
+<tr><td>MH 法</td><td>2.40（MCSE 約 0.02）</td><td>1.36</td><td>[−0.09, 5.25]</td><td>—</td><td>0.658（0.834）</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<p>（Gauss 近似の 95 % 区間は平均 ± 1.96 × 標準偏差．格子と MH 法の区間は 2.5 % 点と 97.5 % 点．MCSE は Monte Carlo 標準誤差で，連鎖をブロックに分けて見積もった．Laplace 近似の ELBO は，Laplace 近似の Gauss 分布を $q$ として計算した値．）</p>
+
+<figure id="fig20-7">
+<img src="figs/ch20_fig20-7.svg" alt="傾き w の周辺事後分布．格子で求めた基準の密度（実線と灰色の塗り）に，Laplace 近似（一点鎖線，左にずれて山がやや高い），平均場の変分推論（点線，基準にほぼ重なる），MH 法の標本のヒストグラム（破線の階段）を重ねた図．" style="max-width:640px;width:100%">
+<figcaption>図20.7　走る例の傾き $w$ の周辺事後分布 $p(w\mid\data)$（教育用の合成データ．<a href="#tab20-1">表20.1</a>）．実線と灰色の塗りは格子で求めた基準，一点鎖線は Laplace 近似 $\Normal(2.107,\,1.278^{2})$，点線は平均場の変分推論 $\Normal(2.407,\,1.303^{2})$，破線の階段は MH 法の標本（4 本 × 18000 個，seed 20261113）のヒストグラム（幅 0.4）．</figcaption>
+</figure>
+
+<p>この例では事後分布の相関が小さい（格子で相関係数 0.16）ので，平均場の変分推論は相関つきの族とほとんど変わらず，基準によく合っている．Laplace 近似は中心がモードに来るぶん左にずれ，「温度を上げると緻密化しやすい」（$w\gt0$）ことの確からしさを低めに見積もる（$P(w\lt0)$ が 0.027 でなく 0.050）．一方，事後分布の相関が強い問題では，平均場の誤差棒が大きく狭まる（20.11 節）．<strong>どの近似が良いかは問題による</strong>ので，可能なら複数の方法で結果を比べるのがよい．</p>
+
+<div class="box ex">
+<p class="box-title">例題20.11　近似の誤差棒から「効果がある確率」を読む</p>
+<p>走る例で，(1) Laplace 近似の $w$ の 95 % 区間と $P(w\lt0\mid\data)$ を，$w_{\mathrm{MAP}}=2.107$，標準偏差 1.278 から求めよ．(2) 平均場の変分推論（平均 2.407，標準偏差 1.303）について同じ量を求めよ．(3) 格子の値（[−0.04, 5.20]，0.027）と比べ，「緻密化の確率は温度とともに上がる」と 95 % の確からしさで言えるかを，それぞれの近似で判定せよ．</p>
+<p><strong>解答</strong>　(1) $2.107\pm1.96\times1.278$ $=2.107\pm2.505$ より $[-0.398,\ 4.612]$．$P(w\lt0)$ $=\Phi\bigl((0-2.107)/1.278\bigr)$ $=\Phi(-1.649)$ $=0.050$．<br>
+(2) $2.407\pm1.96\times1.303$ $=2.407\pm2.554$ より $[-0.147,\ 4.961]$．$P(w\lt0)$ $=\Phi(-2.407/1.303)$ $=\Phi(-1.847)$ <span style="white-space:nowrap">$=0.032$．</span><br>
+(3) $P(w\gt0)$ は格子で 0.973，平均場で 0.968，Laplace で 0.950 である．「95 % 以上」という基準では，格子と平均場では言えるが，Laplace 近似ではちょうど境目になる．結論が近似の選び方で変わりうる境目の問題では，近似の偏りを確かめてから判断する必要がある．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-11">20.11 材料工学・物性物理学との接点 — Schottky 比熱のパラメーター推定<span class="route-tag adv">詳しいルート</span></h2>
+
+<h3>20.11.1 物理の背景</h3>
+
+<p>結晶の中に，エネルギーの差が $k_{\mathrm B}\Delta$ だけある 2 つの準位を持つ原子やイオン（たとえば結晶場で分裂した磁性イオンの準位）が少しだけ含まれていると，低温の比熱に山が現れる．これを <strong>Schottky 比熱</strong>（Schottky 異常）という．温度が低すぎると上の準位に上がれず，高すぎると 2 つの準位の占有がほぼ等しくなってもう熱を吸収しないので，その間の温度 $T\approx0.42\,\Delta$ で比熱が最大になる（<a href="../UnivPhys_Textbook/ch51_canonical_applications.html#sec51-3">大学基礎物理学 第51章 51.3</a>）．ここでは $\Delta$ を「エネルギー差を $k_{\mathrm B}$ で割った値」（単位 K）として使う．2 つの準位がどちらも縮退していなければ，2 準位の中心を式単位 1 mol あたり $n$ mol 含む試料の過剰比熱（格子比熱などを差し引いた後の値と仮定する）は</p>
+\begin{equation}
+\begin{aligned}
+C(T)&=nR\,f\!\left(\frac{\Delta}{T}\right),\\
+f(u)&=\frac{u^{2}e^{u}}{(1+e^{u})^{2}}
+\end{aligned} \label{eq:20-schottky}
+\end{equation}
+<p>である（$R$ $=8.314\ \mathrm{J\,mol^{-1}\,K^{-1}}$ は気体定数）．測った $C(T)$ から 2 つのパラメーター $\bm{\theta}=(\Delta,n)$ を推定し，準位の間隔（結晶場の強さ）と 2 準位の中心の濃度（不純物や欠陥の量）を知りたい．$C$ は $\Delta$ について非線形なので，事後分布は Gauss 分布にならない．なお，$n$ を「式単位 1 mol あたりの 2 準位の中心の mol 数」と定め，格子比熱などを差し引いた過剰比熱だけが誤差なく得られるとするのは，例を簡単にするための教育用の仮定である（実際の解析では，格子比熱の差し引き方や準位の縮退度も不確かさの源になる）．</p>
+
+<h3>20.11.2 低温側だけを測ったデータ</h3>
+
+<p>次の教育用の合成データを使う．真の値を $\Delta=12\ \mathrm{K}$，$n=0.010$ とし，式 \eqref{eq:20-schottky} に標準偏差 $3\ \mathrm{mJ\,mol^{-1}\,K^{-1}}$ の Gauss ノイズ（seed 20261141）を加えた．装置の都合で $T=1.5$〜$4.0\ \mathrm{K}$ の 6 点しか測れず，比熱の山（$T\approx5\ \mathrm{K}$）の手前で測定が終わっている，という設定である．事前分布は $0\lt\Delta\lt80\ \mathrm{K}$，$0\lt n\lt0.3$ の一様分布とし，尤度は独立な Gauss ノイズ（標準偏差は既知の $3\ \mathrm{mJ\,mol^{-1}\,K^{-1}}$）とする．</p>
+
+<div class="tablewrap">
+<table id="tab20-7">
+<caption>表20.7　Schottky 比熱の合成データ（教育用の合成データ．単位 $\mathrm{mJ\,mol^{-1}\,K^{-1}}$）</caption>
+<thead><tr><th>$T$ / K</th><td>1.5</td><td>2.0</td><td>2.5</td><td>3.0</td><td>3.5</td><td>4.0</td></tr></thead>
+<tbody><tr><th>$C$</th><td>4.75</td><td>6.05</td><td>15.78</td><td>21.52</td><td>26.50</td><td>34.54</td></tr></tbody>
+</table>
+</div>
+
+<p>山の手前しか測っていないと，「$\Delta$ が大きく（山が高温側にあり）$n$ も大きい」組み合わせと「$\Delta$ が小さく $n$ も小さい」組み合わせが，測った範囲ではほとんど同じ曲線を与える．このため事後分布で $\Delta$ と $n$ は強く相関する（格子で計算した相関係数 0.91）．<a href="#fig20-8">図20.8</a>(b) の細長く曲がった等高線がそれである．</p>
+
+<figure id="fig20-8">
+<img src="figs/ch20_fig20-8.svg" alt="上下 2 段の図．上は温度 1.5 から 4 ケルビンの 6 点の比熱の測定値（誤差棒つき）と，MAP の曲線，真の曲線，事後分布から得た 90 パーセントの帯．測っていない 4 ケルビンより上で帯が大きく広がる．下は Delta と n の事後分布の 95 パーセント領域（細長い右上がりの形）に，Laplace 近似の 95 パーセントの楕円と，平均場の変分推論の 95 パーセントの楕円を重ねた図．平均場の楕円は小さく，事後分布の領域の幅のごく一部しか覆わない．" style="max-width:440px;width:100%">
+<figcaption>図20.8　Schottky 比熱のパラメーター推定（教育用の合成データ．<a href="#tab20-7">表20.7</a>）．(a) 四角と誤差棒は測定値（± 標準偏差 $3\ \mathrm{mJ\,mol^{-1}\,K^{-1}}$），実線は MAP 推定値の曲線，点線は真の曲線．塗りは格子の事後分布から重み付きで引いた 400 組（seed 20261142）の曲線の 5〜95 % の帯．灰色の範囲は測っていない温度．(b) 塗りと実線は格子で求めた事後分布の最高密度領域（濃い塗り 50 %，実線 95 %），一点鎖線は Laplace 近似，点線は平均場の変分推論の 95 % 楕円，星は真の値．縦軸は $n$ を 1000 倍した値．</figcaption>
+</figure>
+
+<div class="tablewrap">
+<table id="tab20-8">
+<caption>表20.8　Schottky 比熱の $\Delta$ の推定値と誤差棒（教育用の合成データ）</caption>
+<thead><tr><th>方法</th><th>$\Delta$ の中心 / K</th><th>標準偏差 / K</th><th>95 % 区間 / K</th><th>$10^{3}n$ の中心（標準偏差）</th></tr></thead>
+<tbody>
+<tr><td>格子（基準）</td><td>12.57（平均）</td><td>1.12</td><td>[10.58, 14.96]</td><td>10.36（1.55）</td></tr>
+<tr><td>Laplace 近似 $(\Delta,n)$</td><td>12.23（MAP）</td><td>1.04</td><td>[10.19, 14.28]</td><td>9.84（1.29）</td></tr>
+<tr><td>Laplace 近似 $(\ln\Delta,\ln n)$</td><td>12.45（中央値）</td><td>1.09</td><td>[10.50, 14.77]</td><td>—</td></tr>
+<tr><td>相関つき Gauss の変分推論</td><td>12.53</td><td>1.00</td><td>[10.57, 14.48]</td><td>10.27（1.28）</td></tr>
+<tr><td>平均場の変分推論</td><td>12.33</td><td><strong>0.46</strong></td><td><strong>[11.42, 13.24]</strong></td><td>9.92（0.58）</td></tr>
+</tbody>
+</table>
+</div>
+<p>（対数変数の Laplace 近似は，$\ln\Delta$ と $\ln n$ の Gauss 分布を指数関数で戻した分布の値．区間は 2.5 % 点と 97.5 % 点．）</p>
+
+<p><a href="#tab20-8">表20.8</a>から次のことが読み取れる．</p>
+<ul>
+  <li><strong>平均場の変分推論は誤差棒を半分以下にする</strong>：$\Delta$ の標準偏差は 0.46 K で，基準の 1.12 K の 0.41 倍である．20.6 節の式 \eqref{eq:20-mf-var} で予想される比 $\sqrt{1-\rho^{2}}$ $=\sqrt{1-0.907^{2}}$ $=0.42$ とほぼ一致する．「$\Delta=12.3\pm0.5\ \mathrm{K}$」と報告すると，測定の情報量を 2 倍以上に偽ることになる．</li>
+  <li><strong>Laplace 近似は幅はおおむね正しいが中心がずれる</strong>：等高線が右上に曲がって伸びる（大きい $\Delta$ 側の裾が重い）ので，モード 12.23 K は平均 12.57 K より小さく，95 % 区間の上端を 0.7 K 低く見積もる．</li>
+  <li><strong>正の量は対数で近似するとよい</strong>：$\ln\Delta$，$\ln n$ で Laplace 近似すると，右に長い裾が対称に近づき，区間 [10.50, 14.77] は基準にかなり近づく．</li>
+</ul>
+
+<div class="box phys">
+<p class="box-title">応用：ピークの当てはめで正の量を推定するとき</p>
+<p>X 線回折や Raman 分光のピークを Gauss 型や Lorentz 型の関数（<a href="ch03_distributions.html#sec3-7">第3章 3.7</a>）で当てはめるとき，ピークの幅・強度・バックグラウンドの係数は正の量であり，ピークが弱いと事後分布は 0 の近くで非対称になる．Laplace 近似や Gauss 族の変分推論をそのまま使うと，幅が負になる確率を持つ誤差棒が出てくる．幅を $\ln\gamma$ のように対数で表してから近似すれば，0 の壁が無限遠に移り，近似の歪みが小さくなる（演習20.7）．また，ピーク位置と幅，複数のピークの強度どうしは強く相関しやすいので，平均場の近似では誤差棒が狭くなる．相関を持つ族を使うか，MCMC（第21章）で確かめるのが安全である．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題20.12　Hesse 行列から 2 種類の誤差棒を出す</p>
+<p>Schottky 比熱の例で，変数を $\Delta$（K）と $\tilde{n}=10^{3}n$ にとったとき，MAP 推定値での $-\ln p(\bm{\theta}\mid\data)$ の Hesse 行列は $\bm{\Lambda}$ $=\begin{pmatrix}4.66&-3.37\\-3.37&3.04\end{pmatrix}$（単位は省略）であった．(1) Laplace 近似の $\Delta$ の標準偏差 $\sqrt{(\bm{\Lambda}^{-1})_{11}}$ を求めよ．(2) 同じ Gauss 分布を平均場で近似したときの標準偏差 $1/\sqrt{\Lambda_{11}}$ を求め，比べよ．(3) Laplace 近似の $\Delta$ と $\tilde{n}$ の相関係数を求めよ．</p>
+<p><strong>解答</strong>　(1) $\abs{\bm{\Lambda}}$ $=4.66\times3.04-3.37^{2}$ $=14.166-11.357$ $=2.809$．2×2 の逆行列の公式（<a href="../UnivMath_Textbook/ch09_linear_systems.html#sec9-1">大学数学 第9章 9.1</a>）から $(\bm{\Lambda}^{-1})_{11}$ $=\Lambda_{22}/\abs{\bm{\Lambda}}$ $=3.04/2.809$ $=1.082$，標準偏差 $\sqrt{1.082}=1.04\ \mathrm{K}$．<br>
+(2) $1/\sqrt{4.66}$ $=0.463\ \mathrm{K}$．(1) の 0.45 倍である．<a href="#tab20-8">表20.8</a>の平均場の変分推論の 0.46 K とほぼ同じ値になる（事後分布が Gauss 分布に近い範囲では，平均場の分散は精度行列の対角成分の逆数 $1/\Lambda_{ii}$ になる．式 \eqref{eq:20-mf-var}）．<br>
+(3) $(\bm{\Lambda}^{-1})_{12}$ $=-\Lambda_{12}/\abs{\bm{\Lambda}}$ $=3.37/2.809$ $=1.200$，$(\bm{\Lambda}^{-1})_{22}$ $=\Lambda_{11}/\abs{\bm{\Lambda}}$ $=4.66/2.809$ $=1.659$．相関係数は $1.200/\sqrt{1.082\times1.659}$ $=1.200/1.340$ $=0.90$．精度行列の非対角成分が負（$-3.37$）であることが，共分散の正の相関に対応する．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-12">20.12 誤解しやすい点と適用限界<span class="route-tag adv">詳しいルート</span></h2>
+
+<div class="box warn">
+<p class="box-title">注意：ELBO が高いことは，事後分布が正しいことを意味しない</p>
+<p>ELBO は $\ln p(\data)$ の<strong>下界</strong>であり，差の $\KL(q\,\|\,p(\bm{\theta}\mid\data))$ は（$\ln p(\data)$ が分からない以上）分からない．最適化で ELBO が収束しても，それは「選んだ族の中で，その出発点から着ける最良」に着いたことを示すだけである．双峰の例（<a href="#tab20-3">表20.3</a>）では，ELBO が最大の解でも一方の峰の確率 0.4 を無視していた．また $\KL(q\,\|\,p)$ が小さいことと，知りたい量（裾の確率，相関）の近似が良いことは別である．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：平均場近似の誤差棒は狭すぎることが多い</p>
+<p>$\KL(q\,\|\,p)$ の最小化は $p$ の小さい所を避けるので，近似は分布の内側に縮む．相関のあるパラメーターでは，各パラメーターの分散が条件付き分散 $1/\Lambda_{ii}$ まで縮む（式 \eqref{eq:20-mf-var}）．材料のパラメーター推定では，相関が強い組（比熱の $\Delta$ と <span style="white-space:nowrap">$n$，</span>ピークの位置と幅，Arrhenius の式の頻度因子と活性化エネルギー）が普通にある．平均場で求めた誤差棒を，そのまま測定の不確かさとして報告してはいけない．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：Laplace 近似は局所的で，変数の取り方に依存する</p>
+<p>Laplace 近似が使うのは，モードでの値と 2 階微分だけである．非対称な分布では中心が平均からずれ（<a href="#fig20-2">図20.2</a>），台に境界があると確率が外に漏れ（$\mathrm{Beta}(3,9)$ で 5.7 %），峰が複数あれば展開しなかった峰を丸ごと失う．同じ事後分布でも，$x$ で展開するかロジット $\ln[x/(1-x)]$ で展開するかで結果が変わる．データが少ない問題ほど，この影響は大きい．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：変分推論の最適化には局所解がある</p>
+<p>$\KL(q\,\|\,p)$ は $q$ のパラメーターについて凸とは限らない．双峰の例では 3 つの局所解があり（<a href="#fig20-5">図20.5</a>），例題20.6 の 2 値の例では出発点によって $(0,0)$ 寄りと $(1,1)$ 寄りの解に分かれた．出発点を変えて何度か最適化し，ELBO と解の違いを確かめるのがよい．</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">注意：近似した周辺尤度でモデルを比べるときは，近似の差に気をつける</p>
+<p>周辺尤度 $p(\data)$ はモデル選択の基準になる（<a href="ch12_gaussian_process.html#sec12-7">第12章 12.7</a>）．しかし ELBO や Laplace 近似の周辺尤度をモデル間で比べると，「モデルの良さの差」に「近似の誤差の差」が混ざる．ELBO と $\ln p(\data)$ の差（KL）はモデルごとに違うので，ELBO の大小と周辺尤度の大小は一致するとは限らない（例題20.13）．</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">例題20.13　ELBO で比べるとモデルの順位が逆転する</p>
+<p>2 つのモデルの事後分布がどちらも 2 次元 Gauss 分布で，モデル 1 は 2 つのパラメーターの相関係数が $\rho=0.95$，$\ln p(\data\mid\text{モデル 1})$ <span style="white-space:nowrap">$=-10.0$，</span>モデル 2 は $\rho=0$，$\ln p(\data\mid\text{モデル 2})$ $=-10.5$ であるとする（教育用の設定）．平均場の変分推論で最大にした ELBO をそれぞれ求め，どちらのモデルが選ばれるかを，周辺尤度で比べた場合と比べよ．</p>
+<p><strong>解答</strong>　平均場の最適解の KL は例題20.7 (3) より $-\tfrac12\ln(1-\rho^{2})$ である．モデル 1：$-\tfrac12\ln(1-0.9025)$ $=-\tfrac12\ln0.0975$ $=1.164$ なので <span style="white-space:nowrap">$\ELBO=-10.0-1.164=-11.164$．</span>モデル 2：$\rho=0$ なら事後分布はもともと因子の積なので KL は 0，$\ELBO=-10.5$．ELBO ではモデル 2 が選ばれるが，周辺尤度ではモデル 1 のほうが $e^{0.5}=1.65$ 倍もっともらしい．順位を逆転させたのはモデルの良さではなく，平均場近似がモデル 1 の相関を表せないことによる近似の誤差である．</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec20-13">20.13 まとめ・次章への接続・演習・参考文献</h2>
+
+<h3>20.13.1 まとめ</h3>
+<ul>
+  <li><strong>難しさの源</strong>：事後分布の分子 $p(\data,\bm{\theta})$ は計算できるが，分母の周辺尤度 $p(\data)$ $=\int p(\data,\bm{\theta})\,\dd\bm{\theta}$ は共役でなければ閉じた式にならず，格子積分は次元とともに指数関数的に重くなる．</li>
+  <li><strong>Laplace 近似</strong>：対数事後分布をモードの周りで 2 次まで展開し，$q$ $=\Normal(\bm{\theta}_{\mathrm{MAP}},\bm{\Lambda}^{-1})$ とし，周辺尤度を $\ln p(\data)$ $\approx\ln p(\data,\bm{\theta}_{\mathrm{MAP}})$ $+\tfrac M2\ln2\pi-\tfrac12\ln\abs{\bm{\Lambda}}$ で近似する．中心がモードに来て，裾・境界・他の峰を見ない．</li>
+  <li><strong>変分推論</strong>：$\ln p(\data)$ $=\ELBO(q)+\KL(q\,\|\,p(\bm{\theta}\mid\data))$．ELBO は計算できる下界で，その最大化は KL の最小化と同じ．ELBO は「期待対数尤度 − 事前分布からの KL」とも書ける．</li>
+  <li><strong>平均場近似</strong>：$q=\prod_iq_i$，$\ln q_j^{*}$ $=\Ex_{i\ne j}[\ln p(\data,\bm{\theta})]+\text{定数}$ を順に更新する．相関のある方向で分散を $1/\Lambda_{ii}$ に過小評価する．</li>
+  <li><strong>KL の向き</strong>：$\KL(q\,\|\,p)$ の最小化は峰に寄って狭く，$\KL(p\,\|\,q)$ の最小化は全体を覆って広い（Gauss 族ならモーメントの一致）．</li>
+  <li><strong>統計力学との対応</strong>：$\ELBO=-\beta A[q]$，$\ln Z=-\beta A$．$\ELBO\le\ln p(\data)$ は Gibbs–Bogoliubov の不等式 $A[q]\ge A$ と同じ．平均場近似は Ising 模型の平均場理論と同じ方程式を与える．</li>
+  <li><strong>実用</strong>：再パラメーター化 $\bm{\theta}$ $=\bm{\mu}+\bm{\sigma}\odot\bm{\epsilon}$ とミニバッチで ELBO の勾配を見積もる．同じ考えで符号化器も学習するのが変分オートエンコーダー．近似の偏りは問題ごとに違うので，誤差棒は複数の方法で確かめる．</li>
+</ul>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+&\ln p(\data)\\
+&\ =\ELBO(q)\\
+&\qquad+\KL\bigl(q\,\|\,p(\bm{\theta}\mid\data)\bigr)\\
+&\ \ge\ELBO(q),\\
+&\ELBO(q)\\
+&\ =\Ex_{q}[\ln p(\data\mid\bm{\theta})]\\
+&\qquad-\KL\bigl(q\,\|\,p(\bm{\theta})\bigr)
+\end{aligned} \label{eq:20-key}
+\end{equation}
+</div>
+
+<h3>20.13.2 次章への接続</h3>
+<p>本章の近似はどれも「事後分布を扱いやすい関数で置き換える」ものだった．速い代わりに偏りが残り，その偏りの大きさは近似の中からは分からない．次の<a href="ch21_sampling.html">第21章</a>では，事後分布（一般に正規化定数の分からない分布）から<strong>標本を引き</strong>，期待値を標本平均で置き換える方法を学ぶ．Markov 連鎖 Monte Carlo 法（MCMC）は時間をかければ偏りを小さくできるが，「十分に回したか」を判断する難しさが新たに現れる．本章のシミュレーターの「② Metropolis–Hastings 法」のタブはそこで使う．入門ルートの読者は，ここから<a href="ch22_sequences_hmm.html">第22章</a>（系列データ）へ進んでよい．</p>
+
+<h3>20.13.3 演習問題</h3>
+
+<div class="box ex">
+<p class="box-title">演習20.1　計数率の事後分布の Laplace 近似（計算・材料の題材）</p>
+<p>回折ピークの頂上で X 線検出器の 1 秒ごとの計数を 5 回測り，2，4，1，3，2 カウントを得た（教育用の数値）．計数は計数率 $\lambda$（$\mathrm{s^{-1}}$）の Poisson 分布に従い，事前分布は $\mathrm{Gam}(\lambda\mid1,\,0.2)$（形 1，率 $0.2\ \mathrm{s}$）とする．(1) 事後分布が $\mathrm{Gam}(\lambda\mid13,\,5.2)$ になることを示せ．(2) $\lambda$ について Laplace 近似し，モード・分散・95 % 区間を求め，真の平均 $13/5.2$・分散 $13/5.2^{2}$ と比べよ．(3) $u=\ln\lambda$ について Laplace 近似し，$\lambda$ の 95 % 区間に戻して，真の区間 $[1.33,\ 4.03]$ と比べよ．</p>
+<p><em>ヒント：</em>Gamma 分布は<a href="ch03_distributions.html#sec3-8">第3章 3.8</a>．(3) では $u$ の密度に Jacobi（ヤコビ）行列式 $\dd\lambda/\dd u=\lambda$ が掛かる．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-1">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.2　ロジットで展開する Laplace 近似（計算）</p>
+<p>$\mathrm{Beta}(a,b)$ をロジット $u=\ln\dfrac{x}{1-x}$ の分布に変換してから Laplace 近似する．(1) $u$ の非正規化密度が $x^{a}(1-x)^{b}$（$x=\sigma(u)$）になることを示せ．(2) モード $u^{*}$ と曲率 $\Lambda_u=ab/(a+b)$ を導け．(3) $a=3$，$b=9$ で $\ln Z$ の近似値を求め，例題20.2 の $x$ での近似（$-6.1527$）と真の値（$-6.2046$）と比べよ．</p>
+<p><em>ヒント：</em>$\dd x/\dd u=x(1-x)$．$u$ での微分は連鎖律で $\diff{}{u}=x(1-x)\diff{}{x}$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-2">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.3　Jensen の不等式から ELBO を導く（導出）</p>
+<p>(1) $\ln p(\data)$ $=\ln\int q(\bm{\theta})\dfrac{p(\data,\bm{\theta})}{q(\bm{\theta})}\,\dd\bm{\theta}$ と書き，Jensen の不等式（凹関数 $\ln$ について $\ln\Ex[X]\ge\Ex[\ln X]$）を使って $\ln p(\data)\ge\ELBO(q)$ を示せ．(2) 等号が成り立つための条件を求め，それが $q=p(\bm{\theta}\mid\data)$ であることを示せ．(3) この導き方では見えず，20.3 節の導き方で初めて分かることは何か．</p>
+<p><em>ヒント：</em>(2) $\ln$ は狭義の凹関数なので，等号は $X$ が（$q$ のもとで）定数のときに限る．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-3">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.4　平均場近似と周辺分布の積（導出）</p>
+<p>平均 $\bm{0}$，分散 1，相関係数 $\rho$ の 2 次元 Gauss 分布 $p$ について，$q^{*}$ を $\KL(q\,\|\,p)$ を最小にする平均場近似，$q^{\dagger}$ を $\KL(p\,\|\,q)$ を最小にする因子の積（周辺分布の積）とする．(1) $\KL(q^{*}\,\|\,p)$ $=\KL(p\,\|\,q^{\dagger})$ $=-\tfrac12\ln(1-\rho^{2})$ を示せ．$\KL(p\,\|\,q^{\dagger})$ は何という量か．(2) $\KL(q^{\dagger}\,\|\,p)$ と $\KL(p\,\|\,q^{*})$ を求め，$\rho=0.9$ の値を出せ．(3) 誤差棒を報告する目的では，$q^{*}$ と $q^{\dagger}$ のどちらの欠点がより深刻か，論じよ．</p>
+<p><em>ヒント：</em>例題20.7 (3) の多次元 Gauss 分布の KL の公式を使う．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-4">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.5　スピン 2 個の平均場近似が示す「相転移」（計算・物性の題材）</p>
+<p>例題20.9 で磁場を 0（$h=0$）にする．(1) 平均場の方程式 $m=\tanh(\beta Jm)$ が $m\ne0$ の解を持つ条件を求めよ．(2) $\beta J=1.5$ で $m\ne0$ の解を数値的に求め，その $\beta A[q]$ と $m=0$ の解の $\beta A[q]$，厳密な $\beta A=-\ln Z$ を比べよ．(3) 厳密には $\Ex[s_1]=0$ である（なぜか）．スピン 2 個の系に「自発磁化」が現れるという平均場近似の予言をどう解釈すべきか．</p>
+<p><em>ヒント：</em>(1) $y=m$ と $y=\tanh(\beta Jm)$ のグラフの原点での傾きを比べる．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-5">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.6　再パラメーター化と score function 推定量（導出・計算）</p>
+<p>$q$ $=\Normal(\theta\mid\mu,\sigma^{2})$ と $f(\theta)=\theta$ について，$\partial\Ex_q[f]/\partial\mu$ を 2 通りに推定する．(a) 再パラメーター化：$\theta=\mu+\sigma\epsilon$ として $f'(\theta)\,\partial\theta/\partial\mu$．(b) score function 推定量：<span style="white-space:nowrap">$f(\theta)\,\partial\ln q(\theta)/\partial\mu$．</span>(1) (b) が不偏であること，すなわち $\Ex_q\bigl[f\,\partial\ln q/\partial\mu\bigr]$ $=\partial\Ex_q[f]/\partial\mu$ を示せ．(2) $\mu=0$，$\sigma=1$ で，1 個の標本による (a) と (b) の推定量の分散を求めよ．(3) $\sigma$ についての偏微分でも同じ比較をせよ．</p>
+<p><em>ヒント：</em>$\partial q/\partial\mu$ $=q\,\partial\ln q/\partial\mu$．標準 Gauss 分布のモーメントは $\Ex[\epsilon^{2}]=1$，$\Ex[\epsilon^{4}]=3$，$\Ex[\epsilon^{6}]=15$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-6">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.7　ピーク位置のばらつきの事後分布（計算・材料の題材）</p>
+<p>同じ試料の同じ回折ピークの位置 $2\theta$ を 8 回測り，既知の基準値からのずれの二乗和 $S$ $=\sum_n(x_n-\mu)^{2}$ $=0.0032\ (\mathrm{deg})^{2}$ を得た（教育用の数値）．測定のばらつき $\sigma_{\mathrm p}$ の事前分布を $p(\sigma_{\mathrm p})\propto1/\sigma_{\mathrm p}$ とすると，事後分布は $p(\sigma_{\mathrm p}\mid\data)\propto\sigma_{\mathrm p}^{-N-1}\exp[-S/(2\sigma_{\mathrm p}^{2})]$（<span style="white-space:nowrap">$N=8$）</span>である．(1) $\sigma_{\mathrm p}$ で Laplace 近似し，モード・標準偏差・95 % 区間を求めよ．(2) $v=\ln\sigma_{\mathrm p}$ で Laplace 近似し，$\sigma_{\mathrm p}$ の 95 % 区間に戻せ．(3) 厳密な 95 % 区間は $[0.0135,\ 0.0383]$ である．どちらの近似が良いか，理由とともに述べよ．</p>
+<p><em>ヒント：</em>(2) $v$ の密度には Jacobi 行列式 $\sigma_{\mathrm p}$ が掛かるので $\propto\sigma_{\mathrm p}^{-N}\exp[-S/(2\sigma_{\mathrm p}^{2})]$．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-7">→ 解答</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">演習20.8　近似の方法を選ぶ（考察・材料の題材）</p>
+<p>ある合金の原子間ポテンシャルの 6 個のパラメーターを，第一原理計算のエネルギーと力に合わせてベイズ推定したい．$\ln p(\data,\bm{\theta})$ の 1 回の評価に 1 分かかる．予備的な最適化で，事後分布に 2 つのモードがあり，一部のパラメーターどうしは相関係数 0.95 程度で強く相関することが分かった．(1) Laplace 近似，平均場の変分推論，相関を持つ Gauss 族の変分推論，MCMC（標本 $10^{5}$ 個の評価が必要と仮定）の計算時間を見積もれ（Hesse 行列は中心差分で約 $2M^{2}+1$ 回の評価とする）．(2) それぞれの近似で誤差棒がどちらにどれだけ歪みうるかを述べよ．(3) 現実的な手順を提案せよ．</p>
+<p><em>ヒント：</em>(2) は式 \eqref{eq:20-mf-var} と<a href="#tab20-5">表20.5</a>を使う．</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-20-8">→ 解答</a></p>
+</div>
+
+<h3>20.13.4 参考文献</h3>
+<div class="refs">
+<ol>
+<li>C. M. Bishop, <em>Pattern Recognition and Machine Learning</em>, Springer (2006)（4 章で Laplace 近似とベイズロジスティック回帰を，10 章で変分推論と期待値伝播法を扱う）．</li>
+<li>D. J. C. MacKay, <em>Information Theory, Inference, and Learning Algorithms</em>, Cambridge University Press (2003)（Laplace の方法，変分法，Monte Carlo 法を物理の言葉も交えて解説した教科書．著者による公開版がある）．</li>
+<li>L. Tierney and J. B. Kadane, "Accurate Approximations for Posterior Moments and Marginal Densities", <em>Journal of the American Statistical Association</em> <strong>81</strong>, 82 (1986)（Laplace 近似で事後モーメントと周辺密度を近似する方法）．</li>
+<li>M. I. Jordan, Z. Ghahramani, T. S. Jaakkola, and L. K. Saul, "An Introduction to Variational Methods for Graphical Models", <em>Machine Learning</em> <strong>37</strong>, 183 (1999)（グラフィカルモデルの変分法の入門）．</li>
+<li>T. P. Minka, "Expectation Propagation for approximate Bayesian inference", <em>Proceedings of the 17th Conference on Uncertainty in Artificial Intelligence</em>, 362 (2001)，arXiv:1301.2294（期待値伝播法）．</li>
+<li>M. D. Hoffman, D. M. Blei, C. Wang, and J. Paisley, "Stochastic Variational Inference", <em>Journal of Machine Learning Research</em> <strong>14</strong>, 1303 (2013)（ミニバッチによる確率的な変分推論）．</li>
+<li>D. P. Kingma and M. Welling, "Auto-Encoding Variational Bayes", arXiv:1312.6114 (2013)（International Conference on Learning Representations 2014．再パラメーター化と変分オートエンコーダー）．</li>
+<li>A. W. van der Vaart, <em>Asymptotic Statistics</em>, Cambridge University Press (1998)（10 章で Bernstein–von Mises の定理を述べ，証明する）．</li>
+<li>A. Isihara, "The Gibbs-Bogoliubov inequality", <em>Journal of Physics A: General Physics</em> <strong>1</strong>, 539 (1968)，doi:10.1088/0305-4470/1/5/305（試しの分布による自由エネルギーの上界の不等式）．</li>
+<li>A. L. Kuzemsky, "Variational Principle of Bogoliubov and Generalized Mean Fields in Many-Particle Interacting Systems", <em>International Journal of Modern Physics B</em> <strong>29</strong>, 1530010 (2015)，arXiv:1507.00563（Gibbs–Bogoliubov の不等式と平均場近似の総説）．</li>
+<li>D. M. Blei, A. Kucukelbir, and J. D. McAuliffe, "Variational Inference: A Review for Statisticians", <em>Journal of the American Statistical Association</em> <strong>112</strong>, 859 (2017)，arXiv:1601.00670（変分推論の総説．平均場近似と座標上昇法）．</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch19_graphical_models.html">← 第19章：グラフィカルモデル — 同時分布を図で分解する</a>
+  <span class="spacer"></span>
+  <a href="ch21_sampling.html">第21章：サンプリング法 — 乱数で積分する →</a>
+</nav>
+</main>
+</body>
+</html>
