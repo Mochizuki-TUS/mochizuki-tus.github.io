@@ -31,14 +31,19 @@ Examples bundled with crystod (run one with --example NAME):
                 = crystod -c 221_PPOSCAR_SrTiO3 --element Ti --orbital d
   ScF3_diagram  extended-Hueckel crystal-orbital diagram of ScF3, one HTML page per k point
                 = crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
+
+More examples, a directory per feature with its README and inputs: crystod-example
 ```
 
 `--example NAME` writes the input file(s) of that example into the current
 directory, prints the equivalent command line after `Running:`, and runs it.
 A file that is already there and identical is kept; one that differs is never
 overwritten (the run stops with an error naming it), so run the examples in an
-empty directory. `crystod-phonon`, `crystod-mol`, `crystod-bz`, `crystod-xrd`
-and `crystod-search` have `--example` too.
+empty directory. `crystod-phonon`, `crystod-mol`, `crystod-bz`, `crystod-xrd`,
+`crystod-slab` and `crystod-search` have `--example` too. The last line points at
+{doc}`crystod-example`, which copies the worked example directories of every
+feature (a README with commands and output, and the inputs) out of the
+package.
 
 ## 1. Which irreps does the Sc 3d shell span?
 
@@ -53,20 +58,20 @@ Running: crystod -c 221_PPOSCAR_ScF3 --element Sc --orbital d
 
  ### Inputed cell was converted into primitive cell. ###
 
- * Space group *
+* Space group *
  Pm-3m (221)
 
- * Element (number of atoms) *
+* Element (number of atoms) *
  Sc (1)
 
- * Wyckoff letters and site symmetry letters *
+* Wyckoff letters and site symmetry letters *
  ['a']
  ['m-3m']
 
- * Atomic Orbital *
+* Atomic Orbital *
  d
 
- * Crystal Orbitals *
+* Crystal Orbitals *
  k point (primitive):  GM [0.0, 0.0, 0.0]
  little group of k  :  Pm-3m (221)
  irreps             :  1.0 [GM3+(2)] + 1.0 [GM5+(3)]
@@ -100,7 +105,7 @@ crystod -c POSCAR --element Sc --orbital d --kpoint 0 0 0
 
 `--kpoint` takes three primitive reciprocal coordinates (fractions such as
 `1/2` are allowed); without it, every special k point of the space group is
-analyzed. Documentation: [2. Irreps of SALC](crystod.md#2-irreps-of-salc).
+analyzed. Documentation: [01-02. Irreps of SALC](crystod.md#01-02-irreps-of-salc).
 
 ## 2. Which orbitals are allowed to hybridize?
 
@@ -112,13 +117,13 @@ crystod -c 221_PPOSCAR_ScF3 --atomic-orbital Sc-d F-p --kpoint 0.5 0.5 0.5
 ```
 
 ```
- * Atomic Orbital *
+* Atomic Orbital *
  ['Sc_d', 'F_p']
 
- * k point (primitive) *
+* k point (primitive) *
  R [0.5, 0.5, 0.5]
 
- * Result *
+* Result *
  R1+(1): F(p)
  R1-(1):
  R2+(1):
@@ -138,7 +143,7 @@ the diagram of the next step. `R4+` carries F *p* alone, so that set stays
 nonbonding whatever the energies are. `R1+` also lists F *p* alone here, but
 only because the question was about Sc *d*: Sc 4s transforms as `R1+` too, and
 the diagram of the next step shows the two mixing.
-Documentation: [3. Crystal-orbital diagrams](crystod.md#3-crystal-orbital-diagrams).
+Documentation: [01-03. Crystal-orbital diagrams](crystod.md#01-03-crystal-orbital-diagrams).
 
 ## 3. The crystal-orbital diagram
 
@@ -153,19 +158,20 @@ Running: crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
 
  ### Inputed cell was converted into primitive cell. ###
 
- * Space group *
+* Space group *
  Pm-3m (221)
 
- * Fragments (full-electron basis: core + valence shells; atomic levels from reference/atomic_level_*) *
+* Fragments (full-electron basis: core + valence shells; atomic levels from reference/atomic_level_*) *
  left  Sc    : Sc 1s 2s 2p 3s 3p 4s 4p 3d x1 site(s), 21 electrons
  right F3    : F 1s 2s 2p x3 site(s), 27 electrons
  electrons per cell in the diagram: 48 (all electrons of the neutral atoms; override with --electrons)
- * Ligand-field point charges (removed sublattice) *
+
+* Ligand-field point charges (removed sublattice) *
  left  Sc     feels the F^-1 lattice (multipole ligand field + penetration; ...)
  right F3     feels the Sc^+3 lattice (multipole ligand field + penetration; ...)
  ...
 
- * k point R (1/2,1/2,1/2) *
+* k point R (1/2,1/2,1/2) *
    (1 near-dependent diffuse Bloch combination(s) below overlap floor 0.2: energies marked ~ are first-order Loewdin estimates; the variational extended-Hueckel values diverge)
    Sc        : ... Sc 3d R5+ (-9.08), Sc 3d R3+ (-7.62), Sc 4p R4- (-5.76), Sc 4s R1+ (12.73)
    F3        : F 1s R4- (-717.49), F 2s R4- (-40.00), F 2p R1+ (-19.67), F 2p R3+ (-19.33), F 2p R5+ (-17.56), F 2p R4+ (-17.30)
@@ -180,7 +186,7 @@ Running: crystod --diagram -c 221_PPOSCAR_ScF3 --co-left Sc --co-right F3
      R3+ #2         -5.21 eV  x2       Sc 3d R3+ 93.5%  F 2p R3+ 6.5%
      ...
 
- * Dipole selection rules at R (1/2,1/2,1/2) *
+* Dipole selection rules at R (1/2,1/2,1/2) *
    VBM R4+ #1 (-17.30 eV) -> CBM R5+ #2 (-8.18 eV): forbidden
    first allowed: R4- #4 (-38.94 eV) -> R5+ #2 (-8.18 eV), dE = 30.76 eV: allowed (x, y, z)
    (vertical transitions in the little group of k; polarizations in the Cartesian axes x, y, z of the input cell)
@@ -205,7 +211,7 @@ are both even under inversion, so light cannot drive the transition between
 them (`forbidden`); the `first allowed:` line names the allowed occupied ->
 empty pair of smallest energy difference, with its polarizations. On the
 page, clicking two levels one after the other shows the same verdict
-([4. Dipole selection rules](crystod.md#4-dipole-selection-rules---diagram)).
+([01-04. Dipole selection rules](crystod.md#01-04-dipole-selection-rules---diagram)).
 
 Open `CrystOD_221_PPOSCAR_ScF3.html` in a browser: the Sc fragment levels
 stand on the left, the F3 fragment levels on the right, the crystal orbitals
@@ -213,7 +219,7 @@ with their irrep labels in the middle, joined to the fragment levels they are
 made of; hovering a level shows a sketch of its orbital composition, and the
 page carries one such diagram per special k point (GM, R, X, M). The page
 written by this exact command is embedded in the
-[`--diagram` section](crystod.md#3-crystal-orbital-diagrams) of the manual.
+[`--diagram` section](crystod.md#01-03-crystal-orbital-diagrams) of the manual.
 
 The engine here is extended Hückel with atomic levels from archived
 neutral-atom calculations, which is why the command needs nothing but the
@@ -238,13 +244,13 @@ crystod -c 221_PPOSCAR_ScF3 --element Sc --orbital d --kpoint R --visualize
 ```
 
 ```
- * k point (primitive) *
+* k point (primitive) *
  R [0.5, 0.5, 0.5]
 
- * Irreducible Decomposition *
+* Irreducible Decomposition *
  1.0 [R3+(2)] + 1.0 [R5+(3)]
 
- * SALC basis functions (irrep-grouped) *
+* SALC basis functions (irrep-grouped) *
  Mode Space 1: irrep = R3+(2), dimension = 2
    component 1:
      Sc1 (atom 0): d_z2: +0.7071, d_x2-y2: (+0.0000+0.7071j)
@@ -259,7 +265,7 @@ crystod -c 221_PPOSCAR_ScF3 --element Sc --orbital d --kpoint R --visualize
    component 3:
      Sc1 (atom 0): d_xz: +1.0000
 
- * Output files *
+* Output files *
  Saved 3D visualization to: SALC_Sc_d_R.html
 ```
 
@@ -270,10 +276,12 @@ e<sub>g</sub> pair comes out as the complex combinations
 themselves. In the page, the 2x2x2 supercell commensurate with R is shown and
 the Bloch phase of R = (1/2, 1/2, 1/2) flips the sign of the lobes from one
 cell to the next; click a row of the SALC table to switch the displayed basis
-vector and drag to rotate. `--bond Sc F 2.5` adds the ScF6 octahedra, and
+vector and drag to rotate (the page loads plotly.js from `cdn.plot.ly`, so
+the browser needs a network connection to draw it, unlike the self-contained
+diagram page of step 3). `--bond Sc F 2.5` adds the ScF6 octahedra, and
 without `--kpoint` one page per special k point is written. In `--visualize`
 mode `--kpoint` accepts a label (`GM`, `X`, `M`, `R`) as well as coordinates.
-Documentation: [6. SALC basis visualization](crystod.md#6-salc-basis-visualization---visualize).
+Documentation: [01-06. SALC basis visualization](crystod.md#01-06-salc-basis-visualization---visualize).
 
 ## Where next
 

@@ -11,6 +11,7 @@ for the other CrystOD commands.
 | download one structure (conventional cell) | `crystod-search --get mp-5532` |
 | download the primitive cell instead | `crystod-search --get mp-5532 --cell primitive` |
 | download every listed structure | `crystod-search Sr-Ti-O --experimental --get` |
+| keep the table in a file | nothing to add: every run saves its terminal report as `mp_search_<query>.txt` (`--no-files`: print only) |
 
 ```{note}
 `crystod-search` is the only CrystOD command that goes online. It needs a
@@ -18,9 +19,9 @@ network connection and a free Materials Project API key (see
 [The API key](#the-api-key)).
 ```
 
-## 45. Searching the Materials Project
+## 10-01. Searching the Materials Project
 
-*Example directory: `example/45_mp_search` (testsuite section 45)*
+*Example directory: `example/10-01_mp_search` (testsuite section 10-01); after pip install: `crystod-example 10-01`*
 
 ### Searching
 
@@ -29,10 +30,10 @@ crystod-search SrTiO3
 ```
 
 ```text
- * Materials Project: formula SrTiO3 *
+* Materials Project: formula SrTiO3 *
  5 materials, sorted by energy above hull
 
- * Materials *
+* Materials *
  Formula  Space group  Material ID  Band Gap (eV)  Energy Above Hull (eV/atom)  Sites
  SrTiO3   I4/mcm       mp-4651              1.856                        0.000     10
  SrTiO3   I4/mcm       mp-551830            1.787                        0.000     10
@@ -47,6 +48,23 @@ The table is the one on the website, in the same order (by energy above the
 hull). A star after the ID marks a material that has been observed
 experimentally. The band gaps are DFT values, typically below the measured
 ones.
+
+The whole terminal report (table, download lines, citation) is also saved,
+word for word, as `mp_search_<query>.txt` in the current directory, named in
+a closing block:
+
+```text
+* Output files *
+  Report written to: mp_search_SrTiO3.txt (this output)
+```
+
+`<query>` is the query as typed, or the `--get` IDs joined by commas
+(`mp_search_mp-5532,mp-5229.txt`), made file-name safe: blanks dropped, a
+wildcard `*` written `any` (`Sr-*` gives `mp_search_Sr-any.txt`), `/` and `?`
+dropped. A second run of the same query overwrites the file; `--no-files`
+prints only (the `--get` POSCAR files are written all the same), and so does
+the environment variable `CRYSTOD_NO_REPORT=1`. A run that stops with an
+`ERROR:` line writes no report.
 
 The query is read the way the website's search box reads it:
 
@@ -79,7 +97,7 @@ crystod-search --get mp-5532
 ```
 
 ```text
- * POSCAR files (standardized conventional cell, tolerance 0.1 A) *
+* POSCAR files (standardized conventional cell, tolerance 0.1 A) *
  Wrote POSCAR_Sr2TiO4_I4mmm_mp-5532: Sr2TiO4, I4/mmm, 14 atoms
 ```
 

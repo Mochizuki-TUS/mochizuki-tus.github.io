@@ -21,7 +21,7 @@ with its ISO-IR irrep, the star arms are mapped onto the tabulated q point
 automatically, and the labels are drawn onto a matplotlib dispersion along the
 seekpath path. The notebook ends with the command-line form,
 `crystod-phonon --irreps`, and the `phonon_irreps.yaml` it writes.
-Documentation: [28. Phonon irreps](crystod-phonon.md#28-phonon-irreps---irreps),
+Documentation: [04-02. Phonon irreps](crystod-phonon.md#04-02-phonon-irreps---irreps),
 [Python API](python-api.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/01_phonon_irrep_labeling.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/01_phonon_irrep_labeling.ipynb)
@@ -36,8 +36,8 @@ for the imaginary R-point phonon of SrTiO3 straight from the phonopy object, and
 a short experiment shows why freezing one eigenvector at a time finds I4/mcm and
 C2/m but never R-3c or Imma. The candidate structures are then generated with
 `crystod-phonon --subgroup --modulate` and their space groups re-measured with
-spglib. Documentation: [35. Subgroups from imaginary modes](crystod-phonon.md#35-subgroups-from-imaginary-modes---subgroup),
-[17. Isotropy subgroups](crystod-group.md#17-isotropy-subgroups---parent),
+spglib. Documentation: [04-11. Subgroups from imaginary modes](crystod-phonon.md#04-11-subgroups-from-imaginary-modes---subgroup),
+[02-10. Isotropy subgroups](crystod-group.md#02-10-isotropy-subgroups---parent),
 [Isotropy subgroups (theory)](theory-isotropy-subgroups.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/02_isotropy_subgroup_search.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/02_isotropy_subgroup_search.ipynb)
@@ -50,7 +50,7 @@ ammonia), and `crystod.mol.MODiagram` turns the SALCs and the central-atom
 orbitals into a symmetry-adapted extended-Hückel MO diagram: the levels with
 their irreps and occupations as a table, a matplotlib level diagram, and the
 interactive HTML page that `crystod-mol --diagram` writes, embedded in the
-notebook. Documentation: [41. Molecular-orbital diagrams](crystod-mol.md#41-molecular-orbital-diagrams---diagram),
+notebook. Documentation: [07-02. Molecular-orbital diagrams](crystod-mol.md#07-02-molecular-orbital-diagrams---diagram),
 [How the orbital diagrams are computed](theory-orbital-diagrams.md).
 [View on GitHub](https://github.com/ahntaeyoung1212/CrystOD/blob/main/tutorials/03_mo_diagram.ipynb)
 | [View on nbviewer](https://nbviewer.org/github/ahntaeyoung1212/CrystOD/blob/main/tutorials/03_mo_diagram.ipynb)
@@ -59,13 +59,18 @@ notebook. Documentation: [41. Molecular-orbital diagrams](crystod-mol.md#41-mole
 
 ```bash
 pip install CrystOD jupyterlab    # the notebooks need no PySCF; any Jupyter front end works
-git clone https://github.com/ahntaeyoung1212/CrystOD.git
+git clone https://github.com/ahntaeyoung1212/CrystOD.git    # only for the notebooks
 cd CrystOD/tutorials
 jupyter lab
 ```
 
-CrystOD 0.4.0 or later is required; the first cell of every notebook prints the
-installed version. Each notebook begins by moving into a fresh temporary
+The notebooks themselves come from the repository (a clone, or the three
+`.ipynb` files downloaded); their inputs are installed by pip with
+`crystod.examples`. CrystOD 0.4.4 or later is required (Tutorial 1 reads
+`phonon_irreps.yaml` with `crystod.phonon.read_phonon_irreps`, new in 0.4.4);
+the first cell of every notebook prints the installed version. Since 0.4.5,
+`crystod-example 04-02 02-10 01-11 07-02` also copies the example directories behind these
+tutorials into `./example/` (see {doc}`crystod-example`). Each notebook begins by moving into a fresh temporary
 directory (`tempfile.mkdtemp()`) and reads its inputs through
 `crystod.examples.example_path(...)`, so everything it writes
 (`phonon_irreps.yaml`, `MPOSCAR_*`, `MolOD_*.html`) lands there and never in the

@@ -13,15 +13,24 @@ coordinate files) instead of periodic structures.
 | draw the MO diagram | `crystod-mol --diagram --xyz FILE.xyz` |
 | draw it from a real SCF | `crystod-mol --diagram --xyz FILE.xyz --pyscf` |
 
-## 40. Molecular point groups and SALCs
+## 07-01. Molecular point groups and SALCs
 
-*Example directory: `example/40_molecular_salc` (testsuite section 40;
-molecule files in `example/test_XYZs`)*
+*Example directory: `example/07-01_molecular_salc` (testsuite section 07-01; it
+holds its own copies of the molecule files); after pip install: `crystod-example 07-01`*
+
+The point group of a molecule given as an XYZ file, and the symmetry-adapted
+combinations (SALCs) of the orbitals of one element, printed and drawn in 3D.
 
 ### Point-group detection (`--symmetry`)
 
 Detect the point group of a molecule — the molecular analogue of
-`phonopy --symmetry` for crystals — using pymatgen's `PointGroupAnalyzer`:
+`phonopy --symmetry` for crystals — using pymatgen's `PointGroupAnalyzer`.
+
+| Input | Command | Output |
+|---|---|---|
+| XYZ file | `crystod-mol --symmetry --xyz XYZ_NH3.xyz` | terminal: the point group (Schoenflies and Hermann-Mauguin) and its symmetry operations by class; the same report saved as `mol_sym_<formula>` (`mol_sym_H3N`, the full molecular formula in Hill order) |
+| the same, print only | add `--no-files` | the terminal report, no file (`CRYSTOD_NO_REPORT=1` too) |
+| XYZ file of a linear molecule | `crystod-mol --symmetry --xyz XYZ_O2.xyz` | the non-crystallographic group, named as such |
 
 ```bash
 crystod-mol --symmetry --xyz XYZ_NH3.xyz
@@ -38,11 +47,6 @@ C3v (Hermann-Mauguin: 3m)
 E, 2C3, 3sgv
 ```
 
-For the 32 crystallographic point groups the report gives both names — the
-Schoenflies `C3v` and the international (Hermann-Mauguin) `3m` — and the
-symmetry operations sorted into classes. A non-crystallographic group is named
-as such:
-
 ```bash
 crystod-mol --symmetry --xyz XYZ_O2.xyz
 ```
@@ -52,6 +56,13 @@ crystod-mol --symmetry --xyz XYZ_O2.xyz
 D*h (linear molecule; continuous non-crystallographic group)
 ```
 
+How to read the output:
+
+- `* Point group *`: for the 32 crystallographic point groups both names —
+  the Schoenflies `C3v` and the international (Hermann-Mauguin) `3m`; a
+  non-crystallographic group is named as such.
+- `* Symmetry operations (N) *`: the symmetry operations sorted into classes.
+
 `--tolerance` (in Angstrom, default 0.3 as in pymatgen) sets how much
 distortion the detection will tolerate, like `phonopy --tolerance`.
 
@@ -59,7 +70,20 @@ distortion the detection will tolerate, like `phonopy --tolerance`.
 
 Build the molecular SALCs — the combinations of the atomic orbitals on
 equivalent sites that transform cleanly under the symmetry of the molecule —
-for the sites of one element:
+for the sites of one element, together with the irreps they belong to.
+
+```{seealso}
+**Theory:** [Molecular SALCs and their point-group labels](theory-representations.md#molecular-salcs-and-their-point-group-labels-crystod-mol) —
+how the reducible representation is built and reduced, why p/d/f orbitals
+bring in the Wigner-D matrices, and how the labels are matched to the
+`crystod-group` character tables.
+```
+
+| Input | Command | Output |
+|---|---|---|
+| XYZ file, element, orbital shell | `crystod-mol --xyz XYZ_NH3.xyz --element H --orbital s` | terminal: target sites, reducible representation, decomposition into irreps, the SALCs; the same report saved as `mol_salc_<formula>_<EL>_<ORB>` (`mol_salc_H3N_H_s`; benzene: `mol_salc_C6H6_C_p`), `--no-files`: none |
+| the same, in textbook axes | `crystod-mol --xyz XYZ_CH4.xyz --element C --orbital d --align` | the molecule is first rotated into the standard point-group orientation; SALCs in those axes |
+| the same | add `--show-matrix` | also the site-permutation matrix of every symmetry operation |
 
 ```bash
 crystod-mol --xyz XYZ_NH3.xyz --element H --orbital s
@@ -85,20 +109,24 @@ A1: [s(H1) + s(H2) + s(H3)]
 E: [s(H1) - s(H3), s(H1) - 2 s(H2) + s(H3)]
 ```
 
-The three steps are visible in the output itself: the site-permutation
-representation (`chi(perm)` — how each operation shuffles the sites), its
-product with the characters of the orbital (`chi(s)`), and the decomposition of
-the product into irreps, from which the projection operator produces the
-explicit SALCs. For p/d/f orbitals an operation also *rotates* the orbital, so
-the permutation representation is multiplied by the real-orbital Wigner-D
-representation (`wigner_D_real`) — `--element N --orbital p` of NH3 gives
-`A1: [pz(N1)]`, `E: [px(N1), py(N1)]`.
+How to read the output:
 
-The irrep labels come from the same point-group character tables as
-`crystod-group` (`--decompose`/`--ligand-field`), so molecular and crystalline
-analyses share one labeling convention; matching the detected operations onto
-the exact character-table matrices also removes the numerical noise of the
-input geometry from the SALC coefficients.
+- `* Target sites *`: the sites of the element, in the center-of-mass frame.
+- `chi(perm)`: the site-permutation representation — how each operation
+  shuffles the sites.
+- `chi(s)` (`chi(p)`, ...): the characters of the orbital. For p/d/f
+  orbitals an operation also *rotates* the orbital, so the permutation
+  representation is multiplied by the real-orbital Wigner-D representation
+  (`wigner_D_real`).
+- `chi(total)`: the product of the two, the representation that is reduced.
+- `* Decomposition *`: its irreps, with the labels of the point-group
+  character tables of `crystod-group` (`--decompose`/`--ligand-field`).
+- `* SALCs *`: the explicit combinations that the projection operator
+  produces for each irrep; the heading says which axes the orbital
+  components refer to. `--element N --orbital p` of NH3 gives
+  `A1: [pz(N1)]`, `E: [px(N1), py(N1)]`.
+
+:::{dropdown} Textbook axes (`--align`)
 
 `--align` rotates the molecule into the standard point-group orientation
 (principal axis along z) first, so the coefficients follow the textbook axis
@@ -124,13 +152,17 @@ T2: [dxy(C1), dyz(C1), dxz(C1)]
 rotated input geometry. `--show-matrix` prints the site-permutation matrix of
 every symmetry operation; `--tolerance` as in `--symmetry`.
 
+:::
+
 ### 3D visualization (`--visualize`)
 
-`--visualize` additionally writes the SALCs as a standalone interactive 3D
+`--visualize` additionally writes the SALCs as an interactive 3D
 HTML page — the same viewer as the crystalline `crystod --visualize`
-(section 6 of {doc}`crystod`), with the orbital lobes drawn at each site
-(+ yellow / − cyan, VESTA style), a sidebar listing every SALC basis vector
-by irrep for one-click switching, and a camera-synced x/y/z compass:
+(section 01-06 of {doc}`crystod`).
+
+| Input | Command | Output |
+|---|---|---|
+| XYZ file, element, orbital shell | `crystod-mol --xyz XYZ_NH3.xyz --element H --orbital s --visualize --bond N H 1.2` | the SALC report as above (saved as `mol_salc_H3N_H_s`, its line in the `* Output files *` block); file `SALC_XYZ_NH3_H_s.html` |
 
 ```bash
 crystod-mol --xyz XYZ_NH3.xyz --element H --orbital s --visualize --bond N H 1.2
@@ -146,23 +178,51 @@ SALC table in the sidebar to switch basis vector and drag to rotate:
 <p style="margin-top:0.3em"><a href="_static/embed/SALC_XYZ_NH3_H_s.html" target="_blank">Open the NH3 H-1s SALC viewer full-screen</a></p>
 ```
 
-`--output` selects the HTML file name (default:
-`SALC_{molecule}_{element}_{orbital}.html`); `--bond EL1 EL2 MAX` draws bonds
-up to `MAX` Angstroms (repeatable). Since the viewer works on a molecule
-rather than a crystal, no cell edges are drawn and the compass shows the
-Cartesian x/y/z axes. The SALC analysis supports the 32 crystallographic point
-groups; for linear molecules (D\*h/C\*v) analyze a finite subgroup with
-`crystod-group --decompose` instead.
+How to read the page:
 
-## 41. Molecular-orbital diagrams (`--diagram`)
+- the orbital lobes are drawn at each site (+ yellow / − cyan, VESTA style);
+- the sidebar lists every SALC basis vector by irrep, for one-click
+  switching;
+- the x/y/z compass is camera-synced and shows the Cartesian axes; since the
+  viewer works on a molecule rather than a crystal, no cell edges are drawn.
 
-*Example directory: `example/41_molod` (testsuite section 41)*
+:::{dropdown} Options and limits
+
+Options and limits:
+
+- `--output`: the HTML file name (default:
+  `SALC_{molecule}_{element}_{orbital}.html`).
+- `--bond EL1 EL2 MAX`: draws bonds up to `MAX` Angstroms (repeatable).
+- The SALC analysis supports the 32 crystallographic point groups; for linear
+  molecules (D\*h/C\*v) analyze a finite subgroup with
+  `crystod-group --decompose` instead.
+- The page loads plotly.js from `cdn.plot.ly` when it is opened, so a browser
+  needs a network connection to display it; the command that writes it runs
+  offline, and the MO diagram pages of `--diagram` (section 07-02) are
+  self-contained.
+
+:::
+
+## 07-02. Molecular-orbital diagrams (`--diagram`)
+
+*Example directory: `example/07-02_molod` (testsuite section 07-02); after pip install: `crystod-example 07-02`*
 
 `crystod-mol --diagram` draws the molecular-orbital diagram of a single-center
 molecule (one central atom plus its ligands — NH3, CH4, SF6) from **symmetry
 and overlap alone**: the level ordering follows from the symmetry of the
 orbitals and from how strongly they overlap in space, with no self-consistent
-calculation:
+calculation.
+
+```{seealso}
+**Theory:** [How the orbital diagrams are computed](theory-orbital-diagrams.md) — the step-by-step extended-Hückel construction, the exact overlap quadrature and the original references; and [MO numbering with core shells](theory-orbital-diagrams.md#mo-numbering-with-core-shells-in-molecular-diagrams-crystod-mol---diagram) — how the core shells enter the labels.
+```
+
+| Input | Command | Output |
+|---|---|---|
+| XYZ file of a single-center molecule | `crystod-mol --diagram --xyz XYZ_NH3.xyz` | terminal: fragments, AO parameters, ligand SALCs, SALC-AO overlaps, MOs with their composition, electron filling with HOMO/LUMO; file `MolOD_XYZ_NH3.html` (the interactive diagram) |
+| the same, another central atom | add `--center EL` | the diagram around that atom |
+| an XYZ file of a molecule without a single center, two formulas | `crystod-mol --diagram --xyz XYZ_C6H6.xyz --ao-left H6 --ao-right C6` | a two-fragment diagram (below) |
+| the same, from a real SCF | add `--pyscf` | a quantitative diagram from three PySCF calculations (below) |
 
 ```bash
 crystod-mol --diagram --xyz XYZ_NH3.xyz
@@ -203,46 +263,105 @@ HOMO = 3a1 (-13.75 eV), LUMO = 2e (2.78 eV), gap = 16.53 eV
 ```
 
 The written `MolOD_XYZ_NH3.html` is the diagram below — this is the live
-output, not a screenshot. Four columns (isolated ligand AOs | ligand-group
-SALCs | molecular orbitals | central-atom AOs) are joined by dashed correlation
-lines drawn the more heavily the larger the contribution; electron arrows mark
-the occupied levels and the HOMO/LUMO are flagged. Hover or click any level to
-see its composition and a drag-rotatable orbital sketch built from that level's
-actual eigenvector (buttons flip through the degenerate partners); Ctrl/Cmd +
-scroll zooms the energy window:
+output, not a screenshot:
 
 ```{raw} html
-<iframe src="_static/embed/MolOD_XYZ_NH3.html" width="100%" height="660" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
+<iframe src="_static/embed/MolOD_XYZ_NH3.html" width="100%" height="580" data-narrow-height="935" data-narrow-width="720" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
 <p style="margin-top:0.3em"><a href="_static/embed/MolOD_XYZ_NH3.html" target="_blank">Open the NH3 MO diagram full-screen</a></p>
 ```
 
-Everything in the report is one small secular problem per irrep: the ligand
-orbitals are symmetry-adapted into the SALCs of section 40, every valence
-orbital is a single-zeta Slater-type orbital with a tabulated extended-Hückel
-exponent `zeta` and diagonal energy `H_ii`, all two-center overlaps `S` are
-evaluated exactly (ligand-ligand overlap included), and orbitals of different
-irreps cannot mix. A large overlap therefore means a large bonding/antibonding
-splitting.
+How to read the output:
 
-```{seealso}
-**Theory:** [How the orbital diagrams are computed](theory-orbital-diagrams.md) — the step-by-step extended-Hückel construction, the exact overlap quadrature and the original references.
+- `* Valence Atomic Orbital (AO) parameters *`: every valence orbital is a
+  Slater-type orbital with a tabulated extended-Hückel exponent `zeta` and
+  diagonal energy `H_ii`. The s and p shells are single-zeta; most valence d
+  and f shells are double-zeta contractions, printed with their coefficients
+  (the title then adds `double-zeta d/f contractions`).
+- `* Ligand SALCs *`: the ligand orbitals symmetry-adapted into the SALCs of
+  section 07-01.
+- `* Ligand SALC | central AO overlap integrals *`: the overlap `S` of each
+  ligand SALC with each central-atom orbital of the same irrep; orbitals of
+  different irreps cannot mix, and a large overlap means a large
+  bonding/antibonding splitting.
+- `* Molecular orbitals *`: energy, occupation and composition of every MO
+  (`x2` marks a doubly degenerate level).
+- `* Electron filling *`: the configuration, HOMO, LUMO and gap. The MO
+  numbering counts the core shells, as in photoelectron spectroscopy: CH4
+  therefore gives the textbook `(2a1)^2 (1t2)^6` (1a1 = C 1s core), NH3 gives
+  `(2a1)^2 (1e)^4 (3a1)^2` with the 3a1 lone pair as HOMO.
+- The HTML page: four columns (isolated ligand AOs | ligand-group SALCs |
+  molecular orbitals | central-atom AOs) joined by dashed correlation lines
+  drawn the more heavily the larger the contribution; electron arrows mark the
+  occupied levels and the HOMO/LUMO are flagged. Hover or click any level to
+  see its composition and a drag-rotatable orbital sketch built from that
+  level's actual eigenvector (buttons flip through the degenerate partners);
+  Ctrl/Cmd + scroll zooms the energy window.
+- The energies are semi-quantitative as extended Hückel theory always is —
+  read them for orderings and trends, not as absolute values.
+
+:::{dropdown} Tetrahedral TiCl4 (a d valence shell)
+
+For tetrahedral TiCl4 (`XYZ_TiCl4.xyz`, not among the shipped examples: Ti at the
+origin and Cl at (±1.25285, ±1.25285, ±1.25285) Å with an even number of minus
+signs, Ti-Cl 2.17 Å):
+
+```bash
+crystod-mol --diagram --xyz XYZ_TiCl4.xyz
 ```
 
-The MO numbering counts the core shells, as in photoelectron spectroscopy. CH4
-therefore gives the textbook `(2a1)^2 (1t2)^6` (1a1 = C 1s core), NH3 gives
-`(2a1)^2 (1e)^4 (3a1)^2` with the 3a1 lone pair as HOMO, and SF6 fills 48
-valence electrons up to the nonbonding F 2p block (1t1g/3eg) just below the
-6a1g LUMO. `--center EL` selects the central atom explicitly (default: the atom
-closest to the molecular center); `--output`/`--tolerance` as usual. Elements
-H-Cl are parameterized, and the energies are semi-quantitative as extended
-Hückel theory always is — read them for orderings and trends, not as absolute
-values.
+```
+* Valence Atomic Orbital (AO) parameters (single-zeta STO, double-zeta d/f contractions, extended Hueckel) *
+Ti 4s:  zeta = 1.075 / bohr,  H_ii = -9.0 eV
+Ti 4p:  zeta = 0.675 / bohr,  H_ii = -5.4 eV
+Ti 3d:  zeta = 4.550 (c = 0.4206) + 1.400 (c = 0.7839) / bohr,  H_ii = -10.8 eV
+Cl 3s:  zeta = 2.183 / bohr,  H_ii = -26.3 eV
+Cl 3p:  zeta = 1.733 / bohr,  H_ii = -14.2 eV
+...
+* Electron filling (32 valence electrons) *
+(7a1)^2 (7t2)^6 (2e)^4 (8a1)^2 (8t2)^6 (9t2)^6 (2t1)^6
+...
+HOMO = 2t1 (-13.71 eV), LUMO = 3e (-7.17 eV), gap = 6.54 eV
+```
+
+These are the labels, energies and occupations of the two-fragment form
+`--ao-left Cl4 --ao-right Ti` (below) at every level that form lists; a
+central atom with an f valence shell (Ce 4f of tetrahedral CeF4) runs the
+same way. Ligand shells with d or f orbitals get their SALCs printed with the
+d/f component names (`3dxy(Cu1)`, `3dz2(Cu1)`, ... for the Cu 3d shells of a
+tetrahedral OCu4 core), and the orbital sketch of the HTML page draws s, p
+and d lobes; f components enter the composition but are not drawn as lobes.
+
+:::
+
+:::{dropdown} Options and limits
+
+Options and limits:
+
+- `--center EL`: selects the central atom explicitly (default: the atom
+  closest to the molecular center); `--output`/`--tolerance` as usual.
+- The extended-Hückel parameters cover 52 elements up to Bi (H, Li-F, Na-Cl,
+  K-Br, Rb, Sr, Zr, Nb, Mo, Cd, Sn-I, Cs, Ba, La, Ce, Sm, Gd, Yb, Lu, Pb, Bi);
+  any other element stops the run with an ERROR that lists them.
+
+:::
 
 ### Two-fragment diagrams (`--ao-left`/`--ao-right`)
 
 `--ao-left`/`--ao-right` (without `--pyscf`) replace the central-atom
 architecture by **any submolecule split by chemical formula**, for molecules
-without a single center:
+without a single center: the diagram shows the MOs of the two fragments on
+either side of those of the molecule.
+
+```{seealso}
+**Theory:** [Two-fragment molecular-orbital diagrams](theory-orbital-diagrams.md#two-fragment-molecular-orbital-diagrams-crystod-mol---ao-left---ao-right) —
+why a fragment block of the one molecular AO space is the isolated fragment,
+and how the molecular MOs are projected onto the fragment MOs.
+```
+
+| Input | Command | Output |
+|---|---|---|
+| XYZ file, two formulas that split the molecule | `crystod-mol --diagram --xyz XYZ_C6H6.xyz --ao-left H6 --ao-right C6` | file `MolOD_XYZ_C6H6.html`: H6 MOs, C6H6 MOs, C6 MOs |
+| a homonuclear diatomic | `crystod-mol --diagram --xyz XYZ_O2.xyz --ao-left O --ao-right O` | the O, O2, O diagram |
 
 ```bash
 crystod-mol --diagram --xyz XYZ_C6H6.xyz --ao-left H6 --ao-right C6
@@ -252,16 +371,23 @@ crystod-mol --diagram --xyz XYZ_CH3OH.xyz --ao-left H4 --ao-right CO
 crystod-mol --diagram --xyz XYZ_O2.xyz --ao-left O --ao-right O
 ```
 
-All three columns are solved in the **one molecular AO space**. Because the
-Wolfsberg-Helmholz off-diagonal depends only on the two orbitals involved, a
-fragment's (H, S) sub-block *is* the isolated fragment: its eigenstates are the
-pre-bonding fragment MOs — benzene's H6 column shows the
-1a1g < 1e1u < 1e2g < 1b2u ladder of the six H 1s SALCs — and the molecular MOs
-are projected onto them through the shared overlap matrix. Benzene fills
-`(2a1g)^2 (2e1u)^4 (2e2g)^4 (2b2u)^2 (3a1g)^2 (3e1u)^4 (1a2u)^2 (1b1u)^2
-(3e2g)^4 (1e1g)^4`, i.e. the Hückel π ladder 1a2u < 1e1g (HOMO) < 1e2u (LUMO) <
-1b1g. Irrep labels are omitted when a fragment admits no consistent assignment
-(and for linear molecules, which have no crystallographic character table).
+```{raw} html
+<iframe src="_static/embed/MolOD_XYZ_C6H6.html" width="100%" height="590" data-narrow-height="960" data-narrow-width="720" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
+<p style="margin-top:0.3em"><a href="_static/embed/MolOD_XYZ_C6H6.html" target="_blank">Open the benzene two-fragment MO diagram full-screen</a></p>
+```
+
+The page above is `MolOD_XYZ_C6H6.html`, the live output of the first command.
+
+How to read the output:
+
+- The fragment columns are the pre-bonding fragment MOs, all three columns
+  solved in the one molecular AO space: benzene's H6 column shows the
+  1a1g < 1e1u < 1e2g < 1b2u ladder of the six H 1s SALCs.
+- Benzene fills `(2a1g)^2 (2e1u)^4 (2e2g)^4 (2b2u)^2 (3a1g)^2 (3e1u)^4
+  (1a2u)^2 (1b1u)^2 (3e2g)^4 (1e1g)^4`, i.e. the Hückel π ladder
+  1a2u < 1e1g (HOMO) < 1e2u (LUMO) < 1b1g.
+- Irrep labels are omitted when a fragment admits no consistent assignment
+  (and for linear molecules, which have no crystallographic character table).
 
 ### Quantitative diagrams with PySCF (`--pyscf`)
 
@@ -271,9 +397,23 @@ and its two fragments, the latter carrying **ghost basis functions** on the
 removed atoms (the Boys-Bernardi counterpoise construction). The fragment
 levels are therefore true pre-bonding states described in the full molecular
 basis, the molecular MOs are projected exactly onto them, and the printed
-interaction energy E(mol) − E(left) − E(right) is BSSE-free. `--pyscf` needs
-the optional PySCF dependency, `pip install "CrystOD[quantum]"` (see
-[Installation](install.md)); without it the run stops with a one-line
+interaction energy E(mol) − E(left) − E(right) is BSSE-free.
+
+```{seealso}
+**Theory:** [How the orbital diagrams are computed](theory-orbital-diagrams.md)
+— why a finite basis creates the basis-set superposition error, what the
+counterpoise correction fixes, why the fragments are spin/spherically averaged,
+and how ghost-dominated fragment levels are filtered out.
+```
+
+| Input | Command | Output |
+|---|---|---|
+| XYZ file | `crystod-mol --diagram --xyz XYZ_H2O.xyz --pyscf` | the H2 / H2O / O diagram from three SCF calculations, with the BSSE-free interaction energy |
+| an open-shell molecule, fragments by formula | `crystod-mol --diagram --xyz XYZ_O2.xyz --pyscf --spin 2 --ao-left O --ao-right O` | the diagram of triplet O2 |
+| a molecule without a single center | `crystod-mol --diagram --xyz XYZ_C6H6.xyz --pyscf --ao-left H6 --ao-right C6` | the H6 / C6H6 / C6 diagram (below) |
+
+`--pyscf` needs the optional PySCF dependency, `pip install "CrystOD[quantum]"`
+(see [Installation](install.md)); without it the run stops with a one-line
 `ERROR:` naming this command:
 
 ```bash
@@ -289,9 +429,11 @@ the H6 cage on the left, the C6 ring on the right, and the pure-π `1e1g` HOMO /
 nodal patterns in the orbital sketch:
 
 ```{raw} html
-<iframe src="_static/embed/MolOD_XYZ_C6H6_pyscf.html" width="100%" height="660" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
+<iframe src="_static/embed/MolOD_XYZ_C6H6_pyscf.html" width="100%" height="610" data-narrow-height="1000" data-narrow-width="720" loading="lazy" style="border:1px solid #8884; border-radius:8px; background:#fff;"></iframe>
 <p style="margin-top:0.3em"><a href="_static/embed/MolOD_XYZ_C6H6_pyscf.html" target="_blank">Open the benzene PySCF MO diagram full-screen</a></p>
 ```
+
+How to read the output:
 
 - The default fragments are the ligand cage | central atom, as in the
   symmetry-only mode. `--ao-left`/`--ao-right` select **any partition by
@@ -304,21 +446,21 @@ nodal patterns in the orbital sketch:
   benzene `1e1g` HOMO / `1e2u` LUMO. Linear molecules use PySCF's Dooh/Coov
   labels rendered as σ/π/δ (triplet O2: `(1πu)^4 (1πg)^2`, with two single
   arrows on the half-filled 1πg).
-- `--basis` (default def2-svp), `--theory scf|dft`, `--xc` (default b3lyp),
-  `--charge` and `--spin` follow the conventions of `script/calc_pyscf.py`.
-  `--spin` is given as 2S, the number of unpaired electrons, and defaults to
-  the smallest value compatible with the electron count. Open-shell systems are
-  treated with ROHF/ROKS, so the diagram keeps one set of orbital energies.
 - Core levels are computed and included. When levels lie below −40 eV the
   default window is clamped to [−40, 15] eV so the valence region stays
   legible; the **Show all energy levels** button expands it.
 
-```{seealso}
-**Theory:** [How the orbital diagrams are computed](theory-orbital-diagrams.md)
-— why a finite basis creates the basis-set superposition error, what the
-counterpoise correction fixes, why the fragments are spin/spherically averaged,
-and how ghost-dominated fragment levels are filtered out.
-```
+:::{dropdown} Options
+
+Options:
+
+- `--basis` (default def2-svp), `--theory scf|dft`, `--xc` (default b3lyp),
+  `--charge` and `--spin` follow the conventions of `script/calc_pyscf.py`.
+- `--spin` is given as 2S, the number of unpaired electrons, and defaults to
+  the smallest value compatible with the electron count. Open-shell systems are
+  treated with ROHF/ROKS, so the diagram keeps one set of orbital energies.
+
+:::
 
 The SCF engine is PySCF — a software dependency, not the source of the
 fragment/irrep construction above. If you use PySCF in your research,

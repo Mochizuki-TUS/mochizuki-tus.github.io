@@ -7,8 +7,19 @@
   `phonopy`, `spglib`, `spgrep`, `ase`, `seekpath`, `pymatgen`,
   `numpy`, `scipy`, `sympy`, `pandas`, `matplotlib`, `requests`
 - Optional: `pyscf`, for the quantitative `--pyscf` engines only (see below)
+- Optional: `openpyxl` (or `XlsxWriter`), only for `crystod --element EL
+  --orbital ORB --kpoint ... --show-irrep-table` and `crystod --atomic-orbital
+  ... --show-irrep-table`, which also write the printed irrep table to
+  `irrep_table.xlsx` in the working directory; neither is installed with
+  CrystOD, and without one these runs stop with `ModuleNotFoundError: No
+  module named 'openpyxl'` (`pip install openpyxl`)
 - For `crystod-search` only: a network connection and a free Materials
   Project API key (see below)
+- For viewing the 3D HTML viewers written by `crystod --visualize`,
+  `crystod-phonon --visualize`, `crystod-bz` and `crystod-mol --visualize`: a
+  network connection in the browser, because these pages load plotly.js from
+  `cdn.plot.ly` when they are opened. The commands that write them run offline, and the
+  crystal-orbital and MO diagram pages are self-contained.
 
 ## From PyPI (Recommended)
 
@@ -16,12 +27,15 @@
 pip install CrystOD
 ```
 
-This installs the nine commands and their dependencies: everything needed for
+This installs the eleven commands and their dependencies: everything needed for
 the symmetry analysis, the extended-Hückel crystal-orbital diagrams, the phonon
 irreps and the MO diagrams. A few example inputs are bundled, so the first run
-needs no file of your own (`crystod --example ScF3_d`; see {doc}`quickstart`).
-Clone the repository as below if you also want the worked examples and the
-test suite.
+needs no file of your own (`crystod --example ScF3_d`; see {doc}`quickstart`),
+and so are the worked examples: `crystod-example` lists the example
+directories of the features and `crystod-example 02-10` copies one, with its
+README and inputs, into `./example` (see {doc}`crystod-example`); they come
+without their large or unpublished data. The test suite and development need a
+clone of the repository, as below.
 
 ### Optional: PySCF for the quantitative engines
 
@@ -63,7 +77,8 @@ pmg config --add PMG_MAPI_KEY <your key>
 Nothing else has to be installed: the HTTP client, `requests`, is a dependency
 of CrystOD. Current keys have 32 characters; a 16-character key belongs to
 the retired legacy API and is refused with a message saying so. The other
-commands never go online and need no key. See
+commands never go online and need no key (only some of the HTML pages they
+write load plotly.js from the web when opened; see the requirements above). See
 [The API key](crystod-search.md#the-api-key) for the details.
 
 ## Setup for following this manual (conda + git clone)
@@ -79,8 +94,10 @@ pip install -e ".[quantum]"
 
 The editable install (`-e`) keeps the commands pointing at the cloned source
 tree, so `git pull` is enough to update, and the `example/` directories and
-`testsuite.py` used throughout this documentation are right there. `[quantum]`
-brings in PySCF for the `--pyscf` sections of this manual; `pip install -e
+`testsuite.py` used throughout this documentation are right there (the example
+data that is not in the pip package stays in the CrystOD development tree; see
+{doc}`crystod-example`).
+`[quantum]` brings in PySCF for the `--pyscf` sections of this manual; `pip install -e
 ".[dev]"` additionally installs what is needed to build this documentation and
 to run the tutorial notebooks (Sphinx, ruff, nbconvert, ipykernel).
 
@@ -89,14 +106,16 @@ to run the tutorial notebooks (Sphinx, ruff, nbconvert, ipykernel).
 Run the full test suite in the repository root (inside the `crystod` environment):
 
 ```bash
-python3 testsuite.py           # run everything (45 sections)
-python3 testsuite.py 17 23     # run selected sections only
+python3 testsuite.py           # run everything (57 sections)
+python3 testsuite.py 02-10 02-16     # run selected sections only
 ```
 
 Every section number corresponds to one documented feature and one
-`example/<N>_*` directory; see {doc}`quickstart`. Without PySCF the
-PySCF-dependent checks of sections 3, 7 and 41 are skipped (the suite prints
-`[SKIP] pyscf not installed`) and every other check runs as usual.
+`example/CC-NN_*` directory; see {doc}`quickstart`. The test suite is not
+installed by pip: it reads the `example/` directories of the repository.
+Without PySCF the PySCF-dependent checks of sections 01-03, 01-10 and 07-02 are skipped
+(the suite prints `[SKIP] pyscf not installed`) and every other check runs as
+usual.
 
 ## Troubleshooting
 
@@ -137,9 +156,10 @@ python -m crystod --help
 python -m crystod.cli.bz -c POSCAR --band "0 0 0  0 1/2 0" --band-labels "GM X"
 ```
 
-`crystod.cli.bz`, `.group`, `.phonon`, `.mag`, `.md`, `.mol`, `.xrd`, `.search`
-correspond to `crystod-bz`, `crystod-group`, `crystod-phonon`, `crystod-mag`,
-`crystod-md`, `crystod-mol`, `crystod-xrd`, `crystod-search`.
+`crystod.cli.bz`, `.group`, `.phonon`, `.mag`, `.md`, `.mol`, `.xrd`, `.slab`,
+`.search`, `.example` correspond to `crystod-bz`, `crystod-group`, `crystod-phonon`,
+`crystod-mag`, `crystod-md`, `crystod-mol`, `crystod-xrd`, `crystod-slab`,
+`crystod-search`, `crystod-example`.
 
 ### PySCF uses only one CPU core on macOS (`--pyscf` features)
 
