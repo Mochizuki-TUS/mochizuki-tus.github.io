@@ -5,24 +5,41 @@
   attribute cannot serve both:
 
     * flow documents (molecule_to_crystal_simulator, MolOD_*, CrystalOD_*,
-      Multiplet_*) have a natural height that depends on how wide the frame is
-      -- their grids stack below ~820px -- so any fixed height clips them at
-      some window size.  Measured at a 784px-wide frame, the landing-page
-      embeds wanted 849 / 1101 / 704px against declared heights of 640 / 660 /
-      660: everything below the fold was simply unreachable.
+      Multiplet_*, SUBGROUP_*) have a natural height that depends on how wide
+      the frame is -- the diagrams stack their side panel below the diagram
+      when the frame is 720px wide or less -- so any fixed height clips them
+      or leaves a blank strip at some window size.  Measured at the frame
+      widths of the theme, the ScF3 diagram opened on R is 1245-1288px tall
+      stacked (frames of 666-720px) and 702-730px side by side (722-788px).
 
-    * the 3D viewers (SALC_*, BZ_*) are laid out in viewport units
-      (`height:100vh` / `95vh`), which inside an iframe means "the height of
-      the frame".  They already fill whatever they are given, and their
-      scrollHeight only ever mirrors the frame, so they must be left alone.
+    * the 3D viewers (SALC_*, BZ_*, phonon_visualize_*) are laid out in
+      viewport units (`height:100vh` / `95vh`), which inside an iframe means
+      "the height of the frame".  They already fill whatever they are given,
+      and their scrollHeight only ever mirrors the frame, so they must be left
+      alone.
 
-  Both are handled by measuring the content once with the frame collapsed: a
-  flow document keeps its full scrollHeight, a viewport-sized one collapses
-  with the frame and is recognised by that.  The measurement is done and undone
-  within one task, so the browser never paints the collapsed state.
+  Same-origin (the published https site, or any http server): the content is
+  measured once with the frame collapsed and once with it very tall.  The
+  height of the <body> box tells the two kinds apart -- a flow document's body
+  keeps its height, a viewport-sized body follows the frame -- and a flow
+  document then gets its exact scrollHeight.  (The document element itself
+  cannot be used for this test: its scrollHeight is never smaller than the
+  frame, so every document shorter than the tall probe would look
+  viewport-sized and keep a too-tall declared height.)  The measurement is
+  done and undone within one task, so the browser never paints the collapsed
+  state.
 
-  Same-origin only -- everything under _static/embed/ is served from this site,
-  and anything cross-origin is skipped by the try/catch.
+  Cross-origin (the local build opened through file://, where Chrome gives
+  every file its own origin, so contentDocument is null): nothing can be
+  measured, and the declared heights are used.  A flow document that restacks
+  declares two of them, measured beforehand:
+
+      <iframe ... height="740" data-narrow-height="1300" data-narrow-width="720">
+
+  `height` is used while the frame is wider than `data-narrow-width` pixels
+  (its inner width, the width the embedded document's media queries see) and
+  `data-narrow-height` otherwise; the width is re-read whenever the column is
+  resized.  Frames without the two data attributes keep their `height`.
 */
 
 (function () {
@@ -33,7 +50,7 @@
   // viewport units follows the frame
   var PROBE_SMALL = 60;
   var PROBE_LARGE = 2000;
-  var TOLERANCE = 2;
+  var TOLERANCE = 4;
 
   function embedFrames() {
     return Array.prototype.filter.call(
@@ -44,6 +61,25 @@
     );
   }
 
+  // the height the page declares for the frame at its present width
+  function declaredHeight(frame) {
+    var wide = parseFloat(frame.getAttribute("height")) || 0;
+    var narrow = parseFloat(frame.getAttribute("data-narrow-height"));
+    var limit = parseFloat(frame.getAttribute("data-narrow-width"));
+    if (!isNaN(narrow) && !isNaN(limit) && frame.clientWidth > 0 &&
+        frame.clientWidth <= limit) {
+      return narrow;
+    }
+    return wide;
+  }
+
+  function useDeclared(frame) {
+    var height = declaredHeight(frame);
+    if (height > 0) {
+      frame.style.height = height + "px";
+    }
+  }
+
   function contentHeight(doc) {
     return Math.max(
       doc.documentElement ? doc.documentElement.scrollHeight : 0,
@@ -51,31 +87,48 @@
     );
   }
 
+  // the height of the body box itself (with its margins): unlike the
+  // scrollHeight of the document element, it is not clamped to the frame
+  function bodyHeight(doc) {
+    var body = doc.body;
+    var style = doc.defaultView ? doc.defaultView.getComputedStyle(body) : null;
+    var margins = style
+      ? (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0)
+      : 0;
+    return body.getBoundingClientRect().height + margins;
+  }
+
   function fit(frame) {
     var doc;
     try {
       doc = frame.contentDocument;
     } catch (e) {
-      return; // cross-origin: nothing we can do, keep the declared height
+      doc = null;
     }
-    if (!doc || !doc.body) {
+    if (!doc) {
+      // cross-origin (file://): nothing to measure, use the declared height
+      useDeclared(frame);
+      return;
+    }
+    if (!doc.body || doc.URL === "about:blank" || frame.getClientRects().length === 0) {
+      // not loaded yet (lazy frame), or not rendered (inside a closed
+      // dropdown, where every probe would read 0): size it as declared; the
+      // resize observer fits it once it is shown
+      useDeclared(frame);
       return;
     }
 
     // the height declared in the .md file is the floor for anything that
     // sizes itself against the frame
-    if (!frame.dataset.declaredHeight) {
-      frame.dataset.declaredHeight =
-        frame.getAttribute("height") || String(frame.getBoundingClientRect().height);
-    }
-    var declared = parseFloat(frame.dataset.declaredHeight) || 0;
+    var declared = declaredHeight(frame);
 
     frame.style.height = PROBE_SMALL + "px";
     var small = contentHeight(doc);
+    var bodySmall = bodyHeight(doc);
     frame.style.height = PROBE_LARGE + "px";
-    var large = contentHeight(doc);
+    var bodyLarge = bodyHeight(doc);
 
-    if (Math.abs(large - small) <= TOLERANCE) {
+    if (Math.abs(bodyLarge - bodySmall) <= TOLERANCE) {
       // height independent of the frame: fit it exactly, which both reveals
       // what a too-short frame was hiding and reclaims a too-tall one
       frame.style.height = Math.ceil(small) + "px";
@@ -101,9 +154,7 @@
         fit(frame);
       });
     });
-    if (frame.contentDocument && frame.contentDocument.readyState === "complete") {
-      fit(frame);
-    }
+    fit(frame);
   }
 
   function start() {
@@ -111,7 +162,7 @@
     frames.forEach(watch);
 
     // the natural height depends on the frame width (the embeds restack at
-    // ~820px), so re-fit whenever the column is resized -- this also covers
+    // 720px), so re-fit whenever the column is resized -- this also covers
     // the right-hand table of contents being toggled
     if (window.ResizeObserver && frames.length) {
       var pending = null;
@@ -129,6 +180,8 @@
           observer.observe(frame.parentElement);
         }
       });
+    } else {
+      window.addEventListener("resize", fitAll);
     }
   }
 
