@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approximate Inference and MCMC Simulator — Laplace Approximation, Direction of KL, and the Metropolis–Hastings Algorithm</title>
+<meta name="description" content="Approximate a one-dimensional target distribution by the Laplace approximation and by Gaussians that minimize the KL divergence in its two directions, compare them, and check the behavior and convergence diagnostics of Metropolis–Hastings chains.">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第20章・第21章のシミュレーター S08．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim table.grid.cmp { width: 100%; font-size: .74rem; }
+#qsim table.grid.cmp th:first-child, #qsim table.grid.cmp td:first-child { text-align: left; }
+#qsim table.grid.cmp td.inf { color: var(--warn); }
+#qsim table.grid.cmp td, #qsim table.grid.chains td { white-space: nowrap; }
+@media (max-width: 480px) { #qsim table.grid.cmp, #qsim table.grid.chains { font-size: .68rem; } #qsim table.grid.cmp th, #qsim table.grid.cmp td, #qsim table.grid.chains th, #qsim table.grid.chains td { padding: 2px 4px; } }
+#qsim table.grid.chains { width: 100%; font-size: .74rem; }
+#qsim details.three { margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow); padding: 8px 14px; font-size: .82rem; }
+#qsim details.three > summary { cursor: pointer; font-weight: 700; color: var(--accent-strong); }
+#qsim .threeIn { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+#qsim .threeIn .ctl { margin: 0; }
+#qsim .threeIn input.num { width: 6em; }
+#qsim .tparams .ctl[hidden] { display: none; }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>Approximate Inference and MCMC — Handling Intractable Integrals with Approximations and Random Numbers</h1>
+  <p class="lead">This page checks two methods that work without knowing the normalization constant <i>Z</i> = ∫ <i>p̃</i>(<i>x</i>) d<i>x</i>, using a one-dimensional target distribution. In Tab ①, the Laplace approximation and the Gaussians that minimize the KL divergence in its two directions are overlaid, so that you can see which way each approximation is distorted and check numerically that the ELBO is a lower bound on ln <i>Z</i> whose gap is KL(<i>q</i>‖<i>p</i>). In Tab ②, you run Metropolis–Hastings chains and read the proposal width, acceptance rate, autocorrelation, effective sample size, and <i>R̂</i>, and you confirm that for a double well with a high barrier the chains “look settled yet have not converged.”</p>
+
+  <div class="tabs" role="tablist" aria-label="Switch simulator">
+    <button class="tab is-active" data-tab="approx" role="tab" type="button">① Comparing Approximate Distributions</button>
+    <button class="tab" data-tab="mh" role="tab" type="button">② Metropolis–Hastings Algorithm</button>
+  </div>
+
+  <!-- ① approx -->
+  <section class="panel" data-panel="approx">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">Target <i>p</i>(<i>x</i>) and three Gaussian approximations</p>
+        <p class="psub">The figure shows the Laplace approximation (second-order expansion at the mode), the <i>q</i> that minimizes KL(<i>q</i>‖<i>p</i>), and the <i>q</i> that minimizes KL(<i>p</i>‖<i>q</i>) (matching the mean and variance).</p>
+        <div class="stage">
+          <canvas data-role="cvA"></canvas>
+          <div data-role="lgA"></div>
+          <p class="cap" data-role="capA"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvB"></canvas>
+          <div data-role="lgB"></div>
+          <p class="cap">The horizontal axis is in nats (the unit of the natural logarithm). The vertical solid line is ln <i>Z</i> (numerical integration on a grid). The length of the hatched band from the ELBO (●) of each <i>q</i> to ln <i>Z</i> is KL(<i>q</i>‖<i>p</i>). For every <i>q</i>, ELBO ≤ ln <i>Z</i>. For a Beta target, the ELBO and KL(<i>q</i>‖<i>p</i>) are computed with <i>q</i> truncated to 0 &lt; <i>x</i> &lt; 1 and renormalized.</p>
+        </div>
+        <div class="info">
+          <h3>Approximation values</h3>
+          <div class="tablewrap" data-role="cmp" aria-live="polite"></div>
+          <p class="msg empty" data-role="cmpNote"></p>
+        </div>
+        <div class="info">
+          <h3>Putting the current numbers into the formula</h3>
+          <div class="eq left" data-role="eqA" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlA"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② mh -->
+  <section class="panel" data-panel="mh" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">Histogram of the samples and the true density</p>
+        <p class="psub">A histogram of the pooled samples from all chains after burn-in (the initial samples that are discarded).</p>
+        <div class="stage">
+          <canvas data-role="cvH"></canvas>
+          <div data-role="lgH"></div>
+          <p class="cap" data-role="capH"></p>
+        </div>
+        <p class="ptitle">Trace plot (<i>x</i> versus step for each chain)</p>
+        <div class="stage">
+          <canvas data-role="cvT"></canvas>
+          <div data-role="lgT"></div>
+          <p class="cap" data-role="capT"></p>
+        </div>
+        <p class="ptitle">Autocorrelation function <i>ρ</i><sub><i>k</i></sub></p>
+        <div class="stage">
+          <canvas data-role="cvR"></canvas>
+          <div data-role="lgR"></div>
+          <p class="cap">The horizontal axis is the lag <i>k</i> (steps) and the vertical axis is <i>ρ</i><sub><i>k</i></sub> (dimensionless). It is computed for each chain from the samples after burn-in. The mark on each chain’s line is the truncation point <i>k</i><sub>c</sub> of the integrated autocorrelation time (Sokal’s automatic window).</p>
+        </div>
+        <div class="info">
+          <h3>Putting the current numbers into the formula</h3>
+          <div class="eq left" data-role="eqM" aria-live="polite"></div>
+        </div>
+        <details class="three" data-role="three">
+          <summary>Build the Metropolis transition matrix for a three-state discrete distribution (hand calculation of Chapter 21, Section 21.7)</summary>
+          <div data-role="threeBody"></div>
+        </details>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlM"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readM" aria-live="polite"></div>
+          <p class="msg empty" data-role="diagNote"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">The interactive part of this page runs on JavaScript. Because JavaScript is disabled, the figures and controls are not shown. You can still read the description below (procedure, formulas, conditions, questions). The text is available at <a href="../ch20_approximate_inference.html#sec20-2" target="_top">Chapter 20, Section 20.2</a> and <a href="../ch21_sampling.html#sec21-6" target="_top">Chapter 21, Section 21.6</a>.</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>Description of this simulator (procedure, formulas, conditions, questions)</summary>
+
+      <h2>Procedure and what to observe</h2>
+      <ol>
+        <li>In Tab ①, start with the default (skewed unimodal Beta(3, 9)). <span class="look">What to observe: the Laplace approximation is centered at the mode <i>x</i>* = 0.2, and its variance is 1/Λ = 1/62.5 = 0.016. The true mean is 0.25 and the true variance is 0.01442. The Laplace approximation misses the long right tail and puts probability 0.0569 on the left side <i>x</i> &lt; 0 (where <i>p</i> = 0), so KL(<i>q</i>‖<i>p</i>) is ∞.</span></li>
+        <li>Set the target to “Bimodal” and switch “Initial value for KL(<i>q</i>‖<i>p</i>) minimization” among “Near the left peak,” “Near the right peak,” and “Wide, from the center.” <span class="look">What to observe: the <i>q</i> that minimizes KL(<i>q</i>‖<i>p</i>) falls into one of three local solutions depending on the starting point: the left peak, the right peak, or a wide shape covering both (for the default <i>w</i> = 0.6, <i>d</i> = 6, KL(<i>q</i>‖<i>p</i>) = 0.507, 0.911, 0.846). The <i>q</i> that minimizes KL(<i>p</i>‖<i>q</i>) is centered in the low-probability region between the two peaks and covers both.</span></li>
+        <li>Switch “<i>q</i> to put into the formula” and read “Putting the current numbers into the formula” below. <span class="look">What to observe: ELBO + KL(<i>q</i>‖<i>p</i>) gives the same ln <i>Z</i> for every <i>q</i>. In the ELBO bar figure, the gap from ln <i>Z</i> (the hatched band) is KL(<i>q</i>‖<i>p</i>).</span></li>
+        <li>Turn on “Overlay a manually moved <i>q</i>” and move <i>m</i> and <i>s</i>. <span class="look">What to observe: the closer <i>q</i> is to <i>p</i>, the closer the ELBO gets to ln <i>Z</i>. KL(<i>q</i>‖<i>p</i>) and KL(<i>p</i>‖<i>q</i>) are in general different values.</span></li>
+        <li>In Tab ②, with the default (double well <i>b</i> = 2, <i>s</i> = 0.3, four chains), press “Advance 1000 steps” twice. <span class="look">What to observe: the histogram approaches the true density; also read the acceptance rate, <i>τ</i><sub>int</sub>, the effective sample size, and <i>R̂</i>.</span></li>
+        <li>Set the proposal width <i>s</i> to 0.01 and to 10, and start over with the same seed. <span class="look">What to observe: for too small an <i>s</i>, the acceptance rate is high but the trace moves slowly and <i>τ</i><sub>int</sub> is large. For too large an <i>s</i>, the acceptance rate is low and the trace becomes flat steps. In both cases the effective sample size is small.</span></li>
+        <li>Press “Barrier example (<i>b</i> = 12)” (<i>s</i> = 0.3, four chains, spread initial values, 2000 steps with the default seed). <span class="look">What to observe: each of the four chains stays in the well it started in; each chain’s trace looks settled and <i>τ</i><sub>int</sub> is small, yet <i>R̂</i> is large, about 9.9. Setting burn-in to 50 % changes nothing. If you set the initial values to “All at the same point,” <i>R̂</i> ≈ 1.00, but the mean stays at −0.98, far from the true value 0.</span></li>
+        <li>Open “Build the Metropolis transition matrix for a three-state discrete distribution” below Tab ②. <span class="look">What to observe: for <i>p̃</i> = (2, 3, 5), each row of the transition matrix sums to 1, <i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub> = <i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub> (detailed balance), and <b><i>p</i></b><i>T</i> = <b><i>p</i></b> (stationary distribution).</span></li>
+      </ol>
+      <p>With the keyboard, Tab moves to buttons and sliders, Enter (or Space) presses a button, and the arrow keys move a slider. The tabs can be switched with ← and →.</p>
+
+      <h2>Formulas and algorithms computed</h2>
+      <p>The target is given by an unnormalized density <i>p̃</i>(<i>x</i>), and <i>p</i>(<i>x</i>) = <i>p̃</i>(<i>x</i>)/<i>Z</i>. This corresponds to the posterior distribution of Chapter 20, <i>p</i>(<i>θ</i> | 𝒟) = <i>p</i>(𝒟, <i>θ</i>)/<i>p</i>(𝒟) (<i>x</i> ↔ <i>θ</i>, <i>p̃</i> ↔ <i>p</i>(𝒟, <i>θ</i>), <i>Z</i> ↔ <i>p</i>(𝒟)).</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mtext>Skewed unimodal: </mtext><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><msup><mi>x</mi><mrow><mi>a</mi><mo>−</mo><mn>1</mn></mrow></msup><msup><mrow><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><mrow><mi>b</mi><mo>−</mo><mn>1</mn></mrow></msup><mspace width="0.4em"/><mo stretchy="false">(</mo><mn>0</mn><mo>&lt;</mo><mi>x</mi><mo>&lt;</mo><mn>1</mn><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.6em"/><mi>Z</mi><mo>=</mo><mi mathvariant="normal">B</mi><mo stretchy="false">(</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mtext>Bimodal: </mtext><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>w</mi><msup><mi>e</mi><mrow><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mi>x</mi><mo>+</mo><mi>d</mi><mo>/</mo><mn>2</mn><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>/</mo><mn>2</mn></mrow></msup><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>w</mi><mo stretchy="false">)</mo><msup><mi>e</mi><mrow><mo>−</mo><msup><mrow><mo stretchy="false">(</mo><mi>x</mi><mo>−</mo><mi>d</mi><mo>/</mo><mn>2</mn><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>/</mo><mn>2</mn></mrow></msup><mo>,</mo><mspace width="0.6em"/><mi>Z</mi><mo>=</mo><msqrt><mrow><mn>2</mn><mi>π</mi></mrow></msqrt></mtd></mtr><mtr><mtd><mtext>Double well: </mtext><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>exp</mi><mo>[</mo><mo>−</mo><mi>b</mi><mspace width="0.17em"/><msup><mrow><mo stretchy="false">(</mo><msup><mi>x</mi><mn>2</mn></msup><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>]</mo><mo>,</mo><mspace width="0.6em"/><mi>b</mi><mo>=</mo><mfrac><msub><mi>E</mi><mi mathvariant="normal">b</mi></msub><mrow><msub><mi>k</mi><mi mathvariant="normal">B</mi></msub><mi>T</mi></mrow></mfrac></mtd></mtr></mtable></math></div>
+      <p>The Laplace approximation expands ln <i>p̃</i> to second order around the chosen mode <i>x</i>*. The approximation of the marginal likelihood <i>Z</i> (<i>p</i>(𝒟) in Chapter 20) also follows from this expansion. The curvature is written Λ (the same letter as in Chapter 20; it is the precision of the Gaussian).</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><mi>𝒩</mi><mo stretchy="false">(</mo><mi>x</mi><mo>∣</mo><msup><mi>x</mi><mo>*</mo></msup><mo>,</mo><mspace width="0.2em"/><msup><mi mathvariant="normal">Λ</mi><mrow><mo>−</mo><mn>1</mn></mrow></msup><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><mi mathvariant="normal">Λ</mi><mo>=</mo><mo>−</mo><msub><mrow><mfrac><mrow><msup><mi mathvariant="normal">d</mi><mn>2</mn></msup></mrow><mrow><mi mathvariant="normal">d</mi><msup><mi>x</mi><mn>2</mn></msup></mrow></mfrac><mi>ln</mi><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>|</mo></mrow><mrow><mi>x</mi><mo>=</mo><msup><mi>x</mi><mo>*</mo></msup></mrow></msub></mtd></mtr><mtr><mtd><mi>ln</mi><mi>Z</mi><mo>≈</mo><mi>ln</mi><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><msup><mi>x</mi><mo>*</mo></msup><mo stretchy="false">)</mo><mo>+</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mi>ln</mi><mfrac><mrow><mn>2</mn><mi>π</mi></mrow><mi mathvariant="normal">Λ</mi></mfrac></mtd></mtr></mtable></math></div>
+      <p>The KL divergence has different values and different properties depending on its direction (the unit is the nat).</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mi>KL</mi><mo stretchy="false">(</mo><mi>q</mi><mo>‖</mo><mi>p</mi><mo stretchy="false">)</mo><mo>=</mo><mo>∫</mo><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mi>ln</mi><mfrac><mrow><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><mrow><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mspace width="0.17em"/><mi mathvariant="normal">d</mi><mi>x</mi><mo>,</mo><mspace width="1em"/><mi>KL</mi><mo stretchy="false">(</mo><mi>p</mi><mo>‖</mo><mi>q</mi><mo stretchy="false">)</mo><mo>=</mo><mo>∫</mo><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mi>ln</mi><mfrac><mrow><mi>p</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow><mrow><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mspace width="0.17em"/><mi mathvariant="normal">d</mi><mi>x</mi></mtd></mtr><mtr><mtd><mi>ln</mi><mi>Z</mi><mo>=</mo><mi>ELBO</mi><mo stretchy="false">(</mo><mi>q</mi><mo stretchy="false">)</mo><mo>+</mo><mi>KL</mi><mo stretchy="false">(</mo><mi>q</mi><mo>‖</mo><mi>p</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><mi>ELBO</mi><mo stretchy="false">(</mo><mi>q</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>𝔼</mi><mi>q</mi></msub><mo stretchy="false">[</mo><mi>ln</mi><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mo>−</mo><msub><mi>𝔼</mi><mi>q</mi></msub><mo stretchy="false">[</mo><mi>ln</mi><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mo>≤</mo><mi>ln</mi><mi>Z</mi></mtd></mtr></mtable></math></div>
+      <p>The Gaussian <i>q</i> = 𝒩(<i>x</i> | <i>m</i>, <i>s</i><sup>2</sup>) that minimizes KL(<i>p</i>‖<i>q</i>) has <i>m</i> = 𝔼<sub><i>p</i></sub>[<i>x</i>] and <i>s</i><sup>2</sup> = Var<sub><i>p</i></sub>[<i>x</i>] (matching the mean and variance). The <i>q</i> that minimizes KL(<i>q</i>‖<i>p</i>) (= the <i>q</i> that maximizes the ELBO) has no closed form, so it is searched for numerically over (<i>m</i>, ln <i>s</i>) with the Nelder–Mead method. If the objective function has several local minima, the destination depends on the initial value.</p>
+      <p>Metropolis–Hastings algorithm: from the current point <i>x</i>, make a proposal <i>x</i>′ = <i>x</i> + <i>s</i><i>ε</i> (<i>ε</i> ~ 𝒩(0, 1)); if a uniform random number <i>u</i> ∈ [0, 1) satisfies <i>u</i> &lt; min(1, <i>r</i>), accept (<i>x</i> ← <i>x</i>′); otherwise reject (<i>x</i> stays, and the same value is counted once more in the sample). Because the proposal is symmetric, <i>q</i>(<i>x</i> | <i>x</i>′) = <i>q</i>(<i>x</i>′ | <i>x</i>) cancels, and <i>Z</i> cancels too, so it is not needed.</p>
+      <div class="eq"><math display="block"><mrow><mi>r</mi><mo>=</mo><mfrac><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo><mspace width="0.17em"/><mi>q</mi><mo stretchy="false">(</mo><mi>x</mi><mo>∣</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo></mrow><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mspace width="0.17em"/><mi>q</mi><mo stretchy="false">(</mo><msup><mi>x</mi><mo>′</mo></msup><mo>∣</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mo>=</mo><mfrac><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><msup><mi>x</mi><mo>′</mo></msup><mo stretchy="false">)</mo></mrow><mrow><mover><mi>p</mi><mo>~</mo></mover><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"/><mtext>acceptance probability </mtext><mi>min</mi><mo stretchy="false">(</mo><mn>1</mn><mo>,</mo><mi>r</mi><mo stretchy="false">)</mo></mrow></math></div>
+      <p>The autocorrelation function <i>ρ</i><sub><i>k</i></sub> is computed for the samples <i>x</i><sub>1</sub>, …, <i>x</i><sub><i>S</i></sub> of a chain (after burn-in) with the standard estimator whose denominator is divided by <i>S</i> (computed by FFT; the tests confirm that it agrees with the direct sum). The integrated autocorrelation time <i>τ</i><sub>int</sub> (the same symbol as in Chapter 21; a subscript is added because <i>τ</i> alone would be confused with the temperature in Chapters 26 and 27) and the effective sample size are</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>τ</mi><mi>int</mi></msub><mo>=</mo><mn>1</mn><mo>+</mo><mn>2</mn><munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><msub><mi>k</mi><mi mathvariant="normal">c</mi></msub></munderover><msub><mi>ρ</mi><mi>k</mi></msub><mo>,</mo><mspace width="1em"/><msub><mi>S</mi><mi>eff</mi></msub><mo>=</mo><mfrac><mi>S</mi><msub><mi>τ</mi><mi>int</mi></msub></mfrac></mrow></math></div>
+      <p><b>Truncation rule</b>: the upper limit <i>k</i><sub>c</sub> of the sum is determined by Sokal’s automatic window. Add terms for <i>k</i> = 1, 2, …, and let <i>k</i><sub>c</sub> be the first <i>k</i> such that <i>k</i> ≥ 5 <i>τ</i><sub>int</sub>(<i>k</i>) (<i>τ</i><sub>int</sub>(<i>k</i>) is the partial sum up to that <i>k</i>). If the condition is not met even after summing up to half the series length, “series too short” is displayed, and <i>τ</i><sub>int</sub> and the effective sample size may be underestimated. The effective sample size over all chains is the sum over the chains. The Monte Carlo standard error (MCSE) of the mean is √(variance / effective sample size).</p>
+      <p><b>Definition of <i>R̂</i></b>: this is split-<i>R̂</i> (the form in Gelman et al., <i>Bayesian Data Analysis</i>, 3rd ed., Section 11.4; no rank normalization). Split each chain after burn-in into a first half and a second half to get <i>M</i> = 2 × (number of chains) sequences, let <i>n</i> be their length, <i>W</i> the mean of the within-chain variances, and <i>B</i> the spread of the chain means. Then</p>
+      <div class="eq"><math display="block"><mrow><mi>B</mi><mo>=</mo><mfrac><mi>n</mi><mrow><mi>M</mi><mo>−</mo><mn>1</mn></mrow></mfrac><munderover><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>1</mn></mrow><mi>M</mi></munderover><msup><mrow><mo stretchy="false">(</mo><msub><mover><mi>x</mi><mo>¯</mo></mover><mi>j</mi></msub><mo>−</mo><mover><mi>x</mi><mo>¯</mo></mover><mo stretchy="false">)</mo></mrow><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><mover><mi>R</mi><mo>^</mo></mover><mo>=</mo><msqrt><mfrac><mrow><mfrac><mrow><mi>n</mi><mo>−</mo><mn>1</mn></mrow><mi>n</mi></mfrac><mi>W</mi><mo>+</mo><mfrac><mi>B</mi><mi>n</mi></mfrac></mrow><mi>W</mi></mfrac></msqrt></mrow></math></div>
+      <p><i>R̂</i> is displayed only when there are two or more chains. It is close to 1 if the chains look at the same distribution and becomes large if each chain looks at a different region. As a rule of thumb, suspect non-convergence if it exceeds 1.01 (the older rule of thumb was 1.1). However, <i>R̂</i> ≈ 1 is only a necessary condition for convergence.</p>
+      <p>In the three-state example, the transition matrix <i>T</i><sub><i>ij</i></sub> = <i>Q</i><sub><i>ij</i></sub> min(1, <i>p̃</i><sub><i>j</i></sub><i>Q</i><sub><i>ji</i></sub> / (<i>p̃</i><sub><i>i</i></sub><i>Q</i><sub><i>ij</i></sub>)) (<i>j</i> ≠ <i>i</i>), <i>T</i><sub><i>ii</i></sub> = 1 − Σ<sub><i>j</i>≠<i>i</i></sub> <i>T</i><sub><i>ij</i></sub> is built from the proposal <i>Q</i><sub><i>ij</i></sub> = <i>q</i>(<i>j</i> | <i>i</i>) (1/2 for each of the other two states). Rows are the “current state,” columns are the “next state,” and each row sums to 1.</p>
+
+      <h2>Data and random-number conditions</h2>
+      <ul>
+        <li>The target distributions are <strong>teaching examples</strong> given by formulas, not measured data. <i>x</i> is dimensionless. Defaults: in Tab ①, the skewed unimodal Beta(3, 9); the bimodal target has <i>w</i> = 0.6, <i>d</i> = 6 (standard deviation 1 for each component); the double well has <i>b</i> = 3. In Tab ②, the double well has <i>b</i> = 2.</li>
+        <li>The normalization constant <i>Z</i>, the mean, the variance, the KL, and the ELBO are numerical integrals on a grid (Simpson’s rule with 4000 intervals). For Beta, the end-point singularity is weakened by the change of variable <i>x</i> = <i>u</i><sup>3</sup>(10 − 15<i>u</i> + 6<i>u</i><sup>2</sup>). Expectations over <i>q</i> are computed on a grid of the mean of <i>q</i> ± 12 <i>s</i> (2000 intervals).</li>
+        <li>Tab ① uses no random numbers. The random numbers in Tab ② come from a seeded generator (mulberry32). The default seed is 20261112. Chain <i>k</i> (<i>k</i> = 0, 1, 2, 3) uses the generator with seed + 7919 <i>k</i>, so the sequence of chain 1 is the same even if the number of chains is changed. At each step, one <i>ε</i> (Gaussian random number) and one <i>u</i> (uniform random number) are drawn. Starting over with the same seed gives the same sequence.</li>
+        <li>Initial values: “Spread” uses the 5 %, 95 %, 30 %, and 70 % points of the true distribution (chains 1–4); “All at the same point” uses the 5 % point for all four chains. The initial values are not counted as samples.</li>
+        <li>Limits: one chain has at most 20000 steps, and there are at most four chains. The proposal width <i>s</i> is 0.01–10, <i>a</i> and <i>b</i> are 1.5–20, <i>w</i> is 0.05–0.95, <i>d</i> is 0–8, and the barrier <i>b</i> is 0.25–15.</li>
+      </ul>
+
+      <h2>Simplifications</h2>
+      <ul>
+        <li>The target is one-dimensional and limited to distributions that can be normalized by numerical integration on a grid. In real inference, <i>Z</i> cannot be computed, which is why approximations and MCMC are used. Here, <i>Z</i> is deliberately computed by numerical integration so that the quality of the approximations can be checked.</li>
+        <li>The family of approximations is only the one-dimensional Gaussian. For a Beta target, a Gaussian that puts probability outside 0 &lt; <i>x</i> &lt; 1 gives KL(<i>q</i>‖<i>p</i>) = ∞, so the minimization of KL(<i>q</i>‖<i>p</i>) and the ELBO bars use the distribution obtained by truncating <i>q</i> to 0 &lt; <i>x</i> &lt; 1 and renormalizing (the table says “truncated”). KL(<i>p</i>‖<i>q</i>) and the Laplace approximation are untruncated Gaussians.</li>
+        <li>The MH proposal is only the Gaussian random walk (there is no Gibbs sampling, replica exchange, or Hamiltonian Monte Carlo). <i>R̂</i> is the split-<i>R̂</i> without rank normalization.</li>
+      </ul>
+
+      <h2>Conditions under which results become unstable</h2>
+      <ul>
+        <li>The minimization of KL(<i>q</i>‖<i>p</i>) has local solutions, and the result depends on the initial value (this is itself an object of observation). If the Nelder–Mead method does not converge in 4000 iterations, the table says so.</li>
+        <li>When <i>a</i> or <i>b</i> of the Beta is close to 1.5, the slope of the density near the end becomes steep, and the Laplace approximation is far off.</li>
+        <li>If the MH chain is short, the truncation of <i>τ</i><sub>int</sub> reaches half the series length (“series too short”), and <i>τ</i><sub>int</sub>, the effective sample size, and <i>R̂</i> are unreliable. If a proposal falls outside the support (<i>x</i> ≤ 0 or <i>x</i> ≥ 1 for Beta), then <i>p̃</i> = 0 and it is always rejected.</li>
+        <li>If NaN or infinity appears during the computation, it stops and displays the reason.</li>
+      </ul>
+
+      <h2>Corresponding sections of the text</h2>
+      <ul>
+        <li><a href="../ch20_approximate_inference.html#sec20-2" target="_top">Chapter 20, Section 20.2 The Laplace Approximation</a> (hand calculation for Beta(3, 9))</li>
+        <li><a href="../ch20_approximate_inference.html#sec20-3" target="_top">Chapter 20, Section 20.3 The Idea of Variational Inference</a> (ln <i>p</i>(𝒟) = ELBO + KL)</li>
+        <li><a href="../ch20_approximate_inference.html#sec20-7" target="_top">Chapter 20, Section 20.7 Direction of the KL and Properties of the Approximation</a></li>
+        <li><a href="../ch20_approximate_inference.html#sec20-10" target="_top">Chapter 20, Section 20.10 How the Choice of Approximation Changes the Uncertainty</a></li>
+        <li><a href="../ch21_sampling.html#sec21-5" target="_top">Chapter 21, Section 21.5 Markov Chains</a>, <a href="../ch21_sampling.html#sec21-6" target="_top">21.6 The Metropolis–Hastings Algorithm</a>, <a href="../ch21_sampling.html#sec21-7" target="_top">21.7 Hand Calculation (Three States)</a></li>
+        <li><a href="../ch21_sampling.html#sec21-8" target="_top">Chapter 21, Section 21.8 Proposal Width, Acceptance Rate, and Autocorrelation</a>, <a href="../ch21_sampling.html#sec21-9" target="_top">21.9 Gibbs Sampling</a>, <a href="../ch21_sampling.html#sec21-10" target="_top">21.10 Convergence Diagnostics</a></li>
+      </ul>
+
+      <h2>Short questions to answer after operating</h2>
+      <ol>
+        <li>What are the mean and variance of the Laplace approximation of Beta(3, 9)? Compared with the true mean and variance, in which direction is the approximation distorted?
+          <details class="ans"><summary>Sample answers</summary><p>The mode is <i>x</i>* = (<i>a</i> − 1)/(<i>a</i> + <i>b</i> − 2) = 2/10 = 0.2, and Λ = 2/0.2<sup>2</sup> + 8/0.8<sup>2</sup> = 50 + 12.5 = 62.5, so the mean is 0.2 and the variance is 1/62.5 = 0.016. The true mean is 3/12 = 0.25 and the variance is 27/1872 ≈ 0.01442. Because the Laplace approximation is centered at the mode, it misses the weight of the long right tail and underestimates the mean. It also puts probability 0.0569 on the left side <i>x</i> &lt; 0. KL(<i>p</i>‖<i>q</i>) is 0.12884, which is larger than that of the Gaussian with matched mean and variance (0.048117).</p></details></li>
+        <li>For the bimodal target, where are the <i>q</i> that minimizes KL(<i>q</i>‖<i>p</i>) and the <i>q</i> that minimizes KL(<i>p</i>‖<i>q</i>) placed? Why?
+          <details class="ans"><summary>Sample answers</summary><p>KL(<i>q</i>‖<i>p</i>) is an expectation under <i>q</i>, so if <i>q</i> puts probability where <i>p</i> is almost 0, ln(<i>q</i>/<i>p</i>) becomes large and is penalized heavily. The <i>q</i> therefore moves toward one peak, and its variance is also smaller (by default, the left peak: <i>m</i> = −2.988, <i>s</i> = 1.019). KL(<i>p</i>‖<i>q</i>) is an expectation under <i>p</i>, so it is penalized where <i>p</i> has probability but <i>q</i> is close to 0, and <i>q</i> spreads to cover both peaks (<i>m</i> = −0.6, <i>s</i><sup>2</sup> = 9.64; its center lies in the low-probability valley).</p></details></li>
+        <li>What is the difference between the ELBO and ln <i>Z</i>? What does maximizing the ELBO amount to?
+          <details class="ans"><summary>Sample answers</summary><p>The difference is KL(<i>q</i>‖<i>p</i>) ≥ 0 (ln <i>Z</i> = ELBO + KL(<i>q</i>‖<i>p</i>)). Since ln <i>Z</i> does not depend on <i>q</i>, maximizing the ELBO is the same as minimizing KL(<i>q</i>‖<i>p</i>). For Beta(3, 9), ln <i>Z</i> = ln B(3, 9) = −6.2046, and the ELBO of the (truncated) <i>q</i> that minimizes KL(<i>q</i>‖<i>p</i>) is −6.2437; the difference 0.039178 is KL(<i>q</i>‖<i>p</i>).</p></details></li>
+        <li>In the barrier example (<i>b</i> = 12), the trace of each chain looks settled and <i>τ</i><sub>int</sub> is small. Why can we not say the chains have converged? How does <i>R̂</i> capture this?
+          <details class="ans"><summary>Sample answers</summary><p>Every chain sees only the well it started in and does not know the probability (one half) of the other well. Within a well the chain mixes well, so <i>τ</i><sub>int</sub> is small (about 4) and does not change even when burn-in is discarded. <i>R̂</i> compares the between-chain spread <i>B</i> with the within-chain variance <i>W</i>; because the chain means split into −0.98 and +0.98, it gives a large value of about 9.9. However, if all four chains start from the same well, <i>R̂</i> ≈ 1 while the overall mean is −0.98, and even <i>R̂</i> does not notice.</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">Back to Machine Learning — From Probability to GPT (Contents)</a> | Text: <a href="../ch20_approximate_inference.html#sec20-2" target="_top">Chapter 20, Section 20.2</a>, <a href="../ch21_sampling.html#sec21-6" target="_top">Chapter 21, Section 21.6</a> | Equations are typeset with the browser's built-in MathML (no external library).</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="inference-mcmc.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.InferenceMCMC;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var LIM = M.LIMITS;
+
+  /* ---- 小道具 ---- */
+  function num(v) { return U.mn(String(Math.round(v * 1000) / 1000)); }
+  function f5(v) { return v === Infinity ? '∞' : v === -Infinity ? '−∞' : fmt(v, 5); }
+  function f4(v) { if (typeof v === 'number' && isFinite(v) && Math.abs(v) < 1e-6) return '0.000'; return v === Infinity ? '∞' : v === -Infinity ? '−∞' : fmt(v, 4); }
+  function mi(s) { return s === 'ln' ? '<mspace width="0.1em"/><mi>ln</mi><mspace width="0.17em"/>' : '<mi>' + s + '</mi>'; }
+  function mo(s) { return (s === '[' || s === ']' || s === '‖' || s === '(' || s === ')') ? '<mo stretchy="false">' + s + '</mo>' : '<mo>' + s + '</mo>'; }
+  function mnum(s) { return '<mn>' + s + '</mn>'; }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function par(s) { return '<mo stretchy="false">(</mo>' + s + '<mo stretchy="false">)</mo>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  var BR = '\u0001';
+  function row(s) { return s.split(BR).map(function (t, i) { return '<mtr><mtd columnalign="left">' + (i ? '<mspace width="1.5em"/>' : '') + t + '</mtd></mtr>'; }).join(''); }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.6em">' + rows.join('') + '</mtable></math>'; }
+  function ptl() { return '<mover><mi>p</mi><mo>~</mo></mover>'; }
+  function KL(a, b) { return '<mi>KL</mi>' + par(mi(a) + mo('‖') + mi(b)); }
+  function sp(w) { return '<mspace width="' + (w || '0.6em') + '"/>'; }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  /* 小さい分母の分数で書けるなら分数で（3 状態の遷移行列用） */
+  function fracStr(v) {
+    if (Math.abs(v) < 1e-15) return '0';
+    for (var q = 1; q <= 400; q++) { var p = Math.round(v * q); if (Math.abs(v - p / q) < 1e-12) return q === 1 ? String(p) : p + '/' + q; }
+    return fmt(v, 5);
+  }
+  var TKINDS = [{ value: 'beta', label: 'Skewed unimodal Beta' }, { value: 'mix', label: 'Bimodal (Gaussian mixture)' }, { value: 'well', label: 'Double well' }];
+  /* 標的のパラメーターの部品（①と②で別々に持つ） */
+  function targetControls(ctl, S, onChange) {
+    var redo = function () { onChange(); };
+    var pills = U.pills({ label: 'Target distribution', options: TKINDS, value: S.kind, onChange: function (v) { S.kind = v; show(); redo(); } });
+    var box = U.el('div', 'tparams');
+    var rA = U.range({ label: 'Beta <i>a</i>', min: LIM.beta[0], max: LIM.beta[1], step: 0.5, value: S.a, fmt: num, onInput: function (v) { S.a = v; redo(); } });
+    var rB = U.range({ label: 'Beta <i>b</i>', min: LIM.beta[0], max: LIM.beta[1], step: 0.5, value: S.b, fmt: num, onInput: function (v) { S.b = v; redo(); } });
+    var rW = U.range({ label: 'Left-peak weight <i>w</i>', min: LIM.mixW[0], max: LIM.mixW[1], step: 0.05, value: S.w, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.w = v; redo(); } });
+    var rD = U.range({ label: 'Peak separation <i>d</i> (each peak has standard deviation 1)', min: LIM.mixD[0], max: LIM.mixD[1], step: 0.1, value: S.d, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.d = v; redo(); } });
+    var rE = U.range({ label: 'Barrier <i>b</i> = <i>E</i><sub>b</sub>/(<i>k</i><sub>B</sub><i>T</i>)', min: LIM.wellB[0], max: LIM.wellB[1], step: 0.25, value: S.bw, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.bw = v; redo(); } });
+    [rA, rB, rW, rD, rE].forEach(function (r) { box.appendChild(r.el); });
+    function show() { rA.el.hidden = rB.el.hidden = S.kind !== 'beta'; rW.el.hidden = rD.el.hidden = S.kind !== 'mix'; rE.el.hidden = S.kind !== 'well'; U.postHeightLater(); }
+    ctl.appendChild(pills.el); ctl.appendChild(box); show();
+    return { pills: pills, rA: rA, rB: rB, rW: rW, rD: rD, rE: rE, show: show };
+  }
+  function paramsOf(S) { return S.kind === 'beta' ? { a: S.a, b: S.b } : S.kind === 'mix' ? { w: S.w, d: S.d } : { b: S.bw }; }
+  var tcache = {};
+  function getTarget(S) {
+    var key = S.kind + JSON.stringify(paramsOf(S));
+    if (!tcache[key]) { var keys = Object.keys(tcache); if (keys.length > 30) tcache = {}; tcache[key] = M.makeTarget(S.kind, paramsOf(S)); }
+    return tcache[key];
+  }
+  function targetText(T) {
+    var p = T.params;
+    if (T.kind === 'beta') return 'Beta(' + num(p.a) + ', ' + num(p.b) + ')';
+    if (T.kind === 'mix') return 'Bimodal (w = ' + fx(p.w, 2) + ', d = ' + fx(p.d, 1) + ')';
+    return 'Double well (b = ' + fx(p.b, 2) + ')';
+  }
+  function targetHTML(T) {
+    var p = T.params;
+    if (T.kind === 'beta') return 'Beta(' + num(p.a) + ', ' + num(p.b) + ')';
+    if (T.kind === 'mix') return 'Bimodal (<i>w</i> = ' + fx(p.w, 2) + ', <i>d</i> = ' + fx(p.d, 1) + ')';
+    return 'Double well (<i>b</i> = ' + fx(p.b, 2) + ')';
+  }
+
+  /* =================================================================
+     ① 近似分布を比べる
+     ================================================================= */
+  function ApproxSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { kind: 'beta', a: 3, b: 9, w: 0.6, d: 6, bw: 3, mode: 'left', init: 'left', man: false, mm: 0.25, ms: 0.12, pick: 'klqp' };
+    var ctl = q('ctlA'), lastKey = '';
+    var redraw = function () { self.update(); };
+    var tc = targetControls(ctl, S, function () { syncManual(true); redraw(); });
+    ctl.appendChild(U.el('hr', 'sep'));
+    var pMode = U.pills({ label: 'Mode for the Laplace approximation', options: [{ value: 'left', label: 'Left mode' }, { value: 'right', label: 'Right mode' }], value: S.mode, onChange: function (v) { S.mode = v; redraw(); } });
+    var pInit = U.pills({ label: 'Initial value for KL(<i>q</i>‖<i>p</i>) minimization', options: [{ value: 'left', label: 'Near the left peak' }, { value: 'right', label: 'Near the right peak' }, { value: 'wide', label: 'Wide, from the center' }], value: S.init, onChange: function (v) { S.init = v; redraw(); } });
+    ctl.appendChild(pMode.el); ctl.appendChild(pInit.el);
+    var modeHint = U.el('span', 'hint', ''); ctl.appendChild(modeHint);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var ckMan = U.check({ label: 'Overlay a manually moved <i>q</i>', checked: false, onChange: function (v) { S.man = v; if (!v && S.pick === 'manual') pPick.set('klqp', true), S.pick = 'klqp'; rM.input.disabled = rS.input.disabled = !v; redraw(); } });
+    var rM = U.range({ label: 'Mean <i>m</i> of the manual <i>q</i>', min: -1, max: 1, step: 0.01, value: S.mm, fmt: function (v) { return fx(v, 3); }, onInput: function (v) { S.mm = v; redraw(); } });
+    var rS = U.range({ label: 'Standard deviation <i>s</i> of the manual <i>q</i>', min: 0.01, max: 1, step: 0.005, value: S.ms, fmt: function (v) { return fx(v, 3); }, onInput: function (v) { S.ms = v; redraw(); } });
+    rM.input.disabled = rS.input.disabled = true;
+    ctl.appendChild(ckMan.el); ctl.appendChild(rM.el); ctl.appendChild(rS.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var pPick = U.pills({ label: '<i>q</i> to put into the formula (see “Putting the current numbers into the formula” below)', options: [{ value: 'laplace', label: 'Laplace' }, { value: 'klqp', label: 'KL(q‖p) min' }, { value: 'klpq', label: 'KL(p‖q) min' }, { value: 'manual', label: 'Manual q' }], value: S.pick, onChange: function (v) { if (v === 'manual' && !S.man) { ckMan.set(true); } S.pick = v; redraw(); } });
+    ctl.appendChild(pPick.el);
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite'); ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', 'Tab ① uses no random numbers (everything is numerical integration on a grid and optimization).'));
+
+    function syncManual(reset) {
+      var T = getTarget(S), r = T.plotRange, sd = Math.sqrt(T.var);
+      if (T.kind === 'beta') { rM.setRange({ min: -0.2, max: 1.2, step: 0.005 }, true); rS.setRange({ min: 0.01, max: 0.6, step: 0.005 }, true); }
+      else { rM.setRange({ min: Math.floor(r[0]), max: Math.ceil(r[1]), step: 0.05 }, true); rS.setRange({ min: 0.05, max: Math.ceil(2 * sd), step: 0.05 }, true); }
+      if (reset) { S.mm = rM.set(T.mean, true) || T.mean; rS.set(0.5 * sd, true); S.mm = rM.get(); S.ms = rS.get(); }
+    }
+    syncManual(true);
+
+    U.legendHTML(q('lgA'), [
+      { label: 'Target <i>p</i>(<i>x</i>) (normalized density)', color: col.ink, width: 2.6 },
+      { label: 'Laplace approximation ▲', color: col.orange, dash: dash.dashed, width: 2.2, shape: 'triangle', kind: 'linemarker' },
+      { label: 'KL(<i>q</i>‖<i>p</i>) minimizer ◆', color: col.green, dash: dash.dashdot, width: 2.4, shape: 'diamond', kind: 'linemarker' },
+      { label: 'KL(<i>p</i>‖<i>q</i>) minimizer ■', color: col.purple, dash: dash.dotted, width: 2.6, shape: 'square', kind: 'linemarker' },
+      { label: 'Manual <i>q</i> ●', color: col.gray, dash: dash.long, width: 2, shape: 'circle', kind: 'linemarker' }]);
+    U.legendHTML(q('lgB'), [
+      { label: 'ln <i>Z</i>', color: col.ink, width: 2 },
+      { label: 'ELBO(<i>q</i>)', color: col.accent, shape: 'circle' },
+      { label: 'Gap = KL(<i>q</i>‖<i>p</i>)', color: col.accent, kind: 'band', hatch: true, alpha: 0.15 }]);
+
+    var cache = { key: null, R: null };
+    function compute(T) {
+      var modeIdx = S.mode === 'right' ? T.modes.length - 1 : 0;
+      var key = S.kind + JSON.stringify(paramsOf(S)) + '|' + modeIdx + '|' + S.init;
+      if (cache.key !== key) { cache.R = M.compareApprox(T, { modeIndex: modeIdx, init: M.klInit(T, S.init) }); cache.key = key; }
+      var R = cache.R;
+      R.manual = S.man ? M.evalQ(T, S.mm, S.ms) : null;
+      return R;
+    }
+    var SPECS = [
+      { key: 'laplace', name: 'Laplace', color: col.orange, dash: dash.dashed, width: 2.2, shape: 'triangle' },
+      { key: 'klqp', name: 'KL(q‖p) min', color: col.green, dash: dash.dashdot, width: 2.4, shape: 'diamond' },
+      { key: 'klpq', name: 'KL(p‖q) min', color: col.purple, dash: dash.dotted, width: 2.6, shape: 'square' },
+      { key: 'manual', name: 'Manual q', color: col.gray, dash: dash.long, width: 2, shape: 'circle' }];
+    function qOf(R, key) {
+      if (key === 'laplace') return R.laplace && R.laplace.m !== undefined ? M.gaussQ(R.laplace.m, R.laplace.s, false) : null;
+      if (key === 'klqp') return M.gaussQ(R.klqp.m, R.klqp.s, R.klqp.trunc);
+      if (key === 'klpq') return M.gaussQ(R.moment.m, R.moment.s, false);
+      if (key === 'manual') return R.manual ? M.gaussQ(R.manual.m, R.manual.s, R.manual.trunc) : null;
+    }
+    /* ELBO・KL(q‖p) の表示用の値（Beta で切断しない q は ∞ と，切断した値） */
+    function entry(R, key) {
+      if (key === 'laplace') return R.laplace; if (key === 'klqp') return R.klqp; if (key === 'klpq') return R.moment; return R.manual;
+    }
+    function elboShown(T, e) { if (!e) return null; if (isFinite(e.elbo)) return { elbo: e.elbo, klqp: e.klqp, trunc: !!e.trunc && T.kind === 'beta' }; if (e.trunc && e.trunc.elbo !== undefined) return { elbo: e.trunc.elbo, klqp: e.trunc.klqp, trunc: true }; return null; }
+
+    function drawA(T, R) {
+      var F = U.fitCanvas(q('cvA'), { aspect: 0.58, minHeight: 250, maxHeight: 430 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 14, b: 40 });
+      var xr = T.plotRange.slice();
+      if (T.kind === 'beta') {
+        [R.laplace, R.moment, R.manual].forEach(function (e) { if (!e || e.m === undefined) return; xr[0] = Math.min(xr[0], e.m - 3 * e.s); xr[1] = Math.max(xr[1], e.m + 3 * e.s); });
+        xr[0] = Math.max(-0.35, xr[0]); xr[1] = Math.min(1.35, xr[1]);
+      }
+      var xs = C.linspace(xr[0], xr[1], 601), py = xs.map(T.pdf), curves = [], ymax = 0;
+      py.forEach(function (v) { if (isFinite(v)) ymax = Math.max(ymax, v); });
+      SPECS.forEach(function (sp) {
+        var qq = qOf(R, sp.key); if (!qq) return;
+        var f = M.qPdf(T, qq), ys = xs.map(f);
+        ys.forEach(function (v) { if (isFinite(v)) ymax = Math.max(ymax, v); });
+        curves.push({ sp: sp, q: qq, ys: ys, f: f });
+      });
+      ymax = ymax * 1.3;
+      var ax = U.axes(c, box, xr, [0, ymax], { xl: 'x (dimensionless)', yl: 'Probability density' });
+      if (T.kind === 'beta') {   /* p = 0 の範囲 */
+        if (xr[0] < 0) U.band(c, ax, [xr[0], 0], [0, 0], [ymax, ymax], { color: col.gray, alpha: 0.08, hatch: true });
+        if (xr[1] > 1) U.band(c, ax, [1, xr[1]], [0, 0], [ymax, ymax], { color: col.gray, alpha: 0.08, hatch: true });
+      }
+      U.band(c, ax, xs, xs.map(function () { return 0; }), py, { color: col.ink, alpha: 0.07 });
+      U.line(c, ax, xs, py, { color: col.ink, width: 2.6 });
+      curves.forEach(function (cv) { U.line(c, ax, xs, cv.ys, { color: cv.sp.color, dash: cv.sp.dash, width: cv.sp.width }); });
+      var L = U.labeler(c, box);
+      if (T.kind === 'beta' && xr[0] < 0) L.add('p = 0', ax.X(xr[0] / 2), box[1] + 12, { color: col.sub, size: 10 });
+      /* 標的の文字はピークの近く */
+      var k = 0; py.forEach(function (v, i) { if (v > py[k]) k = i; });
+      curves.forEach(function (cv) {
+        var mx = cv.q.m, my = cv.f(Math.min(Math.max(mx, xr[0]), xr[1]));
+        if (cv.q.trunc && T.kind === 'beta' && !(mx > 0 && mx < 1)) { mx = Math.min(Math.max(mx, 0.01), 0.99); my = cv.f(mx); }
+        U.marker(c, ax.X(mx), ax.Y(my), cv.sp.shape, 10, cv.sp.color, true);
+        L.block(ax.X(mx) - 7, ax.Y(my) - 7, ax.X(mx) + 7, ax.Y(my) + 7);
+      });
+      L.add('p(x)', ax.X(xs[k]) + 6, ax.Y(py[k]) - 12, { color: col.ink, bold: true, size: 11.5 });
+      /* 曲線の脇の文字：Laplace と手で動かす q は左の肩，KL の 2 つは右の肩（高さ 0.55 倍の所）に，外側へ寄せて置く */
+      curves.forEach(function (cv, i) {
+        var side = (cv.sp.key === 'laplace' || cv.sp.key === 'manual') ? -1 : 1, frac = cv.sp.key === 'klpq' ? 0.35 : 0.6;
+        var xx = cv.q.m + side * cv.q.s * Math.sqrt(-2 * Math.log(frac));
+        xx = Math.min(Math.max(xx, xr[0] + 0.02 * (xr[1] - xr[0])), xr[1] - 0.02 * (xr[1] - xr[0]));
+        var yy = cv.f(xx); if (!(yy > 0)) yy = cv.f(cv.q.m) * frac;
+        L.add(cv.sp.name, ax.X(xx) + side * 10, ax.Y(yy), { color: cv.sp.color, size: 10.5, bold: true, align: side < 0 ? 'right' : 'left', dy: [0, -14, 14, -28, 28, -42, 42] });
+      });
+      U.setCanvasLabel(q('cvA'), 'Target ' + targetText(T) + ' density and approximations. ' + curves.map(function (cv) { return cv.sp.name + ': mean ' + fx(cv.q.m, 3) + ', standard deviation ' + fx(cv.q.s, 3); }).join('. ') + '.');
+      q('capA').innerHTML = 'Horizontal axis: <i>x</i> (dimensionless); vertical axis: probability density. Target ' + targetHTML(T) + ' (normalized by numerical integration on a 4001-point grid). ' + (T.kind === 'beta' ? 'The hatched region is where <i>p</i> = 0 (outside 0 &lt; <i>x</i> &lt; 1). The <i>q</i> that minimizes KL(<i>q</i>‖<i>p</i>) is a Gaussian truncated to 0 &lt; <i>x</i> &lt; 1 and renormalized (for an untruncated Gaussian, KL(<i>q</i>‖<i>p</i>) = ∞). ' : '') + 'Each marker is at the center <i>m</i> of the corresponding <i>q</i>.';
+    }
+    function drawB(T, R) {
+      var rows = [];
+      SPECS.forEach(function (sp) { var e = entry(R, sp.key); if (!e || (sp.key === 'laplace' && e.ok === false)) return; var v = elboShown(T, e); rows.push({ sp: sp, v: v }); });
+      var F = U.fitCanvas(q('cvB'), { aspect: 0.36, minHeight: 170, maxHeight: 250 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 96, r: 14, t: 22, b: 38 });
+      var lo = T.lnZ, hi = T.lnZ;
+      rows.forEach(function (r) { if (r.v) lo = Math.min(lo, r.v.elbo); });
+      var span = Math.max(hi - lo, 0.02);
+      var xr = [lo - 0.12 * span, hi + (F.W < 500 ? 0.75 : 0.5) * span];
+      var ax = U.axes(c, box, xr, [rows.length + 0.4, 0.4], { xl: 'Value (nat)', yticks: [], grid: true, nx: 4 });
+      var L = U.labeler(c, box);
+      rows.forEach(function (r, i) {
+        var y = i + 1, Y = ax.Y(y);
+        U.label(c, r.sp.name, box[0] - 6, Y, { size: 10.5, color: r.sp.color, align: 'right', bold: true, halo: false });
+        if (!r.v) { U.label(c, 'ELBO = −∞ (q puts probability where p = 0)', box[0] + 6, Y, { size: 10, color: col.sub, align: 'left' }); return; }
+        U.band(c, ax, [r.v.elbo, T.lnZ], [y - 0.28, y - 0.28], [y + 0.28, y + 0.28], { color: r.sp.color, alpha: 0.15, hatch: true });
+        U.marker(c, ax.X(r.v.elbo), Y, 'circle', 10, r.sp.color, true);
+        U.label(c, 'KL ' + fmt(r.v.klqp, 3), ax.X(T.lnZ) + 6, Y, { size: 10, color: r.sp.color, align: 'left' });
+      });
+      U.vline(c, ax, T.lnZ, { color: col.ink, width: 2 });
+      U.label(c, 'ln Z = ' + fmt(T.lnZ, 5), ax.X(T.lnZ), box[1] - 9, { size: 10.5, color: col.ink, bold: true });
+      U.setCanvasLabel(q('cvB'), 'Comparison of the ELBO and ln Z. ln Z = ' + fmt(T.lnZ, 5) + '. ' + rows.map(function (r) { return r.sp.name + ' ELBO ' + (r.v ? fmt(r.v.elbo, 5) + ', gap ' + fmt(r.v.klqp, 4) : '−∞'); }).join('. ') + '.');
+    }
+    function cell(v) { return v === Infinity ? '<td class="inf">∞ *</td>' : v === -Infinity ? '<td class="inf">−∞ *</td>' : '<td>' + f4(v) + '</td>'; }
+    function readout(T, R) {
+      var cols = [{ h: '<i>p</i> (true)' }, { h: 'Laplace', e: R.laplace.ok === false ? null : R.laplace }, { h: 'KL(<i>q</i>‖<i>p</i>)<br>min', e: R.klqp }, { h: 'KL(<i>p</i>‖<i>q</i>)<br>min', e: R.moment }];
+      if (R.manual) cols.push({ h: 'Manual<br><i>q</i>', e: R.manual });
+      var h = '<table class="grid cmp"><thead><tr><th>Quantity</th>' + cols.map(function (c) { return '<th>' + c.h + '</th>'; }).join('') + '</tr></thead><tbody>';
+      function meanOf(e) { return e.trunc && T.kind === 'beta' && e.qMean !== undefined ? e.qMean : e.m; }
+      function varOf(e) { return e.trunc && T.kind === 'beta' && e.qVar !== undefined ? e.qVar : e.var; }
+      h += '<tr><td>Mean</td><td>' + f4(T.mean) + '</td>' + cols.slice(1).map(function (c) { return c.e ? '<td>' + f4(meanOf(c.e)) + '</td>' : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>Variance</td><td>' + f4(T.var) + '</td>' + cols.slice(1).map(function (c) { return c.e ? '<td>' + f4(varOf(c.e)) + '</td>' : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>KL(<i>q</i>‖<i>p</i>)</td><td>0</td>' + cols.slice(1).map(function (c) { return c.e ? cell(c.e.klqp) : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>KL(<i>p</i>‖<i>q</i>)</td><td>0</td>' + cols.slice(1).map(function (c) { return c.e ? cell(c.e.klpq) : '<td>—</td>'; }).join('') + '</tr>';
+      h += '<tr><td>ELBO<br>(for <i>p</i>: ln <i>Z</i>)</td><td>' + f4(T.lnZ) + '</td>' + cols.slice(1).map(function (c) { return c.e ? cell(c.e.elbo) : '<td>—</td>'; }).join('') + '</tr>';
+      h += '</tbody></table>';
+      q('cmp').innerHTML = h;
+      var notes = [];
+      if (T.kind === 'beta') {
+        [['Laplace', R.laplace], ['KL(p‖q) min', R.moment], ['Manual q', R.manual]].forEach(function (a) {
+          var e = a[1]; if (!e || e.ok === false) return;
+          if (e.klqp === Infinity) notes.push('* ' + a[0] + ': q puts probability ' + fmt(e.outside, 3) + ' outside 0 < x < 1, so KL(q‖p) = ∞ and ELBO = −∞. Truncated to 0 < x < 1 and renormalized, KL(q‖p) = ' + fmt(e.trunc.klqp, 4) + ', ELBO = ' + fmt(e.trunc.elbo, 5) + '.');
+        });
+        notes.push('The KL(q‖p) minimizer and the manual q are Gaussians truncated to 0 < x < 1 (the mean and variance are the values after truncation; before truncation, m = ' + fmt(R.klqp.m, 4) + ', s = ' + fmt(R.klqp.s, 4) + ').');
+      }
+      if (!R.klqp.converged) notes.push('The Nelder–Mead method did not converge within the upper limit of ' + LIM.nmIter + ' iterations.');
+      U.status(q('cmpNote'), notes.join(' '), notes.length ? '' : '');
+    }
+    function eq(T, R) {
+      var rows = [];
+      var e = entry(R, S.pick);
+      if (S.pick === 'laplace' && R.laplace.ok === false) e = null;
+      var name = { laplace: 'Laplace approximation', klqp: 'the q minimizing KL(q‖p)', klpq: 'the q minimizing KL(p‖q)', manual: 'manual q' }[S.pick];
+      rows.push(row(mt('Target ' + targetText(T) + ': ') + BR + mi('ln') + mi('Z') + mo('=') + mi('ln') + '<mo>∫</mo>' + ptl() + par(mi('x')) + '<mi mathvariant="normal">d</mi>' + mi('x') + mo('=') + mnum(U.mn(f5(T.lnZ)))));
+      if (e) {
+        var sh = elboShown(T, e), truncTxt = (sh && sh.trunc) ? '(truncated to 0 < x < 1)' : '';
+        rows.push(row(mt('q in the formula: ' + name) + (truncTxt ? BR + mt(truncTxt) : '') + BR + mi('q') + mo('=') + '<mi>𝒩</mi>' + par(mi('x') + mo('∣') + mnum(U.mn(f5(e.m))) + mo(',') + '<msup>' + mnum(U.mn(f5(e.s))) + mnum(2) + '</msup>')));
+        if (sh) {
+          var Elp = isFinite(e.elbo) ? e.Elp : e.trunc.Elp, H = isFinite(e.elbo) ? e.H : e.trunc.H;
+          rows.push(row(mi('ELBO') + par(mi('q')) + mo('=') + '<msub><mi>𝔼</mi><mi>q</mi></msub>' + mo('[') + mi('ln') + ptl() + par(mi('x')) + mo(']') + mo('+') + mi('H') + mo('[') + mi('q') + mo(']') + BR + mo('=') + par(mnum(U.mn(f5(Elp)))) + mo('+') + par(mnum(U.mn(f5(H)))) + mo('=') + mnum(U.mn(f5(sh.elbo)))));
+          rows.push(row(KL('q', 'p') + mo('=') + '<mo>∫</mo>' + mi('q') + mi('ln') + frac(mi('q'), mi('p')) + '<mi mathvariant="normal">d</mi>' + mi('x') + mo('=') + mnum(U.mn(f5(sh.klqp))) + sp() + mt('(≥ 0)')));
+          rows.push(row(mi('ELBO') + mo('+') + KL('q', 'p') + BR + mo('=') + mnum(U.mn(f5(sh.elbo))) + mo('+') + mnum(U.mn(f5(sh.klqp))) + mo('=') + mnum(U.mn(f5(sh.elbo + sh.klqp))) + mo('=') + mi('ln') + mi('Z') + BR + mt('(ELBO ≤ ln Z)')));
+        } else rows.push(row(mi('ELBO') + mo('=') + mo('−') + mi('∞') + mo(',') + sp('0.3em') + KL('q', 'p') + mo('=') + mi('∞') + sp() + mt('(q puts probability where p = 0)')));
+        rows.push(row(KL('p', 'q') + mo('=') + '<mo>∫</mo>' + mi('p') + mi('ln') + frac(mi('p'), mi('q')) + '<mi mathvariant="normal">d</mi>' + mi('x') + mo('=') + mnum(U.mn(f5(e.klpq))) + BR + mt(S.pick === 'klpq' ? '(minimized by m = 𝔼_p[x], s² = Var_p[x])' : '')));
+      } else rows.push(row(mt('Laplace approximation: ' + R.laplace.reason)));
+      if (R.laplace.ok !== false) {
+        var Lp = R.laplace, A, LAM = '<mi mathvariant="normal">Λ</mi>';
+        if (T.kind === 'beta') {
+          var a = T.params.a, b = T.params.b, x = Lp.mode;
+          A = mo('=') + frac(mnum(num(a - 1)), '<msup>' + mnum(U.mn(f5(x))) + mnum(2) + '</msup>') + mo('+') + frac(mnum(num(b - 1)), '<msup><mrow>' + par(mnum(1) + mo('−') + mnum(U.mn(f5(x)))) + '</mrow>' + mnum(2) + '</msup>') + mo('=') + mnum(U.mn(f5(Lp.A)));
+          rows.push(row(mt('Laplace: ') + BR + mt('mode ') + '<msup><mi>x</mi><mo>*</mo></msup>' + mo('=') + frac(mi('a') + mo('−') + mnum(1), mi('a') + mo('+') + mi('b') + mo('−') + mnum(2)) + mo('=') + mnum(U.mn(f5(x))) + mo(',') + BR + LAM + A));
+        } else rows.push(row(mt('Laplace: ') + BR + mt('mode ') + '<msup><mi>x</mi><mo>*</mo></msup>' + mo('=') + mnum(U.mn(f5(Lp.mode))) + mo(',') + BR + LAM + mo('=') + mo('−') + '<msup><mrow>' + par(mi('ln') + ptl()) + '</mrow>' + mo('″') + '</msup>' + par('<msup><mi>x</mi><mo>*</mo></msup>') + mo('=') + mnum(U.mn(f5(Lp.A)))));
+        rows.push(row(mi('q') + mo('=') + '<mi>𝒩</mi>' + par(mi('x') + mo('∣') + mnum(U.mn(f5(Lp.mode))) + mo(',') + sp('0.2em') + '<msup>' + LAM + '<mrow><mo>−</mo><mn>1</mn></mrow></msup>' + mo('=') + mnum(U.mn(f5(Lp.var))))));
+        rows.push(row(mi('ln') + mi('Z') + mo('≈') + mi('ln') + ptl() + par('<msup><mi>x</mi><mo>*</mo></msup>') + mo('+') + frac(mnum(1), mnum(2)) + mi('ln') + frac(mnum(2) + mi('π'), LAM) + BR + mo('=') + mnum(U.mn(f5(Lp.lpMode))) + mo('+') + frac(mnum(1), mnum(2)) + mi('ln') + frac(mnum(2) + mi('π'), mnum(U.mn(f5(Lp.A)))) + mo('=') + mnum(U.mn(f5(Lp.lnZL))) + sp() + BR + mt('(true ln Z = ' + U.mn(f5(T.lnZ)) + ')')));
+      }
+      q('eqA').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        var T = getTarget(S);
+        if (!C.allFinite([T.lnZ, T.mean, T.var])) { U.status(msg, 'Computation stopped: NaN or infinity appeared in the normalization constant or the mean. Change the parameters.', 'warn'); return; }
+        var R = compute(T);
+        if (!C.allFinite([R.klqp.m, R.klqp.s, R.moment.klpq])) { U.status(msg, 'Computation stopped: NaN appeared in the approximation.', 'warn'); return; }
+        U.status(msg, '');
+        modeHint.textContent = T.modes.length > 1 ? 'There are ' + T.modes.length + ' modes (x = ' + T.modes.map(function (m) { return fx(m.x, 3); }).map(U.mn).join(', ') + ').' : 'There is 1 mode (x = ' + U.mn(fx(T.modes[0] ? T.modes[0].x : NaN, 3)) + '), so choosing left or right gives the same result.';
+        drawA(T, R); drawB(T, R); readout(T, R); eq(T, R);
+      },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② Metropolis–Hastings 法
+     ================================================================= */
+  function MHSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { kind: 'well', a: 3, b: 9, w: 0.6, d: 6, bw: 2, s: 0.3, K: 4, init: 'spread', burn: 0.1, seed: DEFAULT_SEED, speed: 10 };
+    var ctl = q('ctlM'), st = null, T = null, diag = null, lastDiagT = 0;
+    var CH = [{ color: col.accent, dash: dash.solid, shape: 'circle' }, { color: col.orange, dash: dash.dashed, shape: 'square' }, { color: col.green, dash: dash.dotted, shape: 'triangle' }, { color: col.purple, dash: dash.dashdot, shape: 'diamond' }];
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    function restart(text) { run.reset(); U.status(msg, text || '', ''); }
+    var tc = targetControls(ctl, S, function () { restart('The conditions changed, so the run was restarted from the beginning with the same seed.'); });
+    var rS = U.range({ label: 'Proposal width <i>s</i> (<i>x</i>′ = <i>x</i> + <i>s</i><i>ε</i>)', min: LIM.s[0], max: LIM.s[1], value: S.s, log: true, step: 0.001, fmt: function (v) { return fmt(v, 3); }, onInput: function (v) { S.s = v; restart('The proposal width changed, so the run was restarted from the beginning with the same seed.'); } });
+    var pK = U.pills({ label: 'Number of chains', options: [1, 2, 3, 4].map(function (k) { return { value: k, label: k + ' chains' }; }), value: S.K, onChange: function (v) { S.K = +v; restart(''); } });
+    var pI = U.pills({ label: 'Initial values', options: [{ value: 'spread', label: 'Spread' }, { value: 'same', label: 'All at the same point' }], value: S.init, onChange: function (v) { S.init = v; restart(''); } });
+    var pB = U.pills({ label: 'Discarded initial samples (burn-in)', options: [{ value: 0, label: '0 %' }, { value: 0.1, label: '10 %' }, { value: 0.25, label: '25 %' }, { value: 0.5, label: '50 %' }], value: S.burn, onChange: function (v) { S.burn = +v; diag = null; self.update(); } });
+    ctl.appendChild(U.el('hr', 'sep'));
+    [rS, pK, pI, pB].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(U.el('hr', 'sep'));
+    var run = U.runner({
+      maxSteps: LIM.maxSteps,
+      isVisible: function () { return !panel.hidden; },
+      step: function () { var n = st.chains[0].n; var k = Math.min(run.isRunning() ? S.speed : 1, LIM.maxSteps - n); for (var i = 0; i < k; i++) M.mhStep(st, T, S.s); run.setSteps(st.chains[0].n - 1); return st.chains[0].n < LIM.maxSteps && finiteState(); },
+      stepsPerFrame: 1,
+      reset: function () { init(); },
+      draw: function () { run.setSteps(st.chains[0].n); self.update(); }
+    });
+    function finiteState() { return st.chains.every(function (c) { return isFinite(c.x); }); }
+    var b100 = U.button('Advance 100 steps', function () { advance(100); });
+    var b1000 = U.button('Advance 1000 steps', function () { advance(1000); });
+    function advance(k) {
+      run.stop();
+      var n = st.chains[0].n, m = Math.min(k, LIM.maxSteps - n);
+      if (m <= 0) { U.status(run.status, 'The upper limit of ' + U.fmtInt(LIM.maxSteps) + ' steps for one chain has been reached. Use “Start over” to begin again.', 'warn'); return; }
+      for (var i = 0; i < m; i++) M.mhStep(st, T, S.s);
+      run.setSteps(st.chains[0].n); diag = null;
+      U.status(run.status, m + ' steps advanced (each chain is at ' + U.fmtInt(st.chains[0].n) + ' steps). ' + (m < k ? 'The upper limit was reached.' : ''), m < k ? 'warn' : '');
+      self.update();
+    }
+    var pSpeed = U.pills({ label: 'Speed of “Run” (steps per frame)', options: [{ value: 1, label: '1' }, { value: 10, label: '10' }, { value: 100, label: '100' }], value: S.speed, onChange: function (v) { S.speed = +v; } });
+    ctl.appendChild(U.el('div', 'ctlhead', 'Advance the chains (up to ' + U.fmtInt(LIM.maxSteps) + ' steps per chain)'));
+    ctl.appendChild(run.el); ctl.appendChild(U.buttonRow([b100, b1000])); ctl.appendChild(pSpeed.el);
+    var bPreset = U.button('Barrier example (b = 12)', function () { preset(); }, { title: 'Advances 2000 steps with double well b = 12, s = 0.3, four chains, spread initial values, the default seed, and burn-in 10 %' });
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', 'Example from Chapter 21, Section 21.10'));
+    ctl.appendChild(U.buttonRow([bPreset]));
+    ctl.appendChild(U.el('span', 'hint', 'Sets double well <i>b</i> = 12, <i>s</i> = 0.3, four chains, spread initial values, seed ' + DEFAULT_SEED + ', and burn-in 10 %, then advances 2000 steps.'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; restart('seed ' + s + ' restarted from the beginning.'); } });
+    ctl.appendChild(seed.el); ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', 'Changing the target, proposal width, number of chains, initial values, or seed restarts the chains from the beginning. The burn-in fraction only changes which samples are discarded.'));
+    function preset() {
+      S.kind = 'well'; tc.pills.set('well', true); tc.show(); S.bw = 12; tc.rE.set(12, true);
+      S.s = 0.3; rS.set(0.3, true); S.K = 4; pK.set(4, true); S.init = 'spread'; pI.set('spread', true); S.burn = 0.1; pB.set(0.1, true);
+      S.seed = DEFAULT_SEED; seed.set(DEFAULT_SEED, true);
+      run.reset(); advance(2000);
+      U.status(msg, 'Barrier example: b = 12, s = 0.3, 4 chains, spread initial values, seed ' + DEFAULT_SEED + ', 2000 steps.', '');
+    }
+
+    function init() { T = getTarget(S); st = M.mhInit(T, { K: S.K, seed: S.seed, s: S.s, init: S.init }); diag = null; }
+    init();
+
+    U.legendHTML(q('lgH'), [
+      { label: 'Histogram of the samples (all chains, after burn-in)', color: col.accent, kind: 'band', alpha: 0.3 },
+      { label: 'True density <i>p</i>(<i>x</i>) (normalized by numerical integration)', color: col.ink, width: 2.4 }]);
+    function chainLegend(el) {
+      U.legendHTML(el, st.chains.map(function (c, k) { return { label: 'Chain ' + (k + 1) + (el === q('lgT') ? ' (initial value ' + U.mn(fx(st.x0[k], 3)) + ')' : ''), color: CH[k].color, dash: CH[k].dash, width: 2, shape: CH[k].shape, kind: 'linemarker' }; }).concat(el === q('lgT') ? [{ label: 'Discarded initial samples (burn-in)', color: col.gray, kind: 'band', hatch: true, alpha: 0.12 }] : []));
+    }
+
+    function getDiag() {
+      var now = performance.now();
+      if (!diag || !run.isRunning() || now - lastDiagT > 300) { diag = M.diagnostics(st, S.burn, { maxLag: 200 }); lastDiagT = now; }
+      return diag;
+    }
+    function drawH(D) {
+      var F = U.fitCanvas(q('cvH'), { aspect: 0.5, minHeight: 220, maxHeight: 360 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 14, b: 40 });
+      var xr = T.plotRange, xs = C.linspace(xr[0], xr[1], 400), py = xs.map(T.pdf);
+      var bins = 50, H = D.all.length ? C.histogram(D.all, { bins: bins, range: xr }) : null;
+      var ymax = 0; py.forEach(function (v) { ymax = Math.max(ymax, v); }); if (H) H.density.forEach(function (v) { ymax = Math.max(ymax, v); });
+      ymax *= 1.25;
+      var ax = U.axes(c, box, xr, [0, ymax], { xl: 'x (dimensionless)', yl: 'Probability density' });
+      if (H) {
+        c.save(); c.fillStyle = 'rgba(15,76,129,.28)'; c.strokeStyle = 'rgba(15,76,129,.75)'; c.lineWidth = 1;
+        for (var i = 0; i < bins; i++) { var X0 = ax.X(H.edges[i]), X1 = ax.X(H.edges[i + 1]), Y = ax.Y(H.density[i]); c.fillRect(X0, Y, X1 - X0, ax.Y(0) - Y); c.strokeRect(X0 + 0.5, Y + 0.5, X1 - X0 - 1, ax.Y(0) - Y); }
+        c.restore();
+      }
+      U.line(c, ax, xs, py, { color: col.ink, width: 2.4 });
+      var L = U.labeler(c, box), k = 0; py.forEach(function (v, i) { if (v > py[k]) k = i; });
+      L.add('True p(x)', ax.X(xs[k]) + 8, ax.Y(py[k]) - 12, { color: col.ink, bold: true, size: 11 });
+      if (!D.all.length) U.text(c, ax, (xr[0] + xr[1]) / 2, ymax * 0.6, 'Press “Run” or “Advance 1000 steps” to collect samples', { color: col.sub, size: 11 });
+      var out = H ? H.outside : 0;
+      q('capH').innerHTML = 'Target ' + targetHTML(T) + '. Samples: ' + U.fmtInt(D.all.length) + ' (' + st.K + ' chains × ' + U.fmtInt(D.per[0] ? D.per[0].n : 0) + '; burn-in ' + Math.round(S.burn * 100) + ' % excluded), ' + bins + ' bins. ' + (out ? 'Samples outside the plotted range: ' + out + '. ' : '') + 'Proposal width <i>s</i> = ' + fmt(S.s, 3) + ', seed ' + S.seed + '. The vertical axis is (count in a bin) ÷ (number of samples × bin width), so that it can be compared with the density.';
+      U.setCanvasLabel(q('cvH'), 'Histogram and true density. Samples: ' + D.all.length + '. ' + (D.pooled ? 'Sample mean ' + fx(D.pooled.mean, 3) + ', true mean ' + fx(T.mean, 3) + '.' : ''));
+    }
+    function drawT(D) {
+      var F = U.fitCanvas(q('cvT'), { aspect: 0.45, minHeight: 200, maxHeight: 320 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 46, t: 12, b: 40 });
+      var n = st.chains[0].n, xr = [0, Math.max(100, n)], yr = T.plotRange;
+      var ax = U.axes(c, box, xr, yr, { xl: 'Step', yl: 'x' });
+      var nb = D.per[0] ? D.per[0].burned : 0;
+      if (nb > 0) U.band(c, ax, [0, nb], [yr[0], yr[0]], [yr[1], yr[1]], { color: col.gray, alpha: 0.12, hatch: true });
+      var stride = Math.max(1, Math.floor(n / 4000));
+      st.chains.forEach(function (ch, k) {
+        var xs = [], ys = [];
+        for (var i = 0; i < ch.xs.length; i += stride) { xs.push(i); ys.push(ch.xs[i]); }
+        if ((ch.xs.length - 1) % stride) { xs.push(ch.xs.length - 1); ys.push(ch.xs[ch.xs.length - 1]); }
+        U.line(c, ax, xs, ys, { color: CH[k].color, dash: CH[k].dash, width: st.K > 2 ? 1.3 : 1.6 });
+        U.marker(c, ax.X(0), ax.Y(ch.xs[0]), CH[k].shape, 9, CH[k].color, false);
+      });
+      var L = U.labeler(c, [box[0], box[1], box[2] + 44, box[3]]);
+      st.chains.forEach(function (ch, k) { var y = ch.xs[ch.xs.length - 1]; U.marker(c, box[2] + 8, ax.Y(y), CH[k].shape, 9, CH[k].color, true); L.add(String(k + 1), box[2] + 22, ax.Y(y), { color: CH[k].color, bold: true, size: 11, dy: [0, -12, 12, -24, 24] }); });
+      if (nb > 0) L.add('burn-in', ax.X(nb / 2), box[1] + 10, { color: col.sub, size: 10 });
+      if (n === 0) U.text(c, ax, xr[1] / 2, (yr[0] + yr[1]) / 2, 'Only the initial values (open markers) so far', { color: col.sub, size: 11 });
+      q('capT').innerHTML = 'The horizontal axis is the step (0 is the initial value, shown by an open marker) and the vertical axis is <i>x</i> (dimensionless). The filled marker and number at the right edge show the current position of each chain. ' + (stride > 1 ? 'Plotted every ' + stride + ' steps. ' : '') + 'The hatched range is the initial samples discarded as burn-in.';
+      U.setCanvasLabel(q('cvT'), 'Trace plot. ' + st.K + ' chains, ' + n + ' steps each. ' + st.chains.map(function (ch, k) { return 'chain ' + (k + 1) + ' is now at ' + fx(ch.x, 3); }).join(', ') + '.');
+    }
+    function drawR(D) {
+      var F = U.fitCanvas(q('cvR'), { aspect: 0.4, minHeight: 180, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 12, b: 40 });
+      var Lmax = 10; D.per.forEach(function (p) { if (p.rho) Lmax = Math.max(Lmax, p.rho.length - 1); });
+      var ymin = -0.3; D.per.forEach(function (p) { if (p.rho) p.rho.forEach(function (v) { if (v < ymin) ymin = v; }); }); ymin = Math.max(-1, Math.floor((ymin - 0.05) * 10) / 10);
+      var ax = U.axes(c, box, [0, Lmax], [ymin, 1.05], { xl: 'Lag k (steps)', yl: 'Autocorrelation ρ' });
+      var any = false;
+      D.per.forEach(function (p, k) {
+        if (!p.rho) return; any = true;
+        var ks = p.rho.map(function (_, i) { return i; });
+        U.line(c, ax, ks, p.rho, { color: CH[k].color, dash: CH[k].dash, width: 1.8 });
+        if (p.window <= Lmax) U.marker(c, ax.X(p.window), ax.Y(p.rho[p.window] !== undefined ? p.rho[p.window] : 0), CH[k].shape, 9, CH[k].color, true);
+      });
+      if (!any) U.text(c, ax, Lmax / 2, 0.5, 'Drawn once 4 or more samples have accumulated', { color: col.sub, size: 11 });
+      U.setCanvasLabel(q('cvR'), 'Autocorrelation function. ' + D.per.map(function (p, k) { return 'Chain ' + (k + 1) + ' integrated autocorrelation time ' + (p.tau ? fx(p.tau, 2) : '—'); }).join(', ') + '.');
+    }
+    function readout(D) {
+      var h = '<div class="tablewrap"><table class="grid chains"><thead><tr><th>Chain</th><th>Accept.<br>rate</th><th>Mean</th><th><i>τ</i><sub>int</sub></th><th>Eff.<br>samples</th></tr></thead><tbody>';
+      D.per.forEach(function (p, k) {
+        h += '<tr><td>' + (k + 1) + '</td><td>' + (p.accRate === null ? '—' : fmt(p.accRate, 3)) + '</td><td>' + (p.mean === null ? '—' : U.mn(fx(p.mean, 3))) + '</td><td>' + (p.tau ? fmt(p.tau, 3) + (p.ok ? '' : ' *') : '—') + '</td><td>' + (p.ess ? fmt(p.ess, 3) : '—') + '</td></tr>';
+      });
+      h += '</tbody></table></div>';
+      var P = D.pooled, R = D.rhat;
+      h += kv([
+        ['Steps per chain', U.fmtInt(st.chains[0].n) + ' (excluding burn-in ' + U.fmtInt(D.per[0] ? D.per[0].burned : 0) + ')'],
+        ['Mean over all chains ± MCSE', P ? U.mn(fx(P.mean, 4)) + (P.mcse ? ' ± ' + fmt(P.mcse, 2) : '') : '—'],
+        ['True mean 𝔼<sub><i>p</i></sub>[<i>x</i>]', U.mn(fx(T.mean, 4))],
+        ['Variance over all chains (true value)', P ? fx(P.var, 4) + ' (' + fx(T.var, 4) + ')' : '—'],
+        ['Total effective sample size', P && P.ess ? fmt(P.ess, 4) : '—'],
+        ['<i>R̂</i> (split)', st.K < 2 ? 'Not shown for a single chain' : (R && R.rhat ? fx(R.rhat, 3) : '—')]]);
+      q('readM').innerHTML = h;
+      var notes = [];
+      if (D.per.some(function (p) { return p.tau && !p.ok; })) notes.push('* The truncation k_c reached half the series length (the series is too short). The integrated autocorrelation time and the effective sample size may be underestimated.');
+      if (R && R.rhat && R.rhat > 1.01) notes.push('R̂ = ' + fx(R.rhat, 3) + ' > 1.01: the chains may not be looking at the same distribution.');
+      if (R && R.rhat === null && R.reason) notes.push(R.reason);
+      U.status(q('diagNote'), notes.join(' '), notes.length ? 'warn' : '');
+    }
+    function eq(D) {
+      var rows = [], c1 = st.chains[0], Ls = c1.last;
+      if (Ls) {
+        var ok = Ls.accepted;
+        rows.push(row(mt('The most recent step of chain 1: ') + BR + mi('x') + mo('=') + mnum(U.mn(f5(Ls.x))) + mo(',') + sp('0.4em') + '<msup><mi>x</mi><mo>′</mo></msup>' + mo('=') + mi('x') + mo('+') + mi('s') + mi('ε') + mo('=') + mnum(U.mn(f5(Ls.xp)))));
+        var lnr = isFinite(Ls.lpp) ? '<mi>exp</mi>' + mo('[') + par(mnum(U.mn(f5(Ls.lpp)))) + mo('−') + par(mnum(U.mn(f5(Ls.lp)))) + mo(']') : mnum(0) + sp('0.3em') + mt('(x′ is where p̃ = 0)');
+        rows.push(row(mi('r') + mo('=') + frac(ptl() + par('<msup><mi>x</mi><mo>′</mo></msup>'), ptl() + par(mi('x'))) + BR + mo('=') + lnr + (isFinite(Ls.lpp) ? mo('=') + mnum(U.mn(f5(Ls.r))) : '') + BR + mi('min') + par(mnum(1) + mo(',') + mi('r')) + mo('=') + mnum(U.mn(f5(Ls.acc)))));
+        rows.push(row(mi('u') + mo('=') + mnum(f5(Ls.u)) + sp('0.4em') + (ok ? mo('&lt;') : mo('≥')) + sp('0.4em') + mnum(U.mn(f5(Ls.acc))) + BR + mt(ok ? '→ accept (x ← x′)' : '→ reject (x stays; the same value is counted once more)')));
+      } else rows.push(row(mt('No step has been taken yet.')));
+      var p = D.per[0], TAUI = '<msub><mi>τ</mi><mi>int</mi></msub>';
+      if (p && p.tau) {
+        var s2 = 0; for (var k = 1; k <= p.window && p.rho && k < p.rho.length; k++) s2 += p.rho[k];
+        rows.push(row(mt('Chain 1: ') + BR + TAUI + mo('=') + mnum(1) + mo('+') + mnum(2) + '<munderover><mo>∑</mo><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow><mrow><msub><mi>k</mi><mi mathvariant="normal">c</mi></msub><mo>=</mo><mn>' + p.window + '</mn></mrow></munderover><msub><mi>ρ</mi><mi>k</mi></msub>' + BR + mo('=') + mnum(1) + mo('+') + mnum(2) + mo('×') + par(mnum(U.mn(f5((p.tau - 1) / 2)))) + mo('=') + mnum(f5(p.tau)) + (p.ok ? '' : sp() + mt('(series too short)'))));
+        rows.push(row('<msub><mi>S</mi><mi>eff</mi></msub>' + mo('=') + frac(mi('S'), TAUI) + mo('=') + frac(mnum(p.n), mnum(f5(p.tau))) + mo('=') + mnum(fmt(p.ess, 4)) + sp() + mt('(acceptance rate ' + fmt(p.accRate, 3) + ')')));
+      }
+      var R = D.rhat;
+      if (st.K >= 2 && R && R.rhat) {
+        rows.push(row('<mover><mi>R</mi><mo>^</mo></mover>' + mo('=') + '<msqrt>' + frac(frac(mi('n') + mo('−') + mnum(1), mi('n')) + mi('W') + mo('+') + frac(mi('B'), mi('n')), mi('W')) + '</msqrt>' + BR + mo('=') + '<msqrt>' + frac(frac(mnum(R.n - 1), mnum(R.n)) + mo('×') + mnum(fmt(R.W, 4)) + mo('+') + frac(mnum(fmt(R.B, 4)), mnum(R.n)), mnum(fmt(R.W, 4))) + '</msqrt>' + mo('=') + mnum(fx(R.rhat, 3)) + BR + mt('(split into M = ' + R.M + ' sequences)')));
+      } else if (st.K < 2) rows.push(row(mt('R̂ is computed only when there are two or more chains.')));
+      q('eqM').innerHTML = table(rows);
+    }
+    var self = {
+      update: function () {
+        if (!st || T !== getTarget(S)) init();
+        if (!finiteState()) { run.stop(); U.status(msg, 'Computation stopped: NaN or infinity appeared in a chain value. Reduce the proposal width and start over.', 'warn'); return; }
+        var D = getDiag();
+        chainLegend(q('lgT')); chainLegend(q('lgR'));
+        drawH(D); drawT(D); drawR(D); readout(D); eq(D);
+      },
+      hide: function () { run.stop(); },
+      state: S
+    };
+    /* ---- 3 状態の離散分布（第21章 21.7） ---- */
+    var tb = q('threeBody'), P3 = [2, 3, 5];
+    tb.innerHTML = '<p class="hint" style="margin:6px 0">Enter the unnormalized weights <i>p̃</i> = (<i>p̃</i><sub>1</sub>, <i>p̃</i><sub>2</sub>, <i>p̃</i><sub>3</sub>). The proposal is “each of the two states other than the current one with probability 1/2” (symmetric). The normalization constant <i>Z</i> = <i>p̃</i><sub>1</sub> + <i>p̃</i><sub>2</sub> + <i>p̃</i><sub>3</sub> is not used to build the transition matrix (only the ratios <i>p̃</i><sub><i>j</i></sub>/<i>p̃</i><sub><i>i</i></sub> are used).</p>';
+    var inBox = U.el('div', 'threeIn'); tb.appendChild(inBox);
+    var outBox = U.el('div', ''); outBox.setAttribute('aria-live', 'polite'); tb.appendChild(outBox);
+    [0, 1, 2].forEach(function (i) {
+      var nb = U.number({ label: '<i>p̃</i><sub>' + (i + 1) + '</sub>', min: 0.1, max: 100, step: 0.1, value: P3[i], onChange: function (v) { P3[i] = v; three(); } });
+      inBox.appendChild(nb.el);
+    });
+    function three() {
+      var r = M.mhMatrix(P3), n = 3, i, j;
+      var h = '<p style="margin:8px 0 4px">Normalized <b><i>p</i></b> = (' + r.p.map(function (v) { return fracStr(v); }).join(', ') + '); transition matrix <i>T</i><sub><i>ij</i></sub> (row <i>i</i>: current state, column <i>j</i>: next state):</p>';
+      h += '<div class="tablewrap"><table class="grid"><thead><tr><th></th>' + [1, 2, 3].map(function (j) { return '<th>To ' + j + '</th>'; }).join('') + '<th>Row sum</th></tr></thead><tbody>';
+      for (i = 0; i < n; i++) { h += '<tr><th>From ' + (i + 1) + '</th>'; for (j = 0; j < n; j++) h += '<td>' + fracStr(r.T[i][j]) + '</td>'; h += '<td>' + fracStr(r.rowsum[i]) + '</td></tr>'; }
+      h += '</tbody></table></div>';
+      h += '<p style="margin:8px 0 4px">Detailed balance <i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub> = <i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub>:</p><div class="tablewrap"><table class="grid"><thead><tr><th>Pair</th><th><i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub></th><th><i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub></th></tr></thead><tbody>';
+      r.flows.forEach(function (f) { h += '<tr><th>' + (f.i + 1) + ' ↔ ' + (f.j + 1) + '</th><td>' + fracStr(f.fwd) + '</td><td>' + fracStr(f.bwd) + '</td></tr>'; });
+      h += '</tbody></table></div>';
+      h += kv([
+        ['Check of the stationary distribution <b><i>p</i></b><i>T</i>', '(' + r.pT.map(function (v) { return fracStr(v); }).join(', ') + ')'],
+        ['|<b><i>p</i></b><i>T</i> − <b><i>p</i></b>| maximum', fmt(r.stationaryErr, 2)],
+        ['|<i>p</i><sub><i>i</i></sub><i>T</i><sub><i>ij</i></sub> − <i>p</i><sub><i>j</i></sub><i>T</i><sub><i>ji</i></sub>| maximum', fmt(r.detailedErr, 2)],
+        ['(<i>T</i><sup>⊤</sup> − <i>I</i>)<b><i>π</i></b> = 0, Σ<i>π</i> = 1, solution', r.pi ? '(' + r.pi.map(function (v) { return fx(v, 4); }).join(', ') + ')' : '—'],
+        ['Multiply the uniform distribution (1/3, 1/3, 1/3) by <i>T</i> once', '(' + r.powers[1].map(function (v) { return fx(v, 4); }).join(', ') + ')'],
+        ['5 times', '(' + r.powers[5].map(function (v) { return fx(v, 4); }).join(', ') + ')'],
+        ['30 times', '(' + r.powers[30].map(function (v) { return fx(v, 4); }).join(', ') + ')']]);
+      h += '<p class="hint">The error entries are floating-point rounding (about 10<sup>−16</sup>). <i>T</i><sub><i>ij</i></sub> (<i>j</i> ≠ <i>i</i>) = 1/2 × min(1, <i>p̃</i><sub><i>j</i></sub>/<i>p̃</i><sub><i>i</i></sub>). The rejected part remains in the diagonal <i>T</i><sub><i>ii</i></sub>.</p>';
+      outBox.innerHTML = h; U.postHeightLater();
+    }
+    three();
+    return self;
+  }
+
+  U.boot(app, { panels: { approx: ApproxSim, mh: MHSim }, initial: 'approx' });
+})();
+</script>
+</body>
+</html>

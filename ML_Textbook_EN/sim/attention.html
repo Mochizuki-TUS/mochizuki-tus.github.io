@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention and Next-Token Generation Simulator — Gathering Information with Weights and Choosing the Next Word</title>
+<meta name="description" content="A simulator for following scaled dot-product attention numerically with hand-set weights, and for exploring the next-token distribution, temperature, top-k, top-p, and generation with a small Transformer trained for this book (trained on Japanese text).">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第24〜26章のシミュレーター S10．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます．学習済みの重みは data/tinygpt.js を <script src> で読みます）．
+     数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim .kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; }
+#qsim .kind { border: 1px solid var(--line); border-radius: 12px; padding: 7px 10px 8px; background: #fff; font-size: .75rem; line-height: 1.5; color: var(--sub); }
+#qsim .kind b { display: block; font-size: .8rem; color: #15202b; margin-bottom: 1px; }
+#qsim .kind.k1 { border-left: 6px solid #0f4c81; }
+#qsim .kind.k2 { border-left: 6px double #00876c; }
+#qsim .kind.k3 { border-left: 6px dashed #6b7480; background: #f3f4f6; }
+#qsim .kind .tag { display: inline-block; font-size: .7rem; font-weight: 700; padding: 0 6px; border-radius: 6px; margin-left: 4px; border: 1px solid currentColor; }
+@media (max-width: 760px) { #qsim .kinds { grid-template-columns: 1fr; } }
+#qsim .mats { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-start; }
+#qsim .mat { min-width: 0; }
+#qsim .mat .mname { font-size: .76rem; color: var(--sub); margin: 0 0 2px; }
+#qsim .mat table.grid td { min-width: 3.6em; }
+#qsim .mat table.grid td.inf { color: var(--sub); background: repeating-linear-gradient(135deg, #f4f4f4 0 4px, #e6e6e6 4px 6px); }
+#qsim .medit { margin: 6px 0 8px; }
+#qsim .medit table { border-collapse: collapse; }
+#qsim .medit th { font-size: .7rem; color: var(--sub); font-weight: 400; padding: 0 4px; text-align: center; }
+#qsim .medit input { font: inherit; font-size: .8rem; width: 3.9em; padding: 2px 3px; border: 1px solid rgba(15,76,129,.30); border-radius: 6px; text-align: right; font-variant-numeric: tabular-nums; }
+#qsim .medit-wrap { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+#qsim .handnote { font-size: .76rem; color: #0a355a; background: var(--accent-soft); border-radius: 8px; padding: 6px 10px; margin: 0 0 10px; border-left: 4px solid #0f4c81; }
+#qsim .modelnote { font-size: .76rem; color: #0b4d3f; background: #eaf6ef; border-radius: 8px; padding: 6px 10px; margin: 0 0 10px; border-left: 4px double #00876c; }
+#qsim .toks { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+#qsim .tk { display: inline-flex; flex-direction: column; align-items: center; border: 1px solid var(--line); border-radius: 7px; padding: 1px 6px 2px; background: #fff; font-size: .8rem; line-height: 1.25; }
+#qsim .tk small { font-size: .62rem; color: var(--sub); }
+#qsim .tk.gen { border: 2px solid #d55e00; background: #fff6ef; font-weight: 700; }
+#qsim .tk.gen small::after { content: " gen"; }
+#qsim .tk.sp { color: var(--sub); }
+#qsim .vocab { max-height: 250px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px 8px; margin: 4px 0 6px; }
+#qsim .vocab .ctlhead { margin: 6px 0 2px; }
+#qsim .vocab .pills { gap: 4px; }
+#qsim .vocab .btn { font-size: .74rem; padding: 3px 8px; font-weight: 400; }
+#qsim ul.judge { list-style: none; padding: 0; margin: 4px 0; }
+#qsim ul.judge li { margin: 4px 0; padding: 5px 8px; border-radius: 8px; background: var(--panel-soft); font-size: .8rem; }
+#qsim .jl { display: inline-block; font-weight: 700; border-radius: 6px; padding: 0 6px; margin-right: 6px; font-size: .76rem; }
+#qsim .jl.correct { background: #e3f3ea; color: #0b5e43; border: 1px solid #0b5e43; }
+#qsim .jl.wrong { background: #fde9e7; color: #9c1c12; border: 2px solid #9c1c12; }
+#qsim .jl.not_in_table { background: #fdf5e3; color: #7a5200; border: 1px dashed #7a5200; }
+#qsim .jl.ungrammatical, #qsim .jl.incomplete { background: #f0f0f0; color: #4b5560; border: 1px dotted #4b5560; }
+#qsim .attnwarn { font-size: .76rem; color: var(--warn); background: var(--warnbg); border-left: 3px solid #d9a400; border-radius: 0 8px 8px 0; padding: 6px 10px; margin: 8px 10px; }
+#qsim table.grid.small { font-size: .74rem; }
+#qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+#qsim .tablewrap table.grid td, #qsim .tablewrap table.grid th { white-space: nowrap; }
+#qsim table.kv.wrapv th { width: 52%; }
+#qsim table.kv.wrapv td { white-space: normal; }
+@media (max-width: 820px) { #qsim [data-panel="model"] .layout > .col-side { order: -1; } }
+#qsim tr.cut td { color: #8a9099; text-decoration: line-through; }
+#qsim .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { #qsim .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>Attention and Next-Token Generation — Gathering Information with Weights and Choosing the Next Word</h1>
+  <p class="lead">In tab ① you follow <i>Q</i>, <i>K</i>, <i>V</i> → scores → mask → softmax weights → output numerically with small hand-set matrices, and check what dividing by √<i>d</i><sub><i>k</i></sub> means and how the causal mask works. In tab ② you run a small Transformer trained for this book inside the browser and examine the next-token probabilities, how the distribution changes with temperature, top-k, and top-p, and whether the generated sentences are correct. Notice also that a high-probability sentence is not always a correct one. The small model was trained on Japanese text, so its tokens appear in Japanese; English glosses are given alongside.</p>
+
+  <div class="kinds" role="note" aria-label="Kinds of computation on this page">
+    <div class="kind k1"><b>① Calculation demo with hand-set weights<span class="tag">Tab ①</span></b>All matrix values are entered by hand. Nothing is trained. It is meant for following the steps of the attention computation numerically.</div>
+    <div class="kind k2"><b>② Small model trained for this book<span class="tag">Tab ②</span></b>A decoder-only Transformer (2 layers, 2 heads, <i>d</i><sub>model</sub> = 32, 28,384 parameters). It was trained only on a synthetic teaching corpus of short Japanese sentences about materials. It is a small model of the same type as GPT, but it is not GPT.</div>
+    <div class="kind k3"><b>③ A real GPT<span class="tag">Not here</span></b>It does not run on this page. Both its scale (number of parameters and layers) and its training data (huge amounts of real text) differ by orders of magnitude, so the numbers in ② (such as the error rates) do not carry over directly.</div>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Switch simulator">
+    <button class="tab is-active" data-tab="attn" role="tab" type="button">① Following Attention Numerically</button>
+    <button class="tab" data-tab="model" role="tab" type="button">② Small Trained Model (Next-Token Distribution and Generation)</button>
+  </div>
+
+  <!-- ① attn -->
+  <section class="panel" data-panel="attn">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">softmax weights <i>A</i> (each row = one query; each row sums to 1 over the keys)</p>
+        <p class="psub"><i>A</i> = softmax(<i>Q</i><i>K</i><sup>T</sup>/√<i>d</i><sub><i>k</i></sub> + <i>M</i>). The output is <i>Z</i> = <i>A</i><i>V</i>.</p>
+        <div class="stage">
+          <canvas data-role="cvA"></canvas>
+          <p class="cap" data-role="capA"></p>
+        </div>
+        <div class="info">
+          <h3>Flow of the computation (sequence arranged in rows; each row is one position)</h3>
+          <div class="mats" data-role="mats" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>Putting the current numbers into the formula</h3>
+          <div class="eq left" data-role="eqA" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <p class="handnote"><strong>The weights are hand-set values. This is not a trained model.</strong> You can change the matrix values in the fields below (−5 to 5).</p>
+        <div class="controls" data-role="ctlA"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readA" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② model -->
+  <section class="panel" data-panel="model" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="modelnote"><strong>A small model trained for this book</strong> (28,384 parameters; not GPT). It was trained on a synthetic teaching corpus of Japanese sentences, so the tokens are shown in Japanese. All computation runs inside this browser.</p>
+        <p class="ptitle">Context and next-token distribution</p>
+        <div class="toks" data-role="toks" aria-live="polite"></div>
+        <p class="hint" data-role="toksHint"></p>
+        <div class="stage">
+          <canvas data-role="cvD"></canvas>
+          <div data-role="lgD"></div>
+          <p class="cap" data-role="capD"></p>
+        </div>
+        <div class="info">
+          <h3>Probabilities of the top 10 words (at each stage of τ, top-k, and top-p)</h3>
+          <div class="tablewrap" data-role="tblD"></div>
+        </div>
+        <div class="info">
+          <h3>Putting the current numbers into the formula</h3>
+          <div class="eq left" data-role="eqD" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>Generated sequence and judgment</h3>
+          <div data-role="genOut" aria-live="polite"></div>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvW"></canvas>
+          <p class="attnwarn"><strong>Caution:</strong> The weights are the proportions in which information is gathered; they are not necessarily the reason for the model’s decision (Chapter 24, Section 24.10).</p>
+          <p class="cap" data-role="capW"></p>
+        </div>
+        <div class="info">
+          <h3>Comparison: bigram model (counting that looks only at the previous token; not a Transformer)</h3>
+          <div data-role="bigram"></div>
+        </div>
+        <div class="info">
+          <h3>About this model</h3>
+          <div data-role="shapes"></div>
+          <table class="kv wrapv">
+            <tr><th>Type</th><td>Decoder-only Transformer (pre-LN)</td></tr>
+            <tr><th>Vocabulary <i>V</i><sub>voc</sub> (word level)</th><td>67</td></tr>
+            <tr><th><i>d</i><sub>model</sub> / <i>n</i><sub>head</sub> / <i>d</i><sub><i>k</i></sub></th><td>32 / 2 / 16</td></tr>
+            <tr><th><i>n</i><sub>layer</sub> / context length <i>T</i><sub>max</sub></th><td>2 / 24</td></tr>
+            <tr><th>FFN hidden dimension</th><td>128 (GELU)</td></tr>
+            <tr><th>Positional information</th><td>Learned position embedding <i>W</i><sub><i>P</i></sub></td></tr>
+            <tr><th>Output</th><td>Tied weights <i>W</i><sub><i>U</i></sub> = <i>W</i><sub><i>E</i></sub><sup>T</sup></td></tr>
+            <tr><th>Number of parameters</th><td>28,384</td></tr>
+            <tr><th>of which, per layer: attention / FFN</th><td>4,224 / 8,352</td></tr>
+          </table>
+          <p class="hint"><strong>Training data:</strong> A synthetic teaching corpus. Short Japanese sentences were generated mechanically from a table of 27 materials (classification, electrical, thermal, crystal structure, magnet, and state at room temperature; only first-year university textbook facts) and 8 sentence templates; no real text was used. The number of sentences differs by material (6 frequent materials: 1000 sentences each; 8 medium: 100 each; 13 rare: 8 each). Training: 6211 sentences (56476 tokens); validation: 693 sentences.</p>
+          <p class="hint"><strong>Training conditions:</strong> Cross-entropy for next-token prediction. AdamW, learning rate 3×10⁻³ (warmup, then cosine), minibatch of 32 rows × 24 tokens, 1500 steps (about 20 passes over the training data), seed 1. 14 s on CPU in float32.</p>
+          <table class="kv wrapv">
+            <tr><th>Validation loss (nat/token) / perplexity</th><td>0.501 / 1.65</td></tr>
+            <tr><th>Perplexity of the bigram model (for comparison)</th><td>2.52</td></tr>
+            <tr><th>Top-1 accuracy for “&lt;material&gt; is …” (as a topic): frequent / medium / rare</th><td>33/33 / 44/44 / 62/67</td></tr>
+            <tr><th>Error rate in generation at τ = 1 with the material specified: frequent / medium / rare</th><td>0.8 % / 1.3 % / 9.0 %</td></tr>
+          </table>
+          <p class="hint">The error rates and similar figures are measured values for this small model and this synthetic corpus. They are not the error rates of a real GPT.</p>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlM"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readM" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">The interactive part of this page runs on JavaScript. Because JavaScript is disabled, the figures and controls are not displayed. You can still read the description below (procedure, formulas, conditions, questions). The text of the book is at <a href="../ch24_attention.html#sec24-3" target="_top">Chapter 24, Section 24.3</a> and <a href="../ch26_gpt.html#sec26-6" target="_top">Chapter 26, Section 26.6</a>.</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>Description of this simulator (procedure, formulas, conditions, questions)</summary>
+
+      <h2>Procedure and what to observe</h2>
+      <ol>
+        <li>Look at ① with the defaults (<i>T</i> = 3, <i>d</i><sub>model</sub> = <i>d</i><sub><i>k</i></sub> = 2, <i>W</i><sub><i>Q</i></sub> = <i>W</i><sub><i>K</i></sub> = <i>W</i><sub><i>V</i></sub> = identity matrix, rows of <i>X</i>: (1, 0), (0, 1), (1, 1)). <span class="look">What to see: row 1 of the scores is (1, 0, 1); dividing by √2 gives (0.7071, 0, 0.7071); the weights are (0.4011, 0.1978, 0.4011); the output is (0.8022, 0.5989). The weights of every row sum to 1.</span></li>
+        <li>Turn on “causal mask”. <span class="look">What to see: the weights of row 1 become (1, 0, 0), and the output is exactly row 1 of <i>X</i>. Row 2 is (0.3302, 0.6698, 0). Row 3 (the last position) is the same as before masking.</span></li>
+        <li>Select the preset “W_Q × 3 (larger scores)” and turn “Divide by √d_k” on and off. <span class="look">What to see: the larger the scores, the more the weights concentrate on a single key (softmax saturates). Dividing by √<i>d</i><sub><i>k</i></sub> shrinks the scores and makes the weights flatter.</span></li>
+        <li>Press “Swap rows 1 and 2 of X” (with the mask off). <span class="look">What to see: rows 1 and 2 of the output <i>Z</i> are swapped in the same way (permutation equivariance). Attention alone carries no information about order.</span></li>
+        <li>In ②, select the context preset “金属 の 例 に は” (“metals, for example”) and set the temperature <i>τ</i> to 0.5, 1, and 2. <span class="look">What to see: the top probabilities (at τ = 1: 鉄 “iron” 0.321, 銅 “copper” 0.288, アルミニウム “aluminum” 0.267) become sharper at <i>τ</i> = 0.5 and flatter at <i>τ</i> = 2. With top-p = 0.9, four words remain and their probabilities are renormalized to sum to 1.</span></li><!-- jp-ok -->
+        <li>In ②, select the preset “水銀 は 常温 で” (“mercury at room temperature is”) and press “One token, greedy”. <span class="look">What to see: although the table says liquid, the model chooses 固体 (“solid”) with probability 0.998, and the judgment is “Wrong (contradicts the table)”. A high probability does not mean the answer is correct.</span></li><!-- jp-ok -->
+        <li>In ②, select the preset “チタン酸バリウム の 結晶構造 は” (“the crystal structure of barium titanate is”) and press “One token, sampled” several times while changing the seed. <span class="look">What to see: the correct perovskite structure has probability 0.047 (4th place), and plausible errors (such as the rock-salt structure, 0.550) come out often. The rarer the material in the training data, the more error-prone it is.</span></li><!-- jp-ok -->
+        <li>In ②, look at the attention weights of layer 2, head 2. <span class="look">What to see: at the last position of “ニッケル は 磁石 に” (“nickel, to magnets”), a weight of 0.94 is placed on ニッケル (“nickel”). Note, however, that the weights are proportions in which information is gathered, not necessarily the reason for a decision.</span></li><!-- jp-ok -->
+      </ol>
+      <p>With the keyboard, Tab moves to buttons, number fields, and sliders; Enter (or Space) presses a button; the arrow keys change numbers and sliders. Tabs can be switched with the ←→ keys.</p>
+
+      <h2>Formulas and algorithms computed</h2>
+      <p>The sequence is arranged in rows (row <i>t</i> of <i>X</i> ∈ ℝ<sup><i>T</i>×<i>d</i><sub>model</sub></sup> is the vector at position <i>t</i>; linear maps are applied from the right).</p>
+      <div class="eq"><math display="block"><mrow><mi mathvariant="bold-italic">Q</mi><mo>=</mo><mi mathvariant="bold-italic">X</mi><msub><mi mathvariant="bold-italic">W</mi><mi>Q</mi></msub><mo>,</mo><mspace width="0.8em"/><mi mathvariant="bold-italic">K</mi><mo>=</mo><mi mathvariant="bold-italic">X</mi><msub><mi mathvariant="bold-italic">W</mi><mi>K</mi></msub><mo>,</mo><mspace width="0.8em"/><mi mathvariant="bold-italic">V</mi><mo>=</mo><mi mathvariant="bold-italic">X</mi><msub><mi mathvariant="bold-italic">W</mi><mi>V</mi></msub><mo>,</mo><mspace width="0.8em"/><mi>Attention</mi><mo stretchy="false">(</mo><mi mathvariant="bold-italic">Q</mi><mo>,</mo><mi mathvariant="bold-italic">K</mi><mo>,</mo><mi mathvariant="bold-italic">V</mi><mo stretchy="false">)</mo><mo>=</mo><mi>softmax</mi><mrow><mo>(</mo><mfrac><mrow><mi mathvariant="bold-italic">Q</mi><msup><mi mathvariant="bold-italic">K</mi><mi mathvariant="normal">T</mi></msup></mrow><msqrt><msub><mi>d</mi><mi>k</mi></msub></msqrt></mfrac><mo>+</mo><mi mathvariant="bold-italic">M</mi><mo>)</mo></mrow><mi mathvariant="bold-italic">V</mi></mrow></math></div>
+      <p>The softmax is taken for each row (each query) along the columns (keys). The weights and output of row <i>i</i> are</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>s</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>=</mo><mfrac><mrow><msub><mi mathvariant="bold-italic">q</mi><mi>i</mi></msub><mo>⋅</mo><msub><mi mathvariant="bold-italic">k</mi><mi>j</mi></msub></mrow><msqrt><msub><mi>d</mi><mi>k</mi></msub></msqrt></mfrac><mo>+</mo><msub><mi>M</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>=</mo><mfrac><mrow><mi>exp</mi><msub><mi>s</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow><mrow><munder><mo>∑</mo><msup><mi>j</mi><mo>′</mo></msup></munder><mi>exp</mi><msub><mi>s</mi><mrow><mi>i</mi><msup><mi>j</mi><mo>′</mo></msup></mrow></msub></mrow></mfrac><mo>,</mo><mspace width="0.8em"/><msub><mi mathvariant="bold-italic">z</mi><mi>i</mi></msub><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi mathvariant="bold-italic">v</mi><mi>j</mi></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>M</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>=</mo><mrow><mo>{</mo><mtable columnalign="left"><mtr><mtd><mn>0</mn></mtd><mtd><mo stretchy="false">(</mo><mi>j</mi><mo>≤</mo><mi>i</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><mo>−</mo><mi>∞</mi></mtd><mtd><mo stretchy="false">(</mo><mi>j</mi><mo>&gt;</mo><mi>i</mi><mo stretchy="false">)</mo></mtd></mtr></mtable></mrow></mrow></math></div>
+      <p>(<i>M</i> = 0 when the causal mask is off). The softmax subtracts the maximum of each row before taking exp (the values are the same, and there is no overflow). Since exp(−∞) = 0, the weights at masked positions are 0 and the row sums stay 1.</p>
+      <p>In ②, the next-token probability is built from the logits <i>o</i><sub><i>i</i></sub> at position <i>t</i> (<i>i</i> is the vocabulary index) as</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>p</mi><mi>i</mi></msub><mo>=</mo><mfrac><mrow><mi>exp</mi><mo stretchy="false">(</mo><msub><mi>o</mi><mi>i</mi></msub><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo></mrow><mrow><munder><mo>∑</mo><mi>j</mi></munder><mi>exp</mi><mo stretchy="false">(</mo><msub><mi>o</mi><mi>j</mi></msub><mo>/</mo><mi>τ</mi><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"/><msubsup><mi>p</mi><mi>i</mi><mo>′</mo></msubsup><mo>=</mo><mfrac><msub><mi>p</mi><mi>i</mi></msub><mrow><munder><mo>∑</mo><mrow><mi>j</mi><mo>∈</mo><mtext>kept words</mtext></mrow></munder><msub><mi>p</mi><mi>j</mi></msub></mrow></mfrac></mrow></math></div>
+      <p>The order is: (1) divide the logits by <i>τ</i>; (2) softmax; (3) top-k: keep the <i>k</i> words with the largest probabilities; (4) top-p: add up the probabilities renormalized in (3) in descending order and keep words until the cumulative sum reaches <i>p</i> or more; (5) renormalize the probabilities of the remaining words to sum to 1. Greedy decoding picks the word with the largest logit. In sampling, one uniform random number <i>u</i> is drawn, probabilities are added in descending order, and the first word at which the sum exceeds <i>u</i> is chosen.</p>
+      <p>Forward pass of the model (pre-LN): <i>h</i><sub><i>t</i></sub> = <i>W</i><sub><i>E</i></sub>[<i>x</i><sub><i>t</i></sub>] + <i>W</i><sub><i>P</i></sub>[<i>t</i>], and in each layer <i>h</i> ← <i>h</i> + MHA(LN(<i>h</i>)) (MHA is multi-head attention) and <i>h</i> ← <i>h</i> + FFN(LN(<i>h</i>)). Finally, applying LN and multiplying by <i>W</i><sub><i>E</i></sub><sup>T</sup> gives the logits. The logits at position <i>t</i> give the distribution of <i>x</i><sub><i>t</i>+1</sub>. The log-probability of a sequence uses the probabilities of the model itself (<i>τ</i> = 1):</p>
+      <div class="eq"><math display="block"><mrow><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mi>a</mi><mo>:</mo><mi>b</mi></mrow></msub><mo>∣</mo><msub><mi>x</mi><mrow><mo>&lt;</mo><mi>a</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mi>a</mi></mrow><mi>b</mi></munderover><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo>∣</mo><msub><mi>x</mi><mrow><mo>&lt;</mo><mi>t</mi></mrow></msub><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><mtext>perplexity</mtext><mo>=</mo><mi>exp</mi><mrow><mo>(</mo><mo>−</mo><mfrac><mn>1</mn><mi>n</mi></mfrac><mi>ln</mi><mi>p</mi><mo>)</mo></mrow></mrow></math></div>
+      <p>(<i>n</i> is the number of tokens). Because of the causal mask, a single forward pass over the whole sequence gives the probabilities at all positions at once.</p>
+      <p>Generated sentences are judged against the table used to make the training data and the 8 sentence templates: <strong>correct</strong> (fits a template and agrees with the table value), <strong>wrong (contradicts the table)</strong>, <strong>unsupported by the training data</strong> (fits a template, but the table has no value for that property of that material, for example the crystal structure of a polymer; a sentence that never appears in the training data), and <strong>does not fit a template</strong>. A sentence that has not ended with the period token is <strong>incomplete</strong> and is not judged.</p>
+
+      <h2>Data and random-number conditions</h2>
+      <ul>
+        <li>All matrices in ① are hand-entered values (not trained). The default is <i>X</i> = [[1, 0], [0, 1], [1, 1]], <i>W</i><sub><i>Q</i></sub> = <i>W</i><sub><i>K</i></sub> = <i>W</i><sub><i>V</i></sub> = identity matrix (<i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub> = <i>d</i><sub>model</sub> = 2). Inputs are limited to −5 to 5, <i>T</i> = 3 to 5, and <i>d</i><sub>model</sub> = 2 to 4. There are no units.</li>
+        <li>The weights of the model in ② were trained for this book with PyTorch (CPU, float32) and written out to 7 significant digits. The training data is a <strong>synthetic teaching corpus</strong> (sentences generated mechanically from a table of 27 materials and 8 sentence templates; random-number seed 20261112). The model was trained on Japanese text, so it reads and writes Japanese tokens. The corpus is not real text.</li>
+        <li>The random numbers for sampling come from a seeded generator (mulberry32). The default seed is 20261112. Starting over from the same seed, the same settings, and the same context generates the same sequence. Changing the seed and “Start over” both delete the generated part and recreate the random numbers from the beginning.</li>
+        <li>Limits: the context length is at most 24 tokens (the context length of the model). Generation stops when <code>&lt;eos&gt;</code> appears or 24 tokens are reached. <i>τ</i> ranges from 0.05 to 3, top-k from 0 (off) to 67, and top-p from 0.05 to 1 (1 = off).</li>
+      </ul>
+
+      <h2>Simplifications</h2>
+      <ul>
+        <li>① uses a single head with <i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub> = <i>d</i><sub>model</sub> (<i>W</i> is a square matrix), no biases, and no output projection <i>W</i><sub><i>O</i></sub>.</li>
+        <li>The model in ② is a very small model with a vocabulary of 67 words and a context length of 24, and its tokens are whole words (separated by spaces). A real GPT uses subword tokens (Chapter 26, Section 26.2), far more layers, dimensions, and vocabulary, and different training data.</li>
+        <li>The judgment covers only sentences that match one of the 8 sentence templates exactly. The facts in the table are only textbook facts at room temperature, ordinary pressure, and for pure substances; properties that change with conditions are not in the table.</li>
+        <li>The bigram model is a model for comparison that counts only the previous token (additive smoothing α = 0.1). It is neither a Transformer nor a GPT.</li>
+      </ul>
+
+      <h2>Conditions under which results become unstable</h2>
+      <ul>
+        <li>If you make the input values large in ① (for example, values at the ends of the −5 to 5 range), the scores become large, softmax saturates, and the weights become almost 0 and 1. The numbers do not overflow because the maximum is subtracted, but in training the gradients become very small (Chapter 24, Section 24.4).</li>
+        <li>When <i>τ</i> is small, such as 0.05, the distribution becomes almost the same as greedy decoding; when it is large, such as 3, the distribution approaches uniform and sentences that fit no template increase.</li>
+        <li>In a context where probabilities are nearly tied (example: for “窒化ガリウム の 結晶構造 は”, “the crystal structure of gallium nitride is”, the top 2 words have 0.244 and 0.226), changing the seed swaps correct and wrong sentences.</li><!-- jp-ok -->
+        <li>If NaN or infinity appears (this does not normally happen), the computation stops and the reason is displayed.</li>
+      </ul>
+
+      <h2>Corresponding sections of the text</h2>
+      <ul>
+        <li><a href="../ch24_attention.html#sec24-2" target="_top">Chapter 24, Section 24.2 Scaled Dot-Product Attention</a>, <a href="../ch24_attention.html#sec24-3" target="_top">24.3 Hand Calculation</a>, <a href="../ch24_attention.html#sec24-4" target="_top">24.4 Why Divide by √d_k</a></li>
+        <li><a href="../ch24_attention.html#sec24-5" target="_top">Chapter 24, Section 24.5 Self-Attention</a>, <a href="../ch24_attention.html#sec24-6" target="_top">24.6 The Causal Mask</a>, <a href="../ch24_attention.html#sec24-7" target="_top">24.7 Multi-Head Attention</a>, <a href="../ch24_attention.html#sec24-10" target="_top">24.10 How to Read Attention Weights</a></li>
+        <li><a href="../ch25_transformer.html#sec25-7" target="_top">Chapter 25, Section 25.7 The Flow of a GPT-Type Model (Decoder Only)</a>, <a href="../ch25_transformer.html#sec25-8" target="_top">25.8 Following a Small Model by Its Shapes</a></li>
+        <li><a href="../ch26_gpt.html#sec26-4" target="_top">Chapter 26, Section 26.4 Training: Next-Token Prediction</a>, <a href="../ch26_gpt.html#sec26-5" target="_top">26.5 The Difference Between Training and Generation</a>, <a href="../ch26_gpt.html#sec26-6" target="_top">26.6 Choosing the Next Token</a></li>
+        <li><a href="../ch26_gpt.html#sec26-9" target="_top">Chapter 26, Section 26.9 Why Plausible Errors Occur</a>, <a href="../ch26_gpt.html#sec26-10" target="_top">26.10 Distinguishing Generation Probability from Correctness and Confidence</a></li>
+      </ul>
+
+      <h2>Short questions to answer after operating</h2>
+      <ol>
+        <li>With the defaults in ①, explain from the scores and the exp values why the weights of row 1 are (0.4011, 0.1978, 0.4011). What happens to row 1 when the causal mask is applied?
+          <details class="ans"><summary>Sample answers</summary><p>The scores of row 1 are the dot products (1, 0, 1) of <i>q</i><sub>1</sub> = (1, 0) with each key, divided by √2, giving (0.7071, 0, 0.7071). Taking exp gives (2.028, 1, 2.028), and dividing by the sum 5.056 gives (0.4011, 0.1978, 0.4011). Columns 1 and 3 have the same query–key dot product, so they get the same weight. With the causal mask, row 1 can see only itself (<i>j</i> = 1), so the weights are (1, 0, 0) and the output is <i>v</i><sub>1</sub> = (1, 0).</p></details></li>
+        <li>If <i>W</i><sub><i>Q</i></sub> is multiplied by 3, how skewed are the weights of row 3 when you do not divide by √<i>d</i><sub><i>k</i></sub>? What happens when you do divide?
+          <details class="ans"><summary>Sample answers</summary><p>The scores of row 3 are (3, 3, 6). Without dividing, the weights are (0.0453, 0.0453, 0.9094), almost entirely on column 3. Dividing by √2 gives (2.121, 2.121, 4.243), and the weights are (0.0967, 0.0967, 0.8066). The more the scores are shrunk, the flatter the weights become, which avoids softmax saturation (small gradients).</p></details></li>
+        <li>In ②, for “水銀 は 常温 で” (“mercury at room temperature is”), why does the model choose 固体 (“solid”) with probability 0.998? Are a high probability and correctness the same thing?<!-- jp-ok -->
+          <details class="ans"><summary>Sample answers</summary><p>In the training data, sentences like “&lt;metal&gt; is solid at room temperature” are frequent, and there is only one sentence about mercury (liquid). The next-token prediction loss only raises the likelihood of words that tend to come next in the training data, so a rare exception is pulled toward the majority value. The ln <i>p</i> of the whole sentence is also larger for the wrong “solid” sentence (−9.57) than for the correct “liquid” sentence (−17.68), so a high probability does not mean correctness.</p></details></li>
+        <li>For “金属 の 例 に は” (“metals, for example”), what are the probabilities of the top 3 words at <i>τ</i> = 0.5 and <i>τ</i> = 2? How many words remain with top-p = 0.9?<!-- jp-ok -->
+          <details class="ans"><summary>Sample answers</summary><p>At <i>τ</i> = 1: 鉄 (iron) 0.321, 銅 (copper) 0.288, アルミニウム (aluminum) 0.267. At <i>τ</i> = 0.5: 0.397, 0.319, 0.275 (the probability ratios are squared, so the mass gathers on the larger ones). At <i>τ</i> = 2: 0.172, 0.163, 0.157 (the ratios become square roots, so the distribution is flatter). With top-p = 0.9 (<i>τ</i> = 1), four words remain: 鉄, 銅, アルミニウム, and マグネシウム (magnesium) (cumulative 0.910), and each probability is divided by 0.910.</p></details></li><!-- jp-ok -->
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">Back to Machine Learning — From Probability to GPT (Contents)</a> | Text: <a href="../ch24_attention.html#sec24-3" target="_top">Chapter 24, Section 24.3</a>, <a href="../ch26_gpt.html#sec26-6" target="_top">Chapter 26, Section 26.6</a> | Equations are typeset with the browser’s built-in MathML (no external library).</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="data/tinygpt.js"></script>
+<script src="data/tinygpt_bigram.js"></script>
+<script src="attention.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.Attention;
+  var app = document.getElementById('qsim');
+  var col = U.colors, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var CF = U.font;
+
+  /* ---- MathML・表の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  function mn(s) { return '<mn>' + U.mn(s) + '</mn>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function row(s) { return '<mtr><mtd><mstyle displaystyle="true">' + s + '</mstyle></mtd></mtr>'; }
+  function table(rows) { return '<math display="block"><mstyle displaystyle="true"><mtable columnalign="left" rowspacing="0.7em">' + rows.join('') + '</mtable></mstyle></math>'; }
+  function msub(a, b) { return '<msub>' + a + '<mrow>' + b + '</mrow></msub>'; }
+  function bold(s) { return '<mi mathvariant="bold-italic">' + s + '</mi>'; }
+  function kv2(rows) { return kv(rows).replace('class="kv"', 'class="kv wrapv"'); }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function f4(v) {                                                            /* 有効数字 4 桁（小数 3 桁で割り切れる値はそのまま） */
+    if (v === -Infinity) return '−∞';
+    var r = Math.round(v * 1000) / 1000;
+    return Math.abs(v - r) < 1e-12 ? U.mn(String(r)) : fmt(v, 4);
+  }
+  function nm(v) { return U.mn(String(Math.round(v * 1000) / 1000)); }         /* 入力した値（0.5 刻みなど）そのまま */
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function vecM(v, f) { return mo('(') + v.map(function (x) { return mn(f(x)); }).join(mo(',')) + mo(')'); }
+
+  /* 重みの濃淡（数値つき）．A：行列．o：{x0,y0,cw,ch, mask(i,j), digits, hiRow} */
+  function heatCells(c, A, o) {
+    var cm = U.cmap('blues');
+    for (var i = 0; i < A.length; i++) for (var j = 0; j < A[i].length; j++) {
+      var x = o.x0 + j * o.cw, y = o.y0 + i * o.ch, masked = o.mask && o.mask(i, j), v = A[i][j];
+      if (masked) {
+        c.fillStyle = '#f3f3f3'; c.fillRect(x, y, o.cw, o.ch);
+        c.save(); c.beginPath(); c.rect(x, y, o.cw, o.ch); c.clip(); c.strokeStyle = 'rgba(92,102,112,.35)'; c.lineWidth = 1;
+        for (var s = -o.ch; s < o.cw; s += 6) { c.beginPath(); c.moveTo(x + s, y + o.ch); c.lineTo(x + s + o.ch, y); c.stroke(); }
+        c.restore();
+      } else { c.fillStyle = cm(Math.min(1, v / (o.vmax || 1))); c.fillRect(x, y, o.cw, o.ch); }
+      if (o.digits != null && o.cw >= o.minText) {
+        var t = masked ? (o.maskText || '0') : fx(v, o.digits);
+        U.label(c, t, x + o.cw / 2, y + o.ch / 2, { size: o.fs || 11, bold: !masked, color: (!masked && v / (o.vmax || 1) > 0.55) ? '#fff' : col.ink, halo: false });
+      }
+    }
+    c.save(); c.strokeStyle = 'rgba(31,35,40,.25)'; c.lineWidth = 1;
+    for (i = 0; i <= A.length; i++) { c.beginPath(); c.moveTo(o.x0, o.y0 + i * o.ch + 0.5); c.lineTo(o.x0 + A[0].length * o.cw, o.y0 + i * o.ch + 0.5); c.stroke(); }
+    for (j = 0; j <= A[0].length; j++) { c.beginPath(); c.moveTo(o.x0 + j * o.cw + 0.5, o.y0); c.lineTo(o.x0 + j * o.cw + 0.5, o.y0 + A.length * o.ch); c.stroke(); }
+    if (o.hiRow != null) { c.strokeStyle = col.orange; c.lineWidth = 2.5; c.setLineDash([6, 3]); c.strokeRect(o.x0 + 1, o.y0 + o.hiRow * o.ch + 1, A[0].length * o.cw - 2, o.ch - 2); }
+    c.restore();
+  }
+
+  /* =================================================================
+     ① 手で設定した重みの Attention
+     ================================================================= */
+  function AttnSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var P0 = M.PRESETS.hand;
+    var S = { X: copy(P0.X), WQ: copy(P0.WQ), WK: copy(P0.WK), WV: copy(P0.WV), scale: true, causal: false, row: 0, preset: 'hand', lastPerm: null };
+    function copy(A) { return A.map(function (r) { return r.slice(); }); }
+    var LIM = M.LIMITS;
+    var ctl = q('ctlA');
+    var redraw = function () { self.update(); };
+    var presetOpts = Object.keys(M.PRESETS).map(function (k) { return { value: k, label: M.PRESETS[k].label }; }).concat([{ value: 'custom', label: '(edited values)' }]);
+    var sel = U.select({ label: 'Preset', options: presetOpts, value: 'hand', onChange: function (v) { if (v === 'custom') return; loadPreset(v); } });
+    function loadPreset(k) { var p = M.PRESETS[k]; S.X = copy(p.X); S.WQ = copy(p.WQ); S.WK = copy(p.WK); S.WV = copy(p.WV); S.preset = k; S.lastPerm = null; S.row = Math.min(S.row, S.X.length - 1); syncCtl(); redraw(); }
+    var pT = U.pills({ label: 'Sequence length <i>T</i>', options: [3, 4, 5].map(function (v) { return { value: v, label: String(v) }; }), value: 3, onChange: function (v) { resize(+v, S.X[0].length); } });
+    var pD = U.pills({ label: '<i>d</i><sub>model</sub> (= <i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub>)', options: [2, 3, 4].map(function (v) { return { value: v, label: String(v) }; }), value: 2, onChange: function (v) { resize(S.X.length, +v); } });
+    function resize(T, d) {
+      var X = [], i, j;
+      for (i = 0; i < T; i++) { X.push([]); for (j = 0; j < d; j++) X[i].push(S.X[i] && S.X[i][j] != null ? S.X[i][j] : 0); }
+      function W(old) { var A = []; for (var a = 0; a < d; a++) { A.push([]); for (var b = 0; b < d; b++) A[a].push(old[a] && old[a][b] != null ? old[a][b] : (a === b ? 1 : 0)); } return A; }
+      S.X = X; S.WQ = W(S.WQ); S.WK = W(S.WK); S.WV = W(S.WV); S.row = Math.min(S.row, T - 1); S.preset = 'custom'; S.lastPerm = null; syncCtl(); redraw();
+    }
+    var ckS = U.check({ label: 'Divide by √<i>d</i><sub><i>k</i></sub>', checked: true, onChange: function (v) { S.scale = v; redraw(); } });
+    var ckM = U.check({ label: 'causal mask (set <i>j</i> &gt; <i>i</i> to −∞)', checked: false, onChange: function (v) { S.causal = v; redraw(); } });
+    var rowBox = U.el('div', 'ctl');
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var bPerm = U.button('Swap rows 1 and 2 of X', function () {
+      var before = M.attention(S.X, S.WQ, S.WK, S.WV, { scale: S.scale, causal: S.causal });
+      var perm = S.X.map(function (_, i) { return i === 0 ? 1 : i === 1 ? 0 : i; });
+      S.X = M.permuteRows(S.X, perm); S.preset = 'custom';
+      var after = M.attention(S.X, S.WQ, S.WK, S.WV, { scale: S.scale, causal: S.causal });
+      var Zp = M.permuteRows(before.Z, perm), dmax = 0;
+      Zp.forEach(function (r, i) { r.forEach(function (v, j) { dmax = Math.max(dmax, Math.abs(v - after.Z[i][j])); }); });
+      S.lastPerm = { causal: S.causal, dmax: dmax };
+      syncCtl(); redraw();
+    }, { title: 'Check permutation equivariance (Chapter 24, Section 24.8)' });
+    var bReset = U.button('Reset to defaults', function () { S.scale = true; S.causal = false; S.row = 0; loadPreset('hand'); });
+    var mEdit = U.el('div', 'medit-wrap');
+    ctl.appendChild(sel.el); ctl.appendChild(pT.el); ctl.appendChild(pD.el); ctl.appendChild(ckS.el); ctl.appendChild(ckM.el);
+    ctl.appendChild(rowBox);
+    ctl.appendChild(U.buttonRow([bPerm, bReset])); ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', 'Matrix values (−5 to 5; Tab for the next field, arrow keys step by 0.5)'));
+    ctl.appendChild(mEdit);
+    function rowPills() {
+      rowBox.innerHTML = '';
+      var p = U.pills({ label: 'Query row <i>i</i> shown in the formula', options: S.X.map(function (_, i) { return { value: i, label: String(i + 1) }; }), value: S.row, onChange: function (v) { S.row = +v; redraw(); } });
+      rowBox.appendChild(p.el);
+    }
+    function editor(name, html, A) {
+      var box = U.el('div', 'medit'), t = '<div class="ctlhead">' + html + '</div><table><tr><th></th>';
+      for (var j = 0; j < A[0].length; j++) t += '<th>' + (j + 1) + '</th>';
+      t += '</tr>';
+      A.forEach(function (r, i) {
+        t += '<tr><th>' + (i + 1) + '</th>';
+        r.forEach(function (v, j) { t += '<td><input type="number" step="0.5" min="' + LIM.entry[0] + '" max="' + LIM.entry[1] + '" value="' + v + '" data-m="' + name + '" data-i="' + i + '" data-j="' + j + '" aria-label="' + name.replace('W', 'W_') + ', row ' + (i + 1) + ', column ' + (j + 1) + '"></td>'; });
+        t += '</tr>';
+      });
+      box.innerHTML = t + '</table>';
+      return box;
+    }
+    function syncCtl() {
+      sel.set(S.preset, true); pT.set(S.X.length, true); pD.set(S.X[0].length, true); ckS.set(S.scale, true); ckM.set(S.causal, true); rowPills();
+      mEdit.innerHTML = '';
+      mEdit.appendChild(editor('X', '<i>X</i> (<i>T</i> × <i>d</i><sub>model</sub>; row = position)', S.X));
+      mEdit.appendChild(editor('WQ', '<i>W</i><sub><i>Q</i></sub>', S.WQ));
+      mEdit.appendChild(editor('WK', '<i>W</i><sub><i>K</i></sub>', S.WK));
+      mEdit.appendChild(editor('WV', '<i>W</i><sub><i>V</i></sub>', S.WV));
+      U.postHeightLater();
+    }
+    function onEdit(e) {
+      var t = e.target; if (!t.dataset || !t.dataset.m) return;
+      var v = parseFloat(t.value), A = S[t.dataset.m], i = +t.dataset.i, j = +t.dataset.j;
+      if (!isFinite(v)) { if (e.type === 'change') t.value = A[i][j]; return; }
+      var w = Math.max(LIM.entry[0], Math.min(LIM.entry[1], v));
+      if (e.type === 'change' && w !== v) t.value = w;
+      if (A[i][j] === w) return;
+      A[i][j] = w; S.preset = 'custom'; S.lastPerm = null; sel.set('custom', true); redraw();
+    }
+    mEdit.addEventListener('input', onEdit); mEdit.addEventListener('change', onEdit);
+    syncCtl();
+
+    function matTable(nameHTML, A, digits, isInt) {
+      var h = '<div class="mat"><div class="mname">' + nameHTML + '</div><table class="grid small">';
+      A.forEach(function (r) { h += '<tr>' + r.map(function (v) { return v === -Infinity ? '<td class="inf">−∞</td>' : '<td>' + (isInt ? nm(v) : f4(v)) + '</td>'; }).join('') + '</tr>'; });
+      return h + '</table></div>';
+    }
+    function drawA(r) {
+      var cv = q('cvA'), T = r.T;
+      var F = U.fitCanvas(cv, { height: 0 }), W0 = F.W;
+      var lw = 60, rw = 50, top = 34, cw = Math.max(34, Math.min(130, (W0 - lw - rw - 10) / T)), ch = Math.min(48, Math.max(30, cw * 0.55));
+      var foot = 'Darker = larger weight (0–1). Dashed box: row i = ' + (S.row + 1) + ' of the formula below' + (r.causal ? '; hatching: masked positions' : '');
+      var two = U.textWidth(F.c, foot, 10.5) > W0 - 10;
+      var H = top + T * ch + (two ? 46 : 32);
+      F = U.fitCanvas(cv, { height: H }); var c = F.c;
+      var x0 = lw + Math.max(0, (F.W - lw - rw - 10 - cw * T) / 2), y0 = top;
+      heatCells(c, r.A, { x0: x0, y0: y0, cw: cw, ch: ch, mask: function (i, j) { return r.causal && j > i; }, digits: 4, minText: 40, maskText: cw >= 64 ? 'mask → 0' : '0', fs: cw >= 56 ? 11.5 : 10.5, vmax: 1, hiRow: S.row });
+      for (var j = 0; j < T; j++) U.label(c, 'Key ' + (j + 1), x0 + (j + 0.5) * cw, top - 11, { size: 11, color: col.sub });
+      for (var i = 0; i < T; i++) {
+        U.label(c, 'Query ' + (i + 1), x0 - 6, y0 + (i + 0.5) * ch, { size: 11, align: 'right', color: i === S.row ? col.orange : col.sub, bold: i === S.row });
+        U.label(c, 'Sum ' + fx(r.rowSum[i], 3), x0 + T * cw + 6, y0 + (i + 0.5) * ch, { size: 11, align: 'left', color: col.green, bold: true });
+      }
+      U.label(c, 'Row sum', x0 + T * cw + 6, top - 11, { size: 10.5, align: 'left', color: col.green });
+      if (two) {
+        U.label(c, 'Darker = larger weight (0–1)', F.W / 2, H - 27, { size: 10.5, color: col.sub, halo: false });
+        U.label(c, 'Dashed box: row i = ' + (S.row + 1) + ' of the formula below' + (r.causal ? '; hatching: masked' : ''), F.W / 2, H - 12, { size: 10.5, color: col.sub, halo: false });
+      } else U.label(c, foot, F.W / 2, H - 13, { size: 10.5, color: col.sub, halo: false });
+      U.setCanvasLabel(cv, 'Attention weights, ' + T + ' rows by ' + T + ' columns. ' + r.A.map(function (a, i) { return 'Query ' + (i + 1) + ': ' + a.map(function (v) { return fx(v, 3); }).join(', '); }).join('. ') + '. Each row sums to 1. ' + (r.causal ? 'With causal mask. ' : ''));
+    }
+    function eq(r) {
+      var i = S.row, T = r.T, d = r.dk, rows = [];
+      var qi = r.Q[i];
+      var sq = r.scale ? '<msqrt>' + msub(mi('d'), mi('k')) + '</msqrt>' : '<mn>1</mn>';
+      /* 狭い幅（章の 390 px に埋め込んだ iframe は幅 310〜352 px）でも切れないよう，長い行は 2 行以上に分ける（2026-11-13 点検） */
+      var hdr = msub(mi('s'), mn(i + 1) + mi('j')) + mo('=') + frac(msub(bold('q'), mn(i + 1)) + mo('⋅') + msub(bold('k'), mi('j')), sq) + (r.causal ? mo('+') + msub(mi('M'), mn(i + 1) + mi('j')) : '');
+      rows.push(row(hdr));
+      rows.push(row('<mtext>(</mtext>' + msub(bold('q'), mn(i + 1)) + mo('=') + vecM(qi, f4) + (r.scale ? '<mtext>, </mtext><msqrt>' + mn(d) + '</msqrt>' + mo('=') + mn(f4(r.factor)) : '<mtext>, no division</mtext>') + '<mtext>)</mtext>'));
+      for (var j = 0; j < T; j++) {
+        var kj = r.K[j], masked = r.causal && j > i;
+        var dotStr = qi.map(function (v, k) { return mn(f4(v)) + mo('×') + mn(f4(kj[k])); }).join(mo('+'));
+        var lhs = msub(mi('s'), mn(i + 1) + mn(j + 1)) + mo('=');
+        if (masked) rows.push(row(lhs + '<mtext>(</mtext>' + mi('j') + mo('&gt;') + mi('i') + '<mtext> so masked)</mtext>' + mo('−') + mi('∞')));
+        else rows.push(row(lhs + frac(dotStr, r.scale ? mn(f4(r.factor)) : mn(1)) + mo('=') + mn(f4(r.Ss[i][j]))));
+      }
+      var e = r.Sm[i].map(function (s) { return s === -Infinity ? 0 : Math.exp(s); }), es = e.reduce(function (a, b) { return a + b; }, 0);
+      rows.push(row(mi('exp') + msub(mi('s'), mn(i + 1) + mi('j')) + mo(':') + vecM(e, f4) + '<mspace width="0.5em"/><mtext>sum</mtext>' + mo('=') + mn(f4(es))));
+      rows.push(row(msub(mi('A'), mn(i + 1) + mi('j')) + mo('=') + frac(mi('exp') + msub(mi('s'), mn(i + 1) + mi('j')), mn(f4(es)))));
+      rows.push(row('<mphantom>' + msub(mi('A'), mn(i + 1) + mi('j')) + '</mphantom>' + mo('=') + vecM(r.A[i], f4)));
+      rows.push(row('<mtext>row sum </mtext>' + '<munder><mo>∑</mo><mi>j</mi></munder>' + msub(mi('A'), mn(i + 1) + mi('j')) + mo('=') + mn(fx(r.rowSum[i], 4))));
+      var terms = r.A[i].map(function (a, j) { return mn(f4(a)) + mo('×') + vecM(r.V[j], f4); }).filter(function (_, j) { return !(r.causal && j > i); });
+      var zph = '<mphantom>' + msub(bold('z'), mn(i + 1)) + '<mo>=</mo></mphantom>';
+      terms.forEach(function (tm, k) { rows.push(row(k === 0 ? msub(bold('z'), mn(i + 1)) + mo('=') + tm : zph + mo('+') + tm)); });   /* 項ごとに改行 */
+      rows.push(row('<mphantom>' + msub(bold('z'), mn(i + 1)) + '</mphantom>' + mo('=') + vecM(r.Z[i], f4)));
+      q('eqA').innerHTML = table(rows) + '<p class="hint">In the actual computation the maximum of each row is subtracted before taking exp (the weights come out the same). Numbers are shown to 4 significant digits.</p>';
+    }
+    var self = {
+      update: function () {
+        var r = M.attention(S.X, S.WQ, S.WK, S.WV, { scale: S.scale, causal: S.causal });
+        if (!U.guardFinite([r.A, r.Z], msg, 'attention weights and output')) return;
+        if (S.lastPerm) U.status(msg, 'Swapped rows 1 and 2 of X. ' + (S.lastPerm.causal ? 'Because of the causal mask, the output is not a simple swap (the range each position can see differs). Largest difference from the swapped previous output: ' + fmt(S.lastPerm.dmax, 3) + '.' : 'The largest difference between the current output and the previous output Z with rows 1 and 2 swapped is ' + fmt(S.lastPerm.dmax, 2) + ' (permutation equivariance).'), S.lastPerm.causal ? 'warn' : 'ok');
+        else U.status(msg, '');
+        drawA(r);
+        var sc = r.scale ? '/√' + r.dk : '';
+        q('capA').innerHTML = '<i>T</i> = ' + r.T + ', <i>d</i><sub>model</sub> = <i>d</i><sub><i>k</i></sub> = <i>d</i><sub><i>v</i></sub> = ' + r.dk + ', ' + (r.scale ? 'divide by √<i>d</i><sub><i>k</i></sub> = ' + f4(r.factor) : 'no division by √<i>d</i><sub><i>k</i></sub>') + ', causal mask ' + (r.causal ? 'on' : 'off') + '. The weights are hand-set values; this is not a trained model.';
+        var mats = '';
+        mats += matTable('<i>X</i> (input)', S.X, 4, true);
+        mats += matTable('<i>Q</i> = <i>X</i><i>W</i><sub><i>Q</i></sub>', r.Q) + matTable('<i>K</i> = <i>X</i><i>W</i><sub><i>K</i></sub>', r.K) + matTable('<i>V</i> = <i>X</i><i>W</i><sub><i>V</i></sub>', r.V);
+        mats += matTable('Scores <i>Q</i><i>K</i><sup>T</sup>', r.S);
+        if (r.scale) mats += matTable('<i>Q</i><i>K</i><sup>T</sup>/√' + r.dk, r.Ss);
+        if (r.causal) mats += matTable('+ <i>M</i> (causal mask)', r.Sm);
+        mats += matTable('Weights <i>A</i> = softmax (each row)', r.A) + matTable('Output <i>Z</i> = <i>A</i><i>V</i>', r.Z);
+        q('mats').innerHTML = mats;
+        eq(r);
+        var maxw = r.A.map(function (a) { return Math.max.apply(null, a); });
+        var nmask = r.causal ? r.T * (r.T - 1) / 2 : 0;
+        q('readA').innerHTML = kv2([
+          ['<i>T</i>, <i>d</i><sub><i>k</i></sub>', r.T + ', ' + r.dk],
+          ['Divisor of the scores', r.scale ? '√' + r.dk + ' = ' + f4(r.factor) : '1 (no division)'],
+          ['Row sums of the weights', r.rowSum.map(function (v) { return fx(v, 4); }).join(', ')],
+          ['Largest weight in each row', maxw.map(function (v) { return fx(v, 3); }).join(', ')],
+          ['Score range (after division)', f4(Math.min.apply(null, [].concat.apply([], r.Ss))) + ' to ' + f4(Math.max.apply(null, [].concat.apply([], r.Ss)))],
+          ['Weights set to 0 by the mask', nmask + ' entries' + (r.causal ? ' (all exactly 0)' : '')]]);
+        U.postHeightLater();
+      },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② 小規模な学習済みモデル
+     ================================================================= */
+  function ModelSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    if (!window.MLData || !window.MLData.tinygpt) throw new Error('Could not load the trained weights data/tinygpt.js.');
+    var J = window.MLData.tinygpt, B = window.MLData.tinygptBigram;
+    var P = M.prepareModel(J), JG = M.buildJudge(J.judge), V = P.vocab, TM = P.cfg.t_max;
+    var CTX = [
+      ['金属 の 例 に は', 'metals, for example: temperature example (top 3 words nearly tied)'], ['', '<bos> only (start of a sentence)'], /* jp-ok */
+      ['銅 の 結晶構造 は', 'copper crystal structure: frequent material, correct and confident'], ['鉄 は 磁石 に', 'iron and magnets: exception for a frequent material (sticks to a magnet)'], /* jp-ok */
+      ['ニッケル は 磁石 に', 'nickel and magnets: exception for a rare material, correct but lower probability'], ['コバルト は 磁石 に', 'cobalt and magnets: exception for a rare material'], /* jp-ok */
+      ['水銀 は 常温 で', 'mercury at room temperature: drops the exception for a rare material (wrong with high probability)'], ['チタン酸バリウム の 結晶構造 は', 'barium titanate crystal structure: plausible error (correct answer ranks 4th)'], /* jp-ok */
+      ['窒化アルミニウム の 結晶構造 は', 'aluminum nitride crystal structure: plausible error (correct answer ranks 2nd)'], ['窒化ガリウム の 結晶構造 は', 'gallium nitride crystal structure: near tie, correct and wrong swap with the seed'], /* jp-ok */
+      ['黒鉛 の 結晶構造 は', 'graphite crystal structure: correct answer ranks 3rd'], ['黒鉛 は 炭素材料 で 電気 を', 'graphite, a carbon material, electricity: remembers the exception even for a rare material'], /* jp-ok */
+      ['ポリエチレン の', 'polyethylene: continues with “crystal structure”, which is absent from the training data (ungrammatical under greedy)'], ['ナイロン の', 'nylon: builds a sentence for a combination not in the table (unsupported sentence)']]; /* jp-ok */
+    function ctxIds(s) { return [P.bos].concat(s ? s.split(' ').map(function (w) { return P.stoi[w]; }) : []); }
+    var S = { ids: ctxIds(CTX[0][0]), rec: [], base: null, tau: 1, topK: 0, topP: 1, seed: DEFAULT_SEED, layer: 1, head: 1, running: false, lastU: null };
+    S.rec = S.ids.map(function () { return null; }); S.base = S.ids.slice();
+    var rng = C.rng(S.seed);
+    var ctl = q('ctlM');
+    var redraw = function () { self.update(); };
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+
+    var selCtx = U.select({ label: 'Context preset', options: CTX.map(function (c, k) { return { value: k, label: '<bos> ' + c[0] + ' (' + c[1] + ')' }; }).concat([{ value: 'custom', label: '(context built with the vocabulary buttons)' }]), value: 0, onChange: function (v) {
+      if (v === 'custom') return; setCtx(ctxIds(CTX[+v][0])); } });
+    function setCtx(ids) { stop(); S.ids = ids.slice(); S.rec = ids.map(function () { return null; }); S.base = ids.slice(); rng = C.rng(S.seed); S.lastU = null; U.status(msg, ''); redraw(); }
+    /* 語彙のボタン（グループ分け） */
+    var facts = J.judge.facts, names = facts.map(function (f) { return f.name; });
+    var classes = [], structs = [];
+    facts.forEach(function (f) { if (classes.indexOf(f.cls) < 0) classes.push(f.cls); if (f.struct && structs.indexOf(f.struct) < 0) structs.push(f.struct); });
+    var groups = [['Special tokens', ['<bos>', '<eos>']], ['Materials (27)', names], ['Classification', classes], ['Crystal structure', structs]];
+    var used = {}; groups.forEach(function (g) { g[1].forEach(function (w) { used[w] = 1; }); });
+    groups.push(['Other words', V.filter(function (w) { return !used[w]; })]);
+    var vocabBox = U.el('div', 'vocab'); vocabBox.setAttribute('role', 'group'); vocabBox.setAttribute('aria-label', 'Vocabulary buttons (press to append to the end of the context)');
+    groups.forEach(function (g) {
+      vocabBox.appendChild(U.el('div', 'ctlhead', g[0]));
+      vocabBox.appendChild(U.buttonRow(g[1].map(function (w) { return U.button(esc(w), function () { addTok(P.stoi[w]); }, { title: 'Append “' + w + '” to the end of the context' }); })));
+    });
+    function addTok(id) {
+      if (S.running) return;
+      if (S.ids.length >= TM) { U.status(msg, 'The context can hold at most ' + TM + ' tokens (the context length of this model).', 'warn'); return; }
+      S.ids.push(id); S.rec.push(null); S.base = S.ids.slice(); selCtx.set('custom', true); rng = C.rng(S.seed); U.status(msg, ''); redraw();
+    }
+    var bPop = U.button('Delete 1 word', function () { if (S.running || S.ids.length <= 1) return; S.ids.pop(); S.rec.pop(); S.base = S.ids.slice(); selCtx.set('custom', true); U.status(msg, ''); redraw(); });
+    var bClr = U.button('Reset to &lt;bos&gt; only', function () { selCtx.set(1, true); setCtx([P.bos]); });
+
+    var rTau = U.range({ label: 'temperature <i>τ</i>', min: 0.05, max: 3, step: 0.05, value: 1, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.tau = v; redraw(); } });
+    var rK = U.range({ label: 'top-k (0 = off)', min: 0, max: 67, step: 1, value: 0, fmt: function (v) { return v === 0 ? 'off' : String(v); }, onInput: function (v) { S.topK = Math.round(v); redraw(); } });
+    var rP = U.range({ label: 'top-p (1 = off)', min: 0.05, max: 1, step: 0.01, value: 1, fmt: function (v) { return v >= 1 ? 'off' : fx(v, 2); }, onInput: function (v) { S.topP = v; redraw(); } });
+    var bG1 = U.button('One token, greedy', function () { gen('greedy', 1); });
+    var bS1 = U.button('One token, sampled', function () { gen('sample', 1); }, { primary: true });
+    var bGA = U.button('Generate to end (sampling)', function () { gen('sample', TM); });
+    var bGG = U.button('Generate to end (greedy)', function () { gen('greedy', TM); });
+    var bRedo = U.button('Start over', function () { stop(); S.ids = S.base.slice(); S.rec = S.rec.slice(0, S.base.length); rng = C.rng(S.seed); S.lastU = null; U.status(msg, 'Cleared the generated part and recreated the random numbers with seed ' + S.seed + '.', ''); redraw(); }, { title: 'Clear the generated part and restart from the beginning with the same seed' });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { stop(); S.seed = s; rng = C.rng(s); S.ids = S.base.slice(); S.rec = S.rec.slice(0, S.base.length); S.lastU = null; U.status(msg, 'Recreated the random numbers with seed ' + s + ' and cleared the generated part.', ''); redraw(); } });
+    var selL = U.select({ label: 'Layer for attention weights', options: [{ value: 1, label: 'Layer 1' }, { value: 2, label: 'Layer 2' }], value: 1, onChange: function (v) { S.layer = +v; redraw(); } });
+    var selH = U.select({ label: 'Head', options: [{ value: 1, label: 'Head 1' }, { value: 2, label: 'Head 2' }], value: 1, onChange: function (v) { S.head = +v; redraw(); } });
+    S.layer = 2; S.head = 2; selL.set(2, true); selH.set(2, true);
+
+    ctl.appendChild(selCtx.el);
+    ctl.appendChild(U.el('div', 'ctlhead', 'Vocabulary buttons (press to append to the end of the context)'));
+    ctl.appendChild(vocabBox);
+    ctl.appendChild(U.buttonRow([bPop, bClr]));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(rTau.el); ctl.appendChild(rK.el); ctl.appendChild(rP.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', 'Generation (up to context length 24)'));
+    ctl.appendChild(U.buttonRow([bG1, bS1])); ctl.appendChild(U.buttonRow([bGA, bGG])); ctl.appendChild(U.buttonRow([bRedo]));
+    ctl.appendChild(msg);
+    ctl.appendChild(U.el('span', 'hint', 'Greedy decoding picks the word with the largest probability regardless of τ, top-k, and top-p. Sampling draws one word from the distribution with the settings on the right.'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(seed.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var lh = U.el('div', 'two'); lh.appendChild(selL.el); lh.appendChild(selH.el); ctl.appendChild(lh);
+
+    /* 生成（1 トークンずつ時間を分けて進める．停止できる） */
+    var timer = null, genBtns = [bG1, bS1, bGA, bGG];
+    function stop() { if (timer) { clearTimeout(timer); timer = null; } S.running = false; setBusy(false); }
+    function setBusy(b) { genBtns.forEach(function (x) { x.disabled = b || S.ids.length >= TM; }); bGA.textContent = (b && S.runMode === 'sample') ? 'Stop' : 'Generate to end (sampling)'; bGG.textContent = (b && S.runMode === 'greedy') ? 'Stop' : 'Generate to end (greedy)'; if (b) { (S.runMode === 'sample' ? bGA : bGG).disabled = false; } }
+    function gen(mode, n) {
+      if (S.running) { stop(); U.status(msg, 'Generation stopped.', ''); redraw(); return; }
+      if (S.ids.length >= TM) { U.status(msg, 'The context length ' + TM + ' has been reached, so no more can be generated. Press “Start over” or “Delete 1 word”.', 'warn'); return; }
+      var left = n; S.running = n > 1; S.runMode = mode;
+      if (S.running) setBusy(true);
+      var delay = U.reducedMotion() ? 0 : 60;
+      (function one() {
+        var t0 = performance.now();
+        var r;
+        try { r = M.step(P, S.ids, mode, rng, S.tau, S.topK, S.topP); }
+        catch (e) { stop(); U.status(msg, 'Computation stopped: ' + e.message, 'warn'); return; }
+        if (r.stop === 'full' || !isFinite(r.pModel)) { stop(); U.status(msg, r.stop === 'full' ? 'Stopped because the context length ' + TM + ' was reached.' : 'Stopped because NaN appeared in the probabilities.', 'warn'); redraw(); return; }
+        S.ids.push(r.id); S.rec.push({ mode: mode, pUsed: r.pUsed, pModel: r.pModel, u: r.u, tau: S.tau, topK: S.topK, topP: S.topP });
+        S.lastU = r.u; left--;
+        var done = r.id === P.eos || S.ids.length >= TM || left <= 0;
+        U.status(msg, (mode === 'greedy' ? 'By greedy decoding, chose' : 'By sampling (uniform random number u = ' + fx(r.u, 4) + '), chose') + ' “' + V[r.id] + '” (' + fmt(performance.now() - t0, 2) + ' ms). ' + (done && n > 1 ? (r.id === P.eos ? 'Stopped because <eos> appeared.' : S.ids.length >= TM ? 'Stopped because the context length ' + TM + ' was reached.' : '') : ''), '');
+        redraw();
+        if (!done && S.running) timer = setTimeout(one, delay); else { S.running = false; timer = null; setBusy(false); redraw(); }
+      })();
+    }
+
+    U.legendHTML(q('lgD'), [
+      { label: 'Probability after temperature <i>p</i><sub><i>i</i></sub> (frame)', color: col.gray, kind: 'band', alpha: 0.12 },
+      { label: 'Probability renormalized after top-k and top-p <i>p</i>′<sub><i>i</i></sub> (filled)', color: col.accent, kind: 'band', alpha: 0.85 },
+      { label: 'Excluded words (hatching, strikethrough)', color: col.gray, dash: [2, 3], width: 2 }]);
+
+    function drawDist(d, d1) {
+      var cv = q('cvD'), K = Math.min(10, d.order.length);
+      var F = U.fitCanvas(cv, { height: 30 + K * 26 + 34 }), c = F.c;
+      var top = 22, rh = 26;
+      var lw = 0; for (var k = 0; k < K; k++) lw = Math.max(lw, U.textWidth(c, V[d.order[k]], 11.5));
+      lw = Math.min(lw + 26, F.W * 0.38);
+      var x0 = lw + 4, x1 = F.W - 58, xs = function (p) { return x0 + (x1 - x0) * p; };
+      var ax = { box: [x0, top, x1, top + K * rh] };
+      /* 目盛 */
+      c.save(); c.strokeStyle = 'rgba(31,35,40,.10)'; c.lineWidth = 1;
+      [0, 0.25, 0.5, 0.75, 1].forEach(function (t) { var X = Math.round(xs(t)) + 0.5; c.beginPath(); c.moveTo(X, top - 4); c.lineTo(X, top + K * rh); c.stroke(); U.label(c, String(t), X, top + K * rh + 10, { size: 10, color: col.sub, halo: false }); });
+      c.restore();
+      U.label(c, 'Probability', (x0 + x1) / 2, top + K * rh + 25, { size: 10.5, color: col.sub, halo: false });
+      for (k = 0; k < K; k++) {
+        var id = d.order[k], y = top + k * rh, kept = d.keep.indexOf(id) >= 0, pt = d.pTau[id], pf = d.p[id];
+        U.label(c, (k + 1) + ' ' + V[id], x0 - 6, y + rh / 2, { size: 11.5, align: 'right', color: kept ? col.ink : '#8a9099', bold: kept && k === 0 });
+        c.save(); c.strokeStyle = col.gray; c.lineWidth = 1.2; c.fillStyle = 'rgba(107,116,128,.12)';
+        c.fillRect(x0, y + 4, xs(pt) - x0, rh - 8); c.strokeRect(x0 + 0.5, y + 4.5, Math.max(1, xs(pt) - x0 - 1), rh - 9); c.restore();
+        if (kept) { c.fillStyle = 'rgba(15,76,129,.85)'; c.fillRect(x0, y + 8, Math.max(1, xs(pf) - x0), rh - 16); }
+        else {
+          c.save(); c.beginPath(); c.rect(x0, y + 4, Math.max(2, xs(pt) - x0), rh - 8); c.clip(); c.strokeStyle = 'rgba(92,102,112,.6)';
+          for (var s = -rh; s < xs(pt) - x0 + rh; s += 5) { c.beginPath(); c.moveTo(x0 + s, y + rh - 4); c.lineTo(x0 + s + rh, y + 4); c.stroke(); } c.restore();
+        }
+        var txt = kept ? (d.greedy ? '1 (greedy)' : fmt(pf, 3)) : 'excluded';
+        U.label(c, txt, Math.min(Math.max(xs(Math.max(pt, pf)) + 4, x0 + 4), x1 + 52 - U.textWidth(c, txt, 11)), y + rh / 2, { size: 11, align: 'left', color: kept ? col.accent : '#8a9099', bold: kept });
+      }
+      var setting = d.greedy ? 'greedy' : 'τ = ' + fx(S.tau, 2) + ', top-k = ' + (S.topK || 'off') + ', top-p = ' + (S.topP >= 1 ? 'off' : fx(S.topP, 2));
+      U.label(c, 'Next-token probability (top ' + K + ' words)', F.W / 2, 10, { size: 10.5, color: col.sub, halo: false, box: [2, 0, F.W - 2, F.H] });
+      U.setCanvasLabel(cv, 'Top ' + K + ' words of the next-token probability: ' + d.order.slice(0, K).map(function (id) { return V[id] + ' ' + (d.keep.indexOf(id) >= 0 ? fmt(d.p[id], 3) : 'excluded') ; }).join(', ') + '. ' + setting + '. ' + d.keep.length + ' words remain.');
+    }
+    function drawAttn(F) {
+      var cv = q('cvW'), T = S.ids.length, A = F.attn[S.layer - 1][S.head - 1];
+      var G = U.fitCanvas(cv, { height: 60 }), c = G.c;
+      var lw = 0; for (var t = 0; t < T; t++) lw = Math.max(lw, U.textWidth(c, (t + 1) + ' ' + V[S.ids[t]], 10.5));
+      lw = Math.min(lw + 8, G.W * 0.42);
+      var cw = Math.max(9, Math.min(48, (G.W - lw - 12) / T)), ch = Math.max(14, Math.min(30, cw * 0.8));
+      var H = 34 + T * ch + 26;
+      G = U.fitCanvas(cv, { height: H }); c = G.c;
+      var x0 = lw + 4, y0 = 30;
+      heatCells(c, A, { x0: x0, y0: y0, cw: cw, ch: ch, mask: function (i, j) { return j > i; }, digits: 2, minText: 30, maskText: '', fs: 10, vmax: 1, hiRow: T - 1 });
+      var step = cw < 16 ? 2 : 1;
+      for (var j = 0; j < T; j += step) U.label(c, String(j + 1), x0 + (j + 0.5) * cw, y0 - 9, { size: 10, color: col.sub, halo: false });
+      for (var i = 0; i < T; i++) {
+        var lab = (i + 1) + ' ' + V[S.ids[i]];
+        while (U.textWidth(c, lab, 10.5) > lw - 6 && lab.length > 3) lab = lab.slice(0, -2) + '…';
+        U.label(c, lab, x0 - 4, y0 + (i + 0.5) * ch, { size: 10.5, align: 'right', color: i === T - 1 ? col.orange : col.ink, bold: i === T - 1, halo: false });
+      }
+      U.label(c, 'Layer ' + S.layer + ', head ' + S.head + ': row = query position, column = key position (index)', G.W / 2, 10, { size: 10.5, color: col.sub, halo: false, box: [2, 0, G.W - 2, H] });
+      U.label(c, 'Dashed box: last position (predicts the next token). Hatching: causal mask', G.W / 2, H - 11, { size: 10, color: col.sub, halo: false, box: [2, 0, G.W - 2, H] });
+      var last = A[T - 1].map(function (w, j) { return [w, j]; }).sort(function (a, b) { return b[0] - a[0]; }).slice(0, 4);
+      var lastTxt = last.map(function (p) { return (p[1] + 1) + ' “' + V[S.ids[p[1]]] + '” ' + fx(p[0], 3); }).join(', ');
+      U.setCanvasLabel(cv, 'Attention weights of layer ' + S.layer + ', head ' + S.head + '. Top weights at the last position: ' + lastTxt + '.');
+      q('capW').innerHTML = '<strong>Top weights at the last position (' + T + ' “' + esc(V[S.ids[T - 1]]) + '”):</strong> ' + esc(lastTxt) + '. Each row sums to 1, and the weights at future positions (upper right) are 0.' + (T > 12 ? ' (column indices are shown for every other column)' : '');
+    }
+    function toksHTML() {
+      return S.ids.map(function (id, t) {
+        var g = S.rec[t], cls = 'tk' + (g ? ' gen' : '') + (id === P.bos || id === P.eos ? ' sp' : '');
+        return '<span class="' + cls + '"><small>' + (t + 1) + '</small>' + esc(V[id]) + '</span>';
+      }).join('');
+    }
+    function genHTML(seq) {
+      var gpos = []; S.rec.forEach(function (r, t) { if (r) gpos.push(t); });
+      var h = '';
+      if (gpos.length) {
+        h += '<div class="tablewrap"><table class="grid small"><thead><tr><th>Position</th><th>Token</th><th>Method</th><th><i>p</i> (distribution used)</th><th><i>p</i> (model, τ = 1)</th><th>ln <i>p</i> (τ = 1)</th></tr></thead><tbody>';
+        gpos.forEach(function (t) { var r = S.rec[t]; h += '<tr><td>' + (t + 1) + '</td><td class="l">' + esc(V[S.ids[t]]) + '</td><td class="l">' + (r.mode === 'greedy' ? 'greedy' : 'τ=' + fx(r.tau, 2) + (r.topK ? ', k=' + r.topK : '') + (r.topP < 1 ? ', p=' + fx(r.topP, 2) : '')) + '</td><td>' + fmt(r.pUsed, 3) + '</td><td>' + fmt(r.pModel, 3) + '</td><td>' + fx(seq.lp[t - 1], 3) + '</td></tr>'; });
+        h += '</tbody></table></div>';
+        var sGen = 0; gpos.forEach(function (t) { sGen += seq.lp[t - 1]; });
+        h += kv([['ln <i>p</i> (τ = 1) of the generated part (' + gpos.length + ' tokens)', fx(sGen, 3)], ['Its perplexity', fmt(Math.exp(-sGen / gpos.length), 4)]]);
+      } else h += '<p class="hint">Nothing has been generated yet. Press “One token, greedy” or another button.</p>';
+      var ss = M.sentences(V, S.ids, P.bos, P.eos);
+      if (ss.length) {
+        h += '<ul class="judge">';
+        ss.forEach(function (s) {
+          var lab, why = '', st;
+          if (!s.complete) { st = 'incomplete'; lab = '… Incomplete'; why = 'The sentence has not ended (it has not reached the period token), so it is not judged.'; }
+          else {
+            var j = M.judge(JG, s.toks); st = j.status;
+            if (st === 'correct') { lab = '✓ Correct'; why = 'It fits template ' + j.tpl + ' and agrees with the table value.'; }
+            else if (st === 'wrong') { lab = '✗ Wrong (contradicts the table)'; why = j.wrongFields.map(function (k) { return 'In the table, the ' + (k === 'C' ? 'classification' : M.FIELD_JA[k]) + ' of ' + j.mat + ' is “' + (j.truth[k] || '').replace(/ /g, '') + '”'; }).join(', ') + '. ' + (j.tier === 'low' ? '(a rare material in the training data)' : j.tier === 'mid' ? '(a medium-frequency material in the training data)' : ''); }
+            else if (st === 'not_in_table') { lab = '? Unsupported by the training data'; why = 'The table has no value for the ' + j.unknownFields.map(function (k) { return M.FIELD_JA[k]; }).join(' / ') + ' of ' + j.mat + '; this combination never appears in the training data. Only the template was matched and the content was made up.'; }
+            else { lab = '— Fits no template'; why = 'It matches none of the 8 sentence templates in the training data.'; }
+          }
+          var lp = 0, n = 0; for (var t = s.start; t <= Math.min(s.end + (s.complete && S.ids[s.end + 1] === P.eos ? 1 : 0), S.ids.length - 1); t++) if (t >= 1) { lp += seq.lp[t - 1]; n++; }
+          h += '<li><span class="jl ' + st + '">' + lab + '</span>' + esc(s.toks.join(' ')) + '<br><span class="hint">' + esc(why) + (n ? ' Sentence ln <i>p</i> (τ = 1, ' + n + ' tokens' + (S.ids[s.end + 1] === P.eos ? ', including &lt;eos&gt;' : '') + ') = ' + fx(lp, 2) + ', perplexity ' + fmt(Math.exp(-lp / n), 3) : '') + '</span></li>';
+        });
+        h += '</ul>';
+      }
+      return h;
+    }
+    function eqD(lo, d, d1, seq) {
+      var rows = [], top = d.order[0], o = lo, omax = Math.max.apply(null, o), tau = S.tau;
+      var sum = 0; o.forEach(function (v) { sum += Math.exp((v - omax) / tau); });
+      var w = '<mtext>“' + esc(V[top]) + '”</mtext>';
+      rows.push(row(msub(mi('p'), w) + mo('=') + frac(mi('exp') + mo('(') + msub(mi('o'), w) + mo('/') + mi('τ') + mo(')'), '<munder><mo>∑</mo><mi>j</mi></munder>' + mi('exp') + mo('(') + msub(mi('o'), mi('j')) + mo('/') + mi('τ') + mo(')'))));
+      var phP = '<mphantom>' + msub(mi('p'), w) + '</mphantom>';   /* 狭い幅で切れないよう 1 つの式を 3 行に分ける（2026-11-13 点検） */
+      rows.push(row(phP + mo('=') + frac(mi('exp') + mo('(') + mn(f4(o[top])) + mo('/') + mn(fx(tau, 2)) + mo(')'), mi('exp') + mo('(') + mn(f4(omax)) + mo('/') + mn(fx(tau, 2)) + mo(')') + mo('×') + mn(f4(sum)))));
+      rows.push(row(phP + mo('=') + mn(fmt(d.pTau[top], 4))));
+      var noteD = 'The denominator is computed after subtracting the largest logit ' + f4(omax) + ' (at τ = 1 the probability of “' + esc(V[top]) + '” is ' + fmt(d1.pTau[top], 4) + '). ';
+      if (d.greedy) rows.push(row('<mtext>greedy: choose the word with the largest logit with probability 1</mtext>'));
+      else if (d.keep.length < V.length) {
+        var sk = 0; d.keep.forEach(function (i) { sk += d.pTau[i]; });
+        rows.push(row(msubsup(mi('p'), w, mo('′')) + mo('=') + frac(msub(mi('p'), w), '<munder><mo>∑</mo><mtext>' + d.keep.length + ' kept words</mtext></munder>' + msub(mi('p'), mi('j')))));
+        rows.push(row('<mphantom>' + msubsup(mi('p'), w, mo('′')) + '</mphantom>' + mo('=') + frac(mn(fmt(d.pTau[top], 4)), mn(fmt(sk, 4))) + mo('=') + mn(fmt(d.p[top], 4))));
+      } else noteD += 'No words are excluded by top-k or top-p (p′ = p). ';
+      if (S.ids.length > 1) {
+        var lps = seq.lp.slice(-Math.min(4, seq.lp.length));
+        var termsArr = lps.map(function (v, k) { var a = mn(fx(Math.abs(v), 3)); return (k === 0 && seq.lp.length <= 4) ? (v < 0 ? mo('−') + a : a) : (v < 0 ? mo('−') : mo('+')) + a; });
+        var phL = '<mphantom>' + mi('ln') + mi('p') + '</mphantom>';
+        rows.push(row(mi('ln') + mi('p') + mo('(') + msub(mi('x'), mn(2) + mo(':') + mn(S.ids.length)) + mo('∣') + msub(mi('x'), mn(1)) + mo(')')));
+        /* 項は 2 つずつ改行（狭い幅で切れないように） */
+        for (var tk = 0; tk < termsArr.length; tk += 2) rows.push(row(phL + (tk === 0 ? mo('=') + (seq.lp.length > 4 ? mo('⋯') : '') : '<mphantom>' + mo('=') + '</mphantom>') + termsArr.slice(tk, tk + 2).join('')));
+        rows.push(row(phL + mo('=') + mn(fx(seq.sum, 3))));
+        rows.push(row('<mtext>perplexity</mtext>' + mo('=') + mi('exp') + mo('(') + mo('−') + frac(mi('ln') + mi('p'), mi('n')) + mo(')')));
+        rows.push(row('<mphantom><mtext>perplexity</mtext></mphantom>' + mo('=') + mi('exp') + mo('(') + frac(mn(fx(-seq.sum, 3)), mn(seq.n)) + mo(')') + mo('=') + mn(fmt(seq.ppl, 4))));
+      }
+      q('eqD').innerHTML = table(rows) + '<p class="hint">' + noteD + 'The ln <i>p</i> of the sequence uses the probabilities of the model itself (τ = 1), summed from the token after <i>x</i><sub>1</sub> = &lt;bos&gt; to the end.</p>';
+    }
+    function msubsup(a, b, c) { return '<msubsup>' + a + '<mrow>' + b + '</mrow><mrow>' + c + '</mrow></msubsup>'; }
+    function tableD(d, d1) {
+      var K = Math.min(10, d.order.length), h = '<table class="grid small"><thead><tr><th>Rank</th><th>Token</th><th>logits <i>o</i><sub><i>i</i></sub></th><th>τ = 1</th><th>After τ</th><th>Cumulative (for top-p)</th><th>Final <i>p</i>′</th></tr></thead><tbody>';
+      for (var k = 0; k < K; k++) {
+        var id = d.order[k], kept = d.keep.indexOf(id) >= 0, ka = d.afterK.indexOf(id);
+        h += '<tr' + (kept ? '' : ' class="cut"') + '><td>' + (k + 1) + '</td><td class="l">' + esc(V[id]) + '</td><td>' + fx(S.lo[id], 3) + '</td><td>' + fmt(d1.pTau[id], 3) + '</td><td>' + fmt(d.pTau[id], 3) + '</td><td>' + (ka >= 0 && !d.greedy ? fx(d.cumK[ka], 3) : '—') + '</td><td>' + (kept ? fmt(d.p[id], 3) : 'excluded') + '</td></tr>';
+      }
+      return h + '</tbody></table><p class="hint">' + d.keep.length + ' words remain (out of ' + V.length + ' words in the vocabulary). “Cumulative” is the sum of the probabilities renormalized after top-k, added in descending order; top-p keeps words until it reaches <i>p</i> or more.</p>';
+    }
+    function bigramHTML(d1) {
+      var last = S.ids[S.ids.length - 1], bd = M.bigramDist(B, last);
+      var ob = C.linspace(0, V.length - 1, V.length).map(Math.round).sort(function (a, b) { return bd[b] - bd[a] || a - b; }).slice(0, 5);
+      var h = '<div class="two"><div><div class="ctlhead">Bigram model (only the previous token “' + esc(V[last]) + '”)</div><table class="grid small"><tbody>' + ob.map(function (i) { return '<tr><td class="l">' + esc(V[i]) + '</td><td>' + fmt(bd[i], 3) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      h += '<div><div class="ctlhead">Small Transformer (whole context, τ = 1)</div><table class="grid small"><tbody>' + d1.order.slice(0, 5).map(function (i) { return '<tr><td class="l">' + esc(V[i]) + '</td><td>' + fmt(d1.pTau[i], 3) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+      h += '<p class="hint">If the previous word is the same, the bigram model gives the same distribution whatever material came earlier (validation perplexity 2.52; Transformer: 1.65).</p>';
+      return h;
+    }
+    function shapesHTML(T) {
+      return '<table class="grid small"><thead><tr><th class="l">Values flowing through (current <i>T</i> = ' + T + ')</th><th>Shape</th></tr></thead><tbody>' +
+        [['Token IDs', String(T)], ['Embedding + position <i>h</i>', T + ' × 32'], ['<i>Q</i>, <i>K</i>, <i>V</i> (one layer)', 'each ' + T + ' × 32 (' + T + ' × 16 per head)'], ['Scores and weights (per head)', T + ' × ' + T], ['FFN hidden layer', T + ' × 128'], ['Layer output', T + ' × 32'], ['logits', T + ' × 67 (last row = next token)']]
+          .map(function (r) { return '<tr><td class="l">' + r[0] + '</td><td>' + r[1] + '</td></tr>'; }).join('') + '</tbody></table>';
+    }
+
+    var self = {
+      update: function () {
+        var F;
+        try { F = M.forward(P, S.ids); } catch (e) { U.status(msg, 'Computation stopped: ' + e.message, 'warn'); return; }
+        var lo = F.logits[S.ids.length - 1]; S.lo = lo;
+        if (!U.guardFinite(lo, msg, 'logits')) return;
+        var d = M.nextDist(lo, S.tau, S.topK, S.topP), d1 = M.nextDist(lo, 1, 0, 1);
+        var seq = S.ids.length > 1 ? M.seqLogProb(P, S.ids, 1) : { lp: [], sum: 0, n: 0, ppl: null };
+        q('toks').innerHTML = toksHTML();
+        q('toks').setAttribute('aria-label', 'Context: ' + S.ids.map(function (i) { return V[i]; }).join(' '));
+        q('toksHint').innerHTML = 'Context: ' + S.ids.length + ' tokens (limit ' + TM + '). A thick orange frame marks a generated token. The number at position <i>t</i> is the subscript of <i>x</i><sub><i>t</i></sub> in the text.';
+        drawDist(d, d1);
+        q('capD').innerHTML = '<strong>' + (d.greedy ? 'greedy' : 'τ = ' + fx(S.tau, 2) + ', top-k = ' + (S.topK || 'off') + ', top-p = ' + (S.topP >= 1 ? 'off' : fx(S.topP, 2))) + '.</strong> This is the distribution of the next token <i>x</i><sub>' + (S.ids.length + 1) + '</sub>, built from the logits at the last position (' + S.ids.length + ' “' + esc(V[S.ids[S.ids.length - 1]]) + '”). The 10 words with the largest probabilities out of the 67-word vocabulary are shown. The training data is a synthetic teaching corpus (Japanese text).';
+        q('tblD').innerHTML = tableD(d, d1);
+        eqD(lo, d, d1, seq);
+        q('genOut').innerHTML = genHTML(seq);
+        drawAttn(F);
+        q('bigram').innerHTML = bigramHTML(d1);
+        q('shapes').innerHTML = shapesHTML(S.ids.length);
+        var ent = 0; d1.pTau.forEach(function (p) { if (p > 0) ent -= p * Math.log(p); });
+        q('readM').innerHTML = kv([
+          ['Context length <i>T</i>', S.ids.length + ' / ' + TM],
+          ['Top-ranked next token (τ = 1)', esc(V[d1.order[0]]) + ' ' + fmt(d1.pTau[d1.order[0]], 3)],
+          ['Entropy of the distribution (τ = 1)', fx(ent, 3) + ' nat'],
+          ['Words kept (current settings)', d.keep.length + ' words'],
+          ['Probability of the top word with current settings', fmt(d.p[d.keep[0]], 3)],
+          ['ln <i>p</i> of the sequence (from <i>x</i><sub>2</sub>)', S.ids.length > 1 ? fx(seq.sum, 3) : '—'],
+          ['perplexity', seq.ppl === null ? '—' : fmt(seq.ppl, 4)],
+          ['seed', String(S.seed)]]);
+        [bG1, bS1, bGA, bGG].forEach(function (b) { if (!S.running) b.disabled = S.ids.length >= TM; });
+        bPop.disabled = S.ids.length <= 1 || S.running; bRedo.disabled = S.running;
+        U.postHeightLater();
+      },
+      hide: function () { stop(); },
+      state: S
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { attn: AttnSim, model: ModelSim }, initial: 'attn' });
+})();
+</script>
+</body>
+</html>

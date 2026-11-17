@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sequence Models Simulator — Hidden Markov Models and the Kalman Filter</title>
+<meta name="description" content="A simulator for checking, with formulas and numbers side by side, a hidden Markov model (forward–backward algorithm, Viterbi algorithm) that estimates whether a machine is normal or degraded from sensor observations, and a one-dimensional Kalman filter.">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第22章のシミュレーター S09．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+  #qsim .tablewrap table.grid { margin: 4px 0 2px; }
+  #qsim .tablewrap table.grid th, #qsim .tablewrap table.grid td { white-space: nowrap; }
+  #qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+  #qsim table.grid tr.best td { font-weight: 700; background: rgba(0,135,108,.10); }
+  #qsim table.grid tr.sum td { font-weight: 700; border-top: 2px solid var(--line); }
+  #qsim .xsel { display: flex; gap: 8px; flex-wrap: wrap; }
+  #qsim .xsel .ctl { flex: 1 1 90px; min-width: 0; }
+  #qsim .bnote { font-size: .78rem; color: var(--sub); margin: 2px 0 6px; }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>Sequence Models — Hidden Markov Models and the Kalman Filter</h1>
+  <p class="lead">Whether a machine is “normal” or “degraded” (the hidden state) cannot be seen directly; only sensor values (observations) arrive at each time step. From the sequence of observations, estimate the hidden states. Check with the numbers plugged into the formulas: the difference between filtering by the forward algorithm (uses the observations up to that time) and smoothing <i>γ</i><sub><i>t</i></sub> that also uses the backward algorithm (uses the observations at all times); the fact that the most probable state sequence (Viterbi algorithm) can differ from the sequence of the most probable state at each time; and that a continuous hidden state leads to the Kalman filter.</p>
+
+  <div class="tabs" role="tablist" aria-label="Switch simulator">
+    <button class="tab is-active" data-tab="hmm" role="tab" type="button">① Hidden Markov model</button>
+    <button class="tab" data-tab="kalman" role="tab" type="button">② Kalman filter</button>
+  </div>
+
+  <!-- ① 隠れ Markov モデル -->
+  <section class="panel" data-panel="hmm">
+    <div class="layout">
+      <div class="col-main">
+        <div data-role="genView">
+          <p class="ptitle">Observation sequence and true states</p>
+          <p class="psub">“Advance time” moves the time <i>t</i> under study (vertical dashed line), and “Putting the current numbers into the formula” below shows one step of the forward algorithm at that time.</p>
+          <div class="stage">
+            <canvas data-role="cvObs"></canvas>
+            <div data-role="lgObs"></div>
+            <p class="cap" data-role="capObs"></p>
+          </div>
+          <p class="ptitle">Probability of degradation: filtering and smoothing</p>
+          <div class="stage">
+            <canvas data-role="cvProb"></canvas>
+            <div data-role="lgProb"></div>
+            <p class="cap">The dashed line is filtering <i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>t</i></sub>) (uses only the observations up to time <i>t</i>); the solid line is smoothing <i>γ</i><sub><i>t</i></sub>(2) = <i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>T</i></sub>) (uses the observations at all times). The hatched bands mark the times when the true state is degraded. State numbers: 1 = normal, 2 = degraded.</p>
+          </div>
+          <p class="ptitle">State sequences (estimated and true)</p>
+          <div class="stage">
+            <canvas data-role="cvSeq"></canvas>
+            <p class="cap">In each row, a filled cell means the time is estimated as “degraded” and a white cell means “normal.” A small ▲ under a cell marks a time that differs from the true state. “γ max” is the sequence of the state with the largest <i>γ</i><sub><i>t</i></sub>(<i>j</i>) at each time, “Filter” is the sequence of the state with the largest filtering probability, and Viterbi is the state sequence with the largest joint probability <i>p</i>(<i>x</i><sub>1:<i>T</i></sub>, <i>z</i><sub>1:<i>T</i></sub>).</p>
+          </div>
+          <div class="info">
+            <h3>Putting the current numbers into the formula (time under study <span data-role="tNow">t</span>, state 2 = degraded)</h3>
+            <div class="eq left" data-role="eqGen" aria-live="polite"></div>
+            <p class="hint"><i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>t</i>−1</sub>) is the prediction from the observations up to one step earlier, and <i>c</i><sub><i>t</i></sub> = <i>p</i>(<i>x</i><sub><i>t</i></sub> | <i>x</i><sub>1:<i>t</i>−1</sub>) is the normalizing coefficient. The value for state 1 (normal) is obtained by subtracting from 1 (there are only two states). <i>α̂</i><sub><i>t</i></sub>(<i>j</i>) is the normalized forward variable, which is exactly the filtering probability.</p>
+          </div>
+        </div>
+
+        <div data-role="handView" hidden>
+          <p class="ptitle">Trellis diagram for the hand calculation (2 states, 3 time steps)</p>
+          <p class="psub">Each cell shows <i>α</i><sub><i>t</i></sub>(<i>j</i>), <i>β</i><sub><i>t</i></sub>(<i>j</i>), and <i>γ</i><sub><i>t</i></sub>(<i>j</i>). The thick green arrows are the Viterbi path, and the double frame marks the state with the largest <i>γ</i><sub><i>t</i></sub> at each time.</p>
+          <div class="stage">
+            <canvas data-role="cvTrellis"></canvas>
+            <div data-role="lgTrellis"></div>
+            <p class="cap" data-role="capTrellis"></p>
+          </div>
+          <div class="info">
+            <h3>Table of forward, backward, and smoothing</h3>
+            <div data-role="tblFB"></div>
+          </div>
+          <div class="info">
+            <h3>Full enumeration of the 8 state sequences</h3>
+            <div data-role="tblEnum"></div>
+          </div>
+          <div class="info">
+            <h3>Table for the Viterbi algorithm</h3>
+            <div data-role="tblVit"></div>
+          </div>
+          <div class="info">
+            <h3>Putting the current numbers into the formula</h3>
+            <div data-role="eqPick"></div>
+            <div class="eq left" data-role="eqHand" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlHmm"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readHmm" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② Kalman フィルター -->
+  <section class="panel" data-panel="kalman" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">True state, observations, and the Kalman filter estimate</p>
+        <p class="psub">The hidden state <i>z</i><sub><i>t</i></sub> moves as a random walk, and noise is added to the observation <i>x</i><sub><i>t</i></sub>. The plot shows the estimated mean <i>μ</i><sub><i>t</i></sub> and a band of ±2√<i>P</i><sub><i>t</i></sub>.</p>
+        <div class="stage">
+          <canvas data-role="cvK"></canvas>
+          <div data-role="lgK"></div>
+          <p class="cap" data-role="capK"></p>
+        </div>
+        <p class="ptitle">Evolution of the Kalman gain <i>K</i><sub><i>t</i></sub> and the estimate variance <i>P</i><sub><i>t</i></sub></p>
+        <div class="stage">
+          <canvas data-role="cvG"></canvas>
+          <div data-role="lgG"></div>
+          <p class="cap">The dotted horizontal lines are the steady-state values <i>K</i><sub>∞</sub> and <i>P</i><sub>∞</sub>. At times when the observation is missing (hatched bands) no update is possible, so <i>K</i><sub><i>t</i></sub> = 0 and <i>P</i><sub><i>t</i></sub> grows by <i>q</i> at every step. At times with an observation, <i>P</i><sub><i>t</i></sub> = <i>K</i><sub><i>t</i></sub><i>r</i>, so for <i>r</i> = 1 the two lines overlap (dashed line on top of the thick solid line).</p>
+        </div>
+        <div class="info">
+          <h3>Putting the current numbers into the formula (time under study <span data-role="tNowK">t</span>)</h3>
+          <div class="eq left" data-role="eqK" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlK"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readK" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>The first 3 time steps (prediction and update)</h3>
+          <div data-role="first3"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">The interactive parts of this page run on JavaScript. Because JavaScript is disabled, the figures and controls are not displayed. You can still read the description below (procedure, formulas, conditions, questions). The text can be read from <a href="../ch22_sequences_hmm.html#sec22-5" target="_top">Chapter 22, Section 22.5</a>.</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>Description of this simulator (procedure, formulas, conditions, questions)</summary>
+
+      <h2>Procedure and what to observe</h2>
+      <ol>
+        <li>In ①, look at the figure with the defaults (discrete three-valued, <i>π</i><sub>1</sub> = 0.95, <i>A</i><sub>11</sub> = 0.97, <i>A</i><sub>22</sub> = 0.95, separation <i>s</i> = 0.7, <i>T</i> = 100; the true state is degraded from time 69 to 86). <span class="look">What to look at: the dashed line (filtering) jumps around with each new observation and, even in a normal interval, wrongly exceeds 0.5 when “High” continues. The solid line (smoothing <i>γ</i><sub><i>t</i></sub>) also uses later observations, so it is smooth and catches the start of the degradation early. In the readout the accuracy is 0.90 for filtering, 0.99 for smoothing, and 0.98 for Viterbi.</span></li>
+        <li>Press “Advance time” or repeat “Step 1 time step.” <span class="look">What to look at: in “Putting the current numbers into the formula,” the “prediction” (the previous filtering probability multiplied by the transition probabilities <i>A</i><sub><i>ij</i></sub> and summed) is multiplied by the emission probability and normalized, which gives the filtering probability at that time.</span></li>
+        <li>Set the separation <i>s</i> to 0, then to 1. <span class="look">What to look at: at <i>s</i> = 0 the observations say nothing about the state, so <i>γ</i><sub><i>t</i></sub> becomes the prior probability determined by the transitions alone, and the accuracy drops. As <i>s</i> increases, the estimate approaches the true state.</span></li>
+        <li>Switch to “Gaussian” and change the degraded mean <i>Δ</i>. <span class="look">What to look at: when <i>Δ</i> is small (the two distributions overlap) the estimate becomes ambiguous, and when <i>Δ</i> is 3 or more it is almost always right.</span></li>
+        <li>Switch to “Hand calculation (<i>T</i> = 3).” <span class="look">What to look at: <i>α</i><sub>3</sub>(1) + <i>α</i><sub>3</sub>(2) and the sum of the probabilities <i>p</i>(<i>x</i><sub>1:3</sub>, <i>z</i><sub>1:3</sub>) of the 8 state sequences give the same value <i>p</i>(<i>x</i><sub>1:3</sub>) = 0.036280. <i>γ</i><sub><i>t</i></sub> agrees with the value marginalized from the full enumeration.</span></li>
+        <li>In hand-calculation mode, press “Mismatch example (Low, High, Mid).” <span class="look">What to look at: the Viterbi path is Normal → Degraded → Degraded, yet the sequence of the state with the largest <i>γ</i><sub><i>t</i></sub> at each time is Normal → Degraded → Normal. Compare the probabilities of those two sequences in the full-enumeration table.</span></li>
+        <li>In ②, turn on “Insert missing observations.” <span class="look">What to look at: at times with no observation only the prediction is made, so the band (±2√<i>P</i><sub><i>t</i></sub>) keeps widening and then narrows abruptly when observations return. In the lower figure, <i>K</i><sub><i>t</i></sub> = 0 and <i>P</i><sub><i>t</i></sub> grows by <i>q</i> at every step.</span></li>
+        <li>In ②, uncheck “Use the same q, r as the data” and make the filter’s <i>q</i> smaller or larger. <span class="look">What to look at: assuming a small <i>q</i> makes the estimate sluggish (<i>K</i><sub>∞</sub> is small), and assuming a large <i>q</i> makes it swayed by the observation noise. The fraction of times the true value falls inside the ±2√<i>P</i><sub><i>t</i></sub> band (the coverage) deviates from 95 %.</span></li>
+      </ol>
+      <p>With the keyboard, Tab moves to buttons and sliders, Enter (or Space) presses, and the arrow keys move sliders. The tabs can be switched with ←→. When embedded, <code>?only=hmm&amp;mode=hand</code> starts in hand-calculation mode.</p>
+
+      <h2>Formulas and algorithms computed</h2>
+      <p>Let the hidden state be <i>z</i><sub><i>t</i></sub> ∈ {1, 2} (1 = normal, 2 = degraded), the initial distribution <i>π</i><sub><i>i</i></sub> = <i>p</i>(<i>z</i><sub>1</sub> = <i>i</i>), the transition matrix <i>A</i><sub><i>ij</i></sub> = <i>p</i>(<i>z</i><sub><i>t</i></sub> = <i>j</i> | <i>z</i><sub><i>t</i>−1</sub> = <i>i</i>) (from <i>i</i> to <i>j</i>; each row sums to 1), and the emission probability <i>B</i><sub><i>jv</i></sub> = <i>p</i>(<i>x</i><sub><i>t</i></sub> = <i>v</i> | <i>z</i><sub><i>t</i></sub> = <i>j</i>). Then the joint distribution is</p>
+      <div class="eq"><math display="block"><mrow><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo>,</mo><msub><mi>z</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><msub><mi>π</mi><msub><mi>z</mi><mn>1</mn></msub></msub><munderover><mo>∏</mo><mrow><mi>t</mi><mo>=</mo><mn>2</mn></mrow><mi>T</mi></munderover><msub><mi>A</mi><mrow><msub><mi>z</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><msub><mi>z</mi><mi>t</mi></msub></mrow></msub><munderover><mo>∏</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>T</mi></munderover><msub><mi>B</mi><mrow><msub><mi>z</mi><mi>t</mi></msub><msub><mi>x</mi><mi>t</mi></msub></mrow></msub></mrow></math></div>
+      <p>The forward algorithm (<i>α</i><sub><i>t</i></sub>(<i>j</i>) = <i>p</i>(<i>x</i><sub>1:<i>t</i></sub>, <i>z</i><sub><i>t</i></sub> = <i>j</i>)) and the backward algorithm (<i>β</i><sub><i>t</i></sub>(<i>j</i>) = <i>p</i>(<i>x</i><sub><i>t</i>+1:<i>T</i></sub> | <i>z</i><sub><i>t</i></sub> = <i>j</i>)):</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><msub><mi>α</mi><mn>1</mn></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>π</mi><mi>j</mi></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mn>1</mn></msub></mrow></msub><mo>,</mo><mspace width="1em"/><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><munder><mo>∑</mo><mi>i</mi></munder><msub><mi>α</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="1em"/><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>α</mi><mi>T</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><msub><mi>β</mi><mi>T</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>,</mo><mspace width="1em"/><msub><mi>β</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow></msub><msub><mi>β</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mtd></mtr><mtr><mtd><msub><mi>γ</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><mi>p</mi><mo stretchy="false">(</mo><msub><mi>z</mi><mi>t</mi></msub><mo>=</mo><mi>j</mi><mo>∣</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><msub><mi>β</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mrow><mrow><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo></mrow></mfrac><mo>,</mo><mspace width="1em"/><mi>p</mi><mo stretchy="false">(</mo><msub><mi>z</mi><mi>t</mi></msub><mo>=</mo><mi>j</mi><mo>∣</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>t</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mrow><mrow><msub><mo>∑</mo><mi>k</mi></msub><msub><mi>α</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>k</mi><mo stretchy="false">)</mo></mrow></mfrac><mspace width="0.5em"/><mtext>(filtering)</mtext></mtd></mtr></mtable></math></div>
+      <p><i>α</i><sub><i>t</i></sub>(<i>j</i>) is a product of probabilities, so for large <i>T</i> it shrinks exponentially and eventually rounds to 0 in floating-point numbers (in this simulator’s test it rounded to 0 at <i>T</i> = 2000). We therefore use the following <strong>scaling</strong>. At each time we divide by the normalizing coefficient <i>c</i><sub><i>t</i></sub> = <i>p</i>(<i>x</i><sub><i>t</i></sub> | <i>x</i><sub>1:<i>t</i>−1</sub>) and compute the normalized <i>α̂</i><sub><i>t</i></sub>(<i>j</i>) = <i>p</i>(<i>z</i><sub><i>t</i></sub> = <i>j</i> | <i>x</i><sub>1:<i>t</i></sub>) in sequence.</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><msub><mi>c</mi><mi>t</mi></msub><mo>=</mo><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><munder><mo>∑</mo><mi>i</mi></munder><msub><mover><mi>α</mi><mo>^</mo></mover><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mover><mi>α</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><msub><mo>∑</mo><mi>i</mi></msub><msub><mover><mi>α</mi><mo>^</mo></mover><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow><msub><mi>c</mi><mi>t</mi></msub></mfrac><mo>,</mo><mspace width="0.8em"/><mi>ln</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mrow><mn>1</mn><mo>:</mo><mi>T</mi></mrow></msub><mo stretchy="false">)</mo><mo>=</mo><munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mi>T</mi></munderover><mi>ln</mi><msub><mi>c</mi><mi>t</mi></msub></mtd></mtr><mtr><mtd><msub><mover><mi>β</mi><mo>^</mo></mover><mi>T</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>,</mo><mspace width="0.8em"/><msub><mover><mi>β</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><msub><mi>c</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mfrac><munder><mo>∑</mo><mi>j</mi></munder><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub></mrow></msub><msub><mover><mi>β</mi><mo>^</mo></mover><mrow><mi>t</mi><mo>+</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.8em"/><msub><mi>γ</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mover><mi>α</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><msub><mover><mi>β</mi><mo>^</mo></mover><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo></mtd></mtr></mtable></math></div>
+      <p>Inside the computation, a version that obtains the same quantities in <strong>logarithms</strong> (updating ln <i>α</i><sub><i>t</i></sub> with log-sum-exp) is also computed in parallel, and the readout shows the difference between the two log-likelihoods (the size of the rounding error). For Gaussian observations, the density 𝒩(<i>x</i><sub><i>t</i></sub> | <i>μ</i><sub><i>j</i></sub>, <i>σ</i><sup>2</sup>) is used in place of <i>B</i><sub><i>jx</i><sub><i>t</i></sub></sub>, and at each time we divide by the larger of the two densities before computing (the divided amount is added back to the log-likelihood).</p>
+      <p>The Viterbi algorithm takes a maximum instead of a sum. <i>ω</i><sub><i>t</i></sub>(<i>j</i>) is “the joint probability of the most probable state sequence among those ending in state <i>j</i> at time <i>t</i>,” and <i>ψ</i><sub><i>t</i></sub>(<i>j</i>) is the previous state at that point (the back pointer). The computation is done in logarithms.</p>
+      <div class="eq"><math display="block"><mrow><msub><mi>ω</mi><mn>1</mn></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>π</mi><mi>j</mi></msub><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mn>1</mn></msub></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>ω</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><msub><mi>B</mi><mrow><mi>j</mi><msub><mi>x</mi><mi>t</mi></msub></mrow></msub><munder><mo movablelimits="false">max</mo><mi>i</mi></munder><msub><mi>ω</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>ψ</mi><mi>t</mi></msub><mo stretchy="false">(</mo><mi>j</mi><mo stretchy="false">)</mo><mo>=</mo><munder><mo movablelimits="false">argmax</mo><mi>i</mi></munder><msub><mi>ω</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">(</mo><mi>i</mi><mo stretchy="false">)</mo><msub><mi>A</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow></math></div>
+      <p>The Kalman filter in ② is the forward algorithm for the case in which a continuous hidden state <i>z</i><sub><i>t</i></sub> follows a random walk <i>z</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i>−1</sub> + <i>w</i><sub><i>t</i></sub> (<i>w</i><sub><i>t</i></sub> ~ 𝒩(0, <i>q</i>)) and the observation is <i>x</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i></sub> + <i>v</i><sub><i>t</i></sub> (<i>v</i><sub><i>t</i></sub> ~ 𝒩(0, <i>r</i>)). Because the distributions remain Gaussian throughout, only the mean and the variance need to be updated (the update is the same computation as “Bayesian estimation of the mean of a Gaussian distribution” in Chapter 4).</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.6em"><mtr><mtd><mtext>Prediction:</mtext><mspace width="0.4em"/><msub><mi>μ</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>μ</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>,</mo><mspace width="0.8em"/><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>=</mo><msub><mi>P</mi><mrow><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>q</mi><mspace width="0.8em"/><mtext>(for </mtext><mi>t</mi><mo>=</mo><mn>1</mn><mtext>: </mtext><msub><mi>μ</mi><mn>0</mn></msub><mtext>, </mtext><msub><mi>P</mi><mn>0</mn></msub><mtext>)</mtext></mtd></mtr><mtr><mtd><mtext>Gain:</mtext><mspace width="0.4em"/><msub><mi>K</mi><mi>t</mi></msub><mo>=</mo><mfrac><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mrow><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>r</mi></mrow></mfrac></mtd></mtr><mtr><mtd><mtext>Update:</mtext><mspace width="0.4em"/><msub><mi>μ</mi><mi>t</mi></msub><mo>=</mo><msub><mi>μ</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><msub><mi>K</mi><mi>t</mi></msub><mo stretchy="false">(</mo><msub><mi>x</mi><mi>t</mi></msub><mo>−</mo><msub><mi>μ</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.8em"/><msub><mi>P</mi><mi>t</mi></msub><mo>=</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><msub><mi>K</mi><mi>t</mi></msub><mo stretchy="false">)</mo><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>=</mo><mfrac><mrow><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mi>r</mi></mrow><mrow><msub><mi>P</mi><mrow><mi>t</mi><mo>∣</mo><mi>t</mi><mo>−</mo><mn>1</mn></mrow></msub><mo>+</mo><mi>r</mi></mrow></mfrac></mtd></mtr><mtr><mtd><mtext>Steady state:</mtext><mspace width="0.4em"/><msubsup><mi>P</mi><mi>∞</mi><mo>−</mo></msubsup><mo>=</mo><mfrac><mrow><mi>q</mi><mo>+</mo><msqrt><mrow><msup><mi>q</mi><mn>2</mn></msup><mo>+</mo><mn>4</mn><mi>q</mi><mi>r</mi></mrow></msqrt></mrow><mn>2</mn></mfrac><mo>,</mo><mspace width="0.8em"/><msub><mi>K</mi><mi>∞</mi></msub><mo>=</mo><mfrac><msubsup><mi>P</mi><mi>∞</mi><mo>−</mo></msubsup><mrow><msubsup><mi>P</mi><mi>∞</mi><mo>−</mo></msubsup><mo>+</mo><mi>r</mi></mrow></mfrac><mo>,</mo><mspace width="0.8em"/><msub><mi>P</mi><mi>∞</mi></msub><mo>=</mo><msub><mi>K</mi><mi>∞</mi></msub><mi>r</mi></mtd></mtr></mtable></math></div>
+      <p><i>μ</i><sub><i>t</i></sub> and <i>P</i><sub><i>t</i></sub> are the mean and variance of <i>p</i>(<i>z</i><sub><i>t</i></sub> | <i>x</i><sub>1:<i>t</i></sub>) = 𝒩(<i>z</i><sub><i>t</i></sub> | <i>μ</i><sub><i>t</i></sub>, <i>P</i><sub><i>t</i></sub>), and <i>μ</i><sub><i>t</i>|<i>t</i>−1</sub> and <i>P</i><sub><i>t</i>|<i>t</i>−1</sub> are the mean and variance of the prediction from the observations up to one step earlier. At a time when the observation is missing, no update is made: <i>μ</i><sub><i>t</i></sub> = <i>μ</i><sub><i>t</i>|<i>t</i>−1</sub> and <i>P</i><sub><i>t</i></sub> = <i>P</i><sub><i>t</i>|<i>t</i>−1</sub>. The variance update is computed in the subtraction-free form <i>P</i><sub><i>t</i>|<i>t</i>−1</sub><i>r</i>/(<i>P</i><sub><i>t</i>|<i>t</i>−1</sub> + <i>r</i>), so it cannot become negative through rounding.</p>
+
+      <h2>Data and random-number conditions</h2>
+      <ul>
+        <li>The sequence in ① is <strong>synthetic data for teaching purposes</strong> (not a record of a real machine). State 1 = normal, 2 = degraded. <i>z</i><sub>1</sub> ~ <i>π</i>, <i>z</i><sub><i>t</i></sub> | <i>z</i><sub><i>t</i>−1</sub> = <i>i</i> ~ (<i>A</i><sub><i>i</i>1</sub>, <i>A</i><sub><i>i</i>2</sub>). <i>A</i><sub>12</sub> = 1 − <i>A</i><sub>11</sub>, <i>A</i><sub>21</sub> = 1 − <i>A</i><sub>22</sub>. The defaults are <i>π</i> = (0.95, 0.05), <i>A</i><sub>11</sub> = 0.97, <i>A</i><sub>22</sub> = 0.95, <i>T</i> = 100.</li>
+        <li>Discrete three-valued observation (the sensor value divided into three levels, Low, Mid, High; <i>v</i> = 1, 2, 3): with separation <i>s</i> ∈ [0, 1], <i>B</i><sub>1·</sub> = ((1 + <i>s</i>)/3, 1/3, (1 − <i>s</i>)/3) (normal tends to give “Low”) and <i>B</i><sub>2·</sub> = ((1 − <i>s</i>)/3, 1/3, (1 + <i>s</i>)/3) (degraded tends to give “High”). Default <i>s</i> = 0.7.</li>
+        <li>Gaussian observation: <i>x</i><sub><i>t</i></sub> = <i>μ</i><sub><i>z</i><sub><i>t</i></sub></sub> + <i>σ</i> <i>ε</i><sub><i>t</i></sub>, <i>ε</i><sub><i>t</i></sub> ~ 𝒩(0, 1), <i>μ</i><sub>1</sub> = 0, <i>μ</i><sub>2</sub> = <i>Δ</i>, <i>σ</i> = 1. The sensor values are dimensionless (the mean in the normal state is taken as 0 and the standard deviation of the scatter as 1). Default <i>Δ</i> = 1.5.</li>
+        <li>For estimation, the same <i>π</i>, <i>A</i>, <i>B</i> (or <i>μ</i><sub><i>j</i></sub>, <i>σ</i>) used to generate the data are used.</li>
+        <li>The sequence in ② is also <strong>synthetic data for teaching purposes</strong>: <i>z</i><sub>1</sub> = <i>μ</i><sub>0</sub> + √<i>P</i><sub>0</sub> <i>ε</i><sub>1</sub>, <i>z</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i>−1</sub> + √<i>q</i> <i>ε</i><sub><i>t</i></sub>, <i>x</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i></sub> + √<i>r</i> <i>η</i><sub><i>t</i></sub> (<i>ε</i><sub><i>t</i></sub> and <i>η</i><sub><i>t</i></sub> ~ 𝒩(0, 1) are independent). For example, a quantity (dimensionless) representing the machine’s state drifts slowly, and the sensor returns that value with noise added. The defaults are <i>q</i> = 0.2, <i>r</i> = 1.0, <i>μ</i><sub>0</sub> = 0, <i>P</i><sub>0</sub> = 1, <i>T</i> = 100. Observations are missing for times <i>t</i> in (0.3<i>T</i>, 0.45<i>T</i>] and (0.7<i>T</i>, 0.8<i>T</i>] (for <i>T</i> = 100, 31–45 and 71–80). Inserting missing observations does not change the values of the observations themselves.</li>
+        <li>Random numbers come from a seeded generator (mulberry32). The default seed is 20261112 for both ① and ②. Starting over with the same seed gives the same sequence. In ①, changing a parameter regenerates the sequence with the same seed (the random-number stream is the same, but the transition and emission probabilities change, so the states and observations change). When only <i>T</i> is changed, a shorter sequence is the same as the beginning of a longer one.</li>
+        <li>Upper limits: the sequence length <i>T</i> is 10–200. The hand-calculation mode uses <i>T</i> = 3 (full enumeration of 2<sup>3</sup> = 8 sequences).</li>
+      </ul>
+
+      <h2>Simplifications</h2>
+      <ul>
+        <li>There are only two states, and the transition and emission probabilities are constant in time. Real degradation often only progresses and never reverses (<i>A</i><sub>21</sub> = 0), but here a return to normal, for example through repair, is also allowed (setting <i>A</i><sub>22</sub> = 1 gives a model with no return).</li>
+        <li>The parameters <i>π</i>, <i>A</i>, <i>B</i> are assumed known. The Baum–Welch algorithm (EM algorithm) for learning them from data is not covered (it is introduced in Section 22.4 of the text).</li>
+        <li>The standard deviation of the Gaussian observation is fixed at the common value <i>σ</i> = 1 for both states.</li>
+        <li>The Kalman filter is limited to a one-dimensional random walk (state-transition coefficient 1), and backward smoothing (RTS smoothing) is not covered. The initial mean and variance are fixed at <i>μ</i><sub>0</sub> = 0 and <i>P</i><sub>0</sub> = 1.</li>
+      </ul>
+
+      <h2>Conditions under which results become unstable</h2>
+      <ul>
+        <li>The unnormalized <i>α</i><sub><i>t</i></sub>(<i>j</i>) shrinks exponentially with <i>T</i> and rounds to 0 at <i>T</i> of a few hundred to a few thousand. This simulator computes with the scaled version (and the log version), so there is no loss of significance even at <i>T</i> = 200.</li>
+        <li>When a zero-probability transition (<i>A</i><sub><i>ij</i></sub> = 0) and a zero-probability emission (<i>B</i><sub>1,High</sub> = <i>B</i><sub>2,Low</sub> = 0 when <i>s</i> = 1) coincide, the probability of the observation sequence itself can become 0 (this can be reproduced in the hand-calculation mode). In that case the computation stops and the reason is displayed.</li>
+        <li>At <i>s</i> = 0 or <i>Δ</i> = 0 the observations say nothing about the state, so the estimate is determined by the transitions alone. When states tie in probability, the Viterbi path is not unique, and this simulator picks the state with the smaller index (normal).</li>
+        <li>If the Kalman filter assumes a <i>q</i> that is far smaller than the true value, the estimate variance <i>P</i><sub><i>t</i></sub> becomes too small and the true value keeps falling outside the band (the filter stops trusting the observations).</li>
+      </ul>
+
+      <h2>Corresponding sections of the text</h2>
+      <ul>
+        <li><a href="../ch22_sequences_hmm.html#sec22-3" target="_top">Chapter 22, Section 22.3 Hidden Markov models</a></li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-5" target="_top">Chapter 22, Section 22.5 The forward algorithm</a> (scaling and logarithms)</li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-6" target="_top">Chapter 22, Section 22.6 The backward algorithm and smoothing</a> (the difference from filtering)</li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-7" target="_top">Chapter 22, Section 22.7 Hand calculation</a> (<i>T</i> = 3 and full enumeration of 8 sequences)</li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-8" target="_top">Chapter 22, Section 22.8 The Viterbi algorithm</a></li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-9" target="_top">Chapter 22, Section 22.9 State-space models and an introduction to the Kalman filter</a></li>
+        <li><a href="../ch22_sequences_hmm.html#sec22-11" target="_top">Chapter 22, Section 22.11 Connections to materials engineering and condensed matter physics</a> (monitoring of manufacturing processes)</li>
+      </ul>
+
+      <h2>Short questions to answer after operating</h2>
+      <ol>
+        <li>In the hand-calculation mode defaults (<i>π</i> = (0.6, 0.4), <i>A</i><sub>11</sub> = 0.7, <i>A</i><sub>22</sub> = 0.6, observations Low, Mid, High), compute <i>α</i><sub>1</sub>(1), <i>α</i><sub>2</sub>(1), and <i>p</i>(<i>x</i><sub>1:3</sub>) by hand.
+          <details class="ans"><summary>Sample answers</summary><p><i>α</i><sub>1</sub>(1) = 0.6 × 0.5 = 0.30000, <i>α</i><sub>1</sub>(2) = 0.4 × 0.1 = 0.040000. <i>α</i><sub>2</sub>(1) = <i>B</i><sub>1,Mid</sub>(0.3 × 0.7 + 0.04 × 0.4) = 0.4 × 0.226 = 0.090400. Similarly <i>α</i><sub>2</sub>(2) = 0.3 × (0.3 × 0.3 + 0.04 × 0.6) = 0.034200, <i>α</i><sub>3</sub>(1) = 0.1 × (0.0904 × 0.7 + 0.0342 × 0.4) = 0.0076960, and <i>α</i><sub>3</sub>(2) = 0.6 × (0.0904 × 0.3 + 0.0342 × 0.6) = 0.028584. <i>p</i>(<i>x</i><sub>1:3</sub>) = 0.0076960 + 0.028584 = 0.036280. This agrees with the sum over the 8 enumerated sequences.</p></details></li>
+        <li>In the “Mismatch example (Low, High, Mid),” why does the sequence of the state with the largest <i>γ</i><sub><i>t</i></sub> at each time (Normal, Degraded, Normal) differ from the Viterbi path (Normal, Degraded, Degraded)?
+          <details class="ans"><summary>Sample answers</summary><p><i>γ</i><sub>3</sub> = (0.54627, 0.45373) is the probability summed over (marginalized over) both the sequences in which <i>z</i><sub>2</sub> is normal and those in which it is degraded. The last observation “Mid” is hard to distinguish, with <i>B</i><sub>1,Mid</sub> = 0.4 and <i>B</i><sub>2,Mid</sub> = 0.3, and once the sequences passing through <i>z</i><sub>2</sub> = normal are included, <i>z</i><sub>3</sub> = normal becomes slightly more probable. On the other hand, the single most probable sequence, Normal, Degraded, Degraded (probability 0.0097200), is more probable than Normal, Degraded, Normal (0.0086400) because the probability of staying degraded, <i>A</i><sub>22</sub> = 0.6, is larger than the probability of returning from degraded, <i>A</i><sub>21</sub> = 0.4. “The most probable state at each time” and “the most probable state sequence” are different questions.</p></details></li>
+        <li>With the defaults in ①, what are the accuracies of filtering and smoothing? Why does smoothing tend to be higher? Which of the two can be used in real-time monitoring?
+          <details class="ans"><summary>Sample answers</summary><p>With the defaults (seed 20261112), filtering is 0.90, smoothing (γ max) is 0.99, and Viterbi is 0.98. Smoothing also uses observations after time <i>t</i>, so it can correct, after the fact, a judgment made just after the state switched. However, it cannot be computed until the later observations arrive, so in real-time monitoring, where a decision must be made at that time, only filtering can be used (smoothing can be used when analyzing a record afterwards).</p></details></li>
+        <li>With the defaults in ② (<i>q</i> = 0.2, <i>r</i> = 1, <i>P</i><sub>0</sub> = 1), find <i>K</i><sub>1</sub>, <i>K</i><sub>2</sub>, and <i>K</i><sub>∞</sub>. How does <i>P</i><sub><i>t</i></sub> change over an interval in which the observations are missing?
+          <details class="ans"><summary>Sample answers</summary><p><i>K</i><sub>1</sub> = 1/(1 + 1) = 0.5, <i>P</i><sub>1</sub> = 0.5. <i>P</i><sub>2|1</sub> = 0.5 + 0.2 = 0.7, <i>K</i><sub>2</sub> = 0.7/1.7 = 0.41176. The steady-state values are <i>P</i><sub>∞</sub><sup>−</sup> = (0.2 + √(0.04 + 0.8))/2 = 0.55826 and <i>K</i><sub>∞</sub> = 0.55826/1.55826 = 0.35826. When observations are missing no update is possible, and <i>P</i><sub><i>t</i></sub> = <i>P</i><sub><i>t</i>−1</sub> + <i>q</i> grows by 0.2 at every step (by 3.0 over 15 steps), and the gain at the time observations return becomes large.</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">Back to Machine Learning — From Probability to GPT (Contents)</a> | Text: <a href="../ch22_sequences_hmm.html#sec22-5" target="_top">Chapter 22, Section 22.5</a> | Equations are typeset with the browser’s built-in MathML (no external library).</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="hmm.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.Hmm;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112;
+  var ST = M.STATES, SY = M.SYMBOLS;
+
+  /* ---- MathML の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  function mn(s) { return '<mn>' + U.mn(String(s)) + '</mn>'; }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function sub(b, s) { return '<msub><mrow>' + b + '</mrow><mrow>' + s + '</mrow></msub>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function par(s) { return mo('(') + s + mo(')'); }
+  var BR = '<!--br-->';   /* 長い行を 2 行に分ける位置（2 行目は字下げ） */
+  function row(s) { return s.split(BR).map(function (part, i) { return '<mtr><mtd>' + (i ? '<mspace width="2em"/>' : '') + part + '</mtd></mtr>'; }).join(''); }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.55em">' + rows.join('') + '</mtable></math>'; }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function f5(v) { return fmt(v, 5); }
+  function pn(v) { var t = mn(fx(v, 4)); return v < 0 ? mo('(') + t + mo(')') : t; }   /* 負の数は括弧で（− − を避ける） */
+  function f4(v) { return fmt(v, 4); }
+  function d1(v) { return U.mn((Math.round(v * 10) / 10).toFixed(1)); }
+  function r10(v) { return Math.round(v * 1e10) / 1e10; }
+  var mT = '<mi>t</mi>';
+  function alphaHat(t, j) { return sub('<mover><mi>α</mi><mo>^</mo></mover>', t) + par(j); }
+  function betaHat(t, j) { return sub('<mover><mi>β</mi><mo>^</mo></mover>', t) + par(j); }
+  function Aij(i, j) { return sub(mi('A'), mn(i) + mn(j)); }
+  function Bj(j, v) { return sub(mi('B'), mn(j) + mo(',') + mt(SY[v])); }
+  function pzx(j, cond) { return mi('p') + par(sub(mi('z'), mT) + mo('=') + mn(j) + mo('∣') + cond); }
+  function x1to(s) { return sub(mi('x'), mn(1) + mo(':') + s); }
+
+  /* =================================================================
+     ① 隠れ Markov モデル
+     ================================================================= */
+  function HmmSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var startHand = /[?&]mode=hand/.test(location.search);
+    var S = { mode: startHand ? 'hand' : 'gen', type: 'discrete', pi1: 0.95, a11: 0.97, a22: 0.95, s: 0.7, delta: 1.5, T: 100, showTrue: true, tSel: 70, seed: DEFAULT_SEED };
+    var H = { pi1: 0.6, a11: 0.7, a22: 0.6, B: [[0.5, 0.4, 0.1], [0.1, 0.3, 0.6]], x: [0, 1, 2], eq: 'alpha', preset: 'base' };
+    var data = null, res = null;
+    var ctl = q('ctlHmm'), msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var redraw = function () { self.update(); };
+
+    /* ---- 共通：モードの切り替え ---- */
+    var pMode = U.pills({ label: 'View', options: [{ value: 'gen', label: 'Generated sequence' }, { value: 'hand', label: 'Hand calc. (T = 3)' }], value: S.mode,
+      onChange: function (v) { S.mode = v; run.stop(); syncMode(); redraw(); U.postHeightLater(); } });
+    ctl.appendChild(pMode.el);
+    var genCtl = U.el('div', ''), handCtl = U.el('div', '');
+    ctl.appendChild(genCtl); ctl.appendChild(handCtl); ctl.appendChild(msg);
+
+    /* ---- 生成した系列の操作部品 ---- */
+    function regen() {
+      var pi = [S.pi1, r10(1 - S.pi1)], A = M.makeA(S.a11, S.a22);
+      var obs = S.type === 'discrete' ? { type: 'discrete', B: M.discreteB(S.s) } : { type: 'gauss', mu: M.gaussMeans(S.delta), sigma: 1 };
+      data = M.sampleHMM(C.rng(S.seed), pi, A, S.T, obs);
+      var logE = S.type === 'discrete' ? M.logEmissionDiscrete(obs.B, data.x) : M.logEmissionGauss(obs.mu, 1, data.x);
+      data.pi = pi; data.A = A; data.obs = obs; data.logE = logE;
+      res = M.analyze(pi, A, logE, data.z);
+    }
+    var pType = U.pills({ label: 'Observation type', options: [{ value: 'discrete', label: 'Discrete 3-valued (Low, Mid, High)' }, { value: 'gauss', label: 'Gaussian (sensor value)' }], value: S.type,
+      onChange: function (v) { S.type = v; rS.el.hidden = v !== 'discrete'; rD.el.hidden = v !== 'gauss'; regen(); redraw(); } });
+    var rPi = U.range({ label: 'Probability of starting normal <i>π</i><sub>1</sub> (<i>π</i><sub>2</sub> = 1 − <i>π</i><sub>1</sub>)', min: 0, max: 1, step: 0.05, value: S.pi1, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.pi1 = r10(v); regen(); redraw(); } });
+    var rA1 = U.range({ label: 'Probability of staying normal <i>A</i><sub>11</sub>', min: 0, max: 1, step: 0.01, value: S.a11, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.a11 = r10(v); regen(); redraw(); }, hint: 'Normal → degraded is <i>A</i><sub>12</sub> = 1 − <i>A</i><sub>11</sub>.' });
+    var rA2 = U.range({ label: 'Probability of staying degraded <i>A</i><sub>22</sub>', min: 0, max: 1, step: 0.01, value: S.a22, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.a22 = r10(v); regen(); redraw(); }, hint: 'Degraded → normal (e.g., repair) is <i>A</i><sub>21</sub> = 1 − <i>A</i><sub>22</sub>.' });
+    var rS = U.range({ label: 'Separation of emission distributions <i>s</i>', min: 0, max: 1, step: 0.05, value: S.s, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.s = r10(v); regen(); redraw(); }, hint: 'At <i>s</i> = 0 both states have the same emission probabilities (indistinguishable from observations).' });
+    var rD = U.range({ label: 'Degraded mean <i>Δ</i> (normal mean 0, <i>σ</i> = 1)', min: 0, max: 4, step: 0.1, value: S.delta, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.delta = r10(v); regen(); redraw(); } });
+    rD.el.hidden = true;
+    var rT = U.range({ label: 'Sequence length <i>T</i>', min: M.LIMITS.Tmin, max: M.LIMITS.Tmax, step: 1, value: S.T, fmt: function (v) { return String(v); }, onInput: function (v) { S.T = v; rTs.setRange({ max: v }, true); S.tSel = rTs.get(); regen(); redraw(); } });
+    var ckTrue = U.check({ label: 'Show the true states', checked: true, onChange: function (v) { S.showTrue = v; redraw(); } });
+    var rTs = U.range({ label: 'Time under study <i>t</i>', min: 1, max: S.T, step: 1, value: S.tSel, fmt: function (v) { return String(v); }, onInput: function (v) { S.tSel = v; redraw(); } });
+    var run = U.runner({
+      labels: { run: 'Advance time', stop: 'Stop', step: 'Step 1 time step', reset: 'Back to time 1' },
+      stepsPerFrame: 1, budgetMs: 12,
+      isVisible: function () { return !panel.hidden && S.mode === 'gen'; },
+      step: function () { if (S.tSel >= S.T) return false; S.tSel++; rTs.set(S.tSel, true); return S.tSel < S.T; },
+      reset: function () { S.tSel = 1; rTs.set(1, true); },
+      draw: function () { self.update(); }
+    });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; regen(); U.status(msg, 'Sequence regenerated with seed ' + s + '.', ''); redraw(); } });
+    genCtl.appendChild(pType.el); genCtl.appendChild(rPi.el); genCtl.appendChild(rA1.el); genCtl.appendChild(rA2.el);
+    genCtl.appendChild(rS.el); genCtl.appendChild(rD.el); genCtl.appendChild(rT.el); genCtl.appendChild(ckTrue.el);
+    genCtl.appendChild(U.el('hr', 'sep'));
+    genCtl.appendChild(rTs.el); genCtl.appendChild(run.el);
+    genCtl.appendChild(U.el('hr', 'sep'));
+    genCtl.appendChild(seed.el);
+
+    /* ---- 手計算モードの操作部品 ---- */
+    var pPre = U.pills({ label: 'Preset', options: [{ value: 'base', label: M.HAND_PRESETS.base.label }, { value: 'mismatch', label: M.HAND_PRESETS.mismatch.label }], value: 'base',
+      onChange: function (v) { loadPreset(v); } });
+    function hr(label, key, min, max) {
+      return U.range({ label: label, min: min, max: max, step: 0.1, value: 0, fmt: function (v) { return fx(v, 1); }, onInput: function (v) { setH(key, r10(v)); } });
+    }
+    var hPi = hr('<i>π</i><sub>1</sub> (starts normal)', 'pi1', 0, 1);
+    var hA1 = hr('<i>A</i><sub>11</sub> (normal → normal)', 'a11', 0, 1);
+    var hA2 = hr('<i>A</i><sub>22</sub> (degraded → degraded)', 'a22', 0, 1);
+    var hB = [[hr('<i>B</i><sub>1,Low</sub>', 'b10', 0, 1), hr('<i>B</i><sub>1,High</sub>', 'b12', 0, 1)], [hr('<i>B</i><sub>2,Low</sub>', 'b20', 0, 1), hr('<i>B</i><sub>2,High</sub>', 'b22', 0, 1)]];
+    var bNote = [U.el('p', 'bnote'), U.el('p', 'bnote')];
+    var xSel = [0, 1, 2].map(function (t) {
+      return U.select({ label: '<i>x</i><sub>' + (t + 1) + '</sub>', options: SY.map(function (s, v) { return { value: v, label: s }; }), value: H.x[t], onChange: function (v) { H.x[t] = +v; H.preset = null; pPre.set(null, true); redraw(); } });
+    });
+    var xRow = U.el('div', 'xsel'); xSel.forEach(function (s) { xRow.appendChild(s.el); });
+    handCtl.appendChild(pPre.el);
+    handCtl.appendChild(hPi.el); handCtl.appendChild(hA1.el); handCtl.appendChild(hA2.el);
+    handCtl.appendChild(U.el('div', 'ctlhead', 'Emission probabilities (Mid = 1 − Low − High)'));
+    for (var j0 = 0; j0 < 2; j0++) { handCtl.appendChild(hB[j0][0].el); handCtl.appendChild(hB[j0][1].el); handCtl.appendChild(bNote[j0]); }
+    handCtl.appendChild(U.el('div', 'ctlhead', 'Observation sequence'));
+    handCtl.appendChild(xRow);
+    var pEq = U.pills({ label: 'Quantity shown in formulas', options: [{ value: 'alpha', label: 'α (forward)' }, { value: 'beta', label: 'β (backward)' }, { value: 'gamma', label: 'γ and likelihood' }, { value: 'vit', label: 'ω (Viterbi)' }], value: H.eq,
+      onChange: function (v) { H.eq = v; redraw(); } });
+    q('eqPick').appendChild(pEq.el);
+
+    function setH(key, v) {
+      if (key === 'pi1') H.pi1 = v; else if (key === 'a11') H.a11 = v; else if (key === 'a22') H.a22 = v;
+      else { var j = +key[1] - 1, k = +key[2]; H.B[j][k] = v; H.B[j][1] = r10(1 - H.B[j][0] - H.B[j][2]); syncBRange(j); }
+      H.preset = null; pPre.set(null, true); redraw();
+    }
+    function syncBRange(j) {
+      /* 低 + 高 ≤ 1 を保つ（中 = 1 − 低 − 高 ≥ 0） */
+      hB[j][1].setRange({ max: r10(1 - H.B[j][0]) }, true); H.B[j][2] = r10(hB[j][1].get());
+      hB[j][0].setRange({ max: r10(1 - H.B[j][2]) }, true); H.B[j][0] = r10(hB[j][0].get());
+      H.B[j][1] = r10(1 - H.B[j][0] - H.B[j][2]);
+      bNote[j].innerHTML = '→ <i>B</i><sub>' + (j + 1) + ',Mid</sub> = ' + U.mn(H.B[j][1].toFixed(1)) + ' (state ' + (j + 1) + ': ' + ST[j] + ')';
+    }
+    function loadPreset(name) {
+      var P = M.HAND_PRESETS[name]; H.preset = name;
+      H.pi1 = P.pi1; H.a11 = P.a11; H.a22 = P.a22; H.B = P.B.map(function (r) { return r.slice(); }); H.x = P.x.slice();
+      syncHandControls(); redraw();
+    }
+    function syncHandControls() {
+      hPi.set(H.pi1, true); hA1.set(H.a11, true); hA2.set(H.a22, true);
+      for (var j = 0; j < 2; j++) { hB[j][0].setRange({ max: 1 }, true); hB[j][1].setRange({ max: 1 }, true); hB[j][0].set(H.B[j][0], true); hB[j][1].set(H.B[j][2], true); syncBRange(j); }
+      xSel.forEach(function (s, t) { s.set(H.x[t], true); });
+      pPre.set(H.preset, true);
+    }
+    syncHandControls();
+
+    function syncMode() {
+      genCtl.hidden = S.mode !== 'gen'; handCtl.hidden = S.mode !== 'hand';
+      q('genView').hidden = S.mode !== 'gen'; q('handView').hidden = S.mode !== 'hand';
+      U.status(msg, '');
+    }
+    syncMode();
+
+    U.legendHTML(q('lgProb'), [
+      { label: 'Filtering <i>p</i>(<i>z</i><sub><i>t</i></sub> = 2 | <i>x</i><sub>1:<i>t</i></sub>)', color: col.orange, dash: dash.dashed, width: 2 },
+      { label: 'Smoothing <i>γ</i><sub><i>t</i></sub>(2)', color: col.accent, width: 2.4 },
+      { label: 'True state is degraded (hatched)', color: col.purple, kind: 'band', hatch: true, alpha: 0.12 }]);
+    U.legendHTML(q('lgTrellis'), [
+      { label: 'Viterbi path', color: col.green, width: 3.5 },
+      { label: 'Transitions (all pairs)', color: '#b8c0c8', width: 1.2 },
+      { label: 'State with the largest γ at each time (double frame)', color: col.orange, kind: 'marker', shape: 'square', fill: false }]);
+
+    /* ---- 生成した系列：描画 ---- */
+    var BOXL = 70;
+    function degBands(c, ax, z, yr) {
+      var T = z.length;
+      for (var t = 0; t < T; t++) {
+        if (z[t] !== 1) continue;
+        var t1 = t; while (t1 + 1 < T && z[t1 + 1] === 1) t1++;
+        U.band(c, ax, [t + 0.5, t1 + 1.5], [yr[0], yr[0]], [yr[1], yr[1]], { color: col.purple, alpha: 0.10, hatch: true });
+        t = t1;
+      }
+    }
+    function drawObs() {
+      var F = U.fitCanvas(q('cvObs'), { aspect: 0.36, minHeight: 190, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: BOXL, r: 12, t: 12, b: 38 }), T = S.T, ax, yr;
+      var ts = data.x.map(function (_, i) { return i + 1; });
+      if (S.type === 'discrete') {
+        yr = [0.5, 3.5];
+        ax = U.axes(c, box, [0.5, T + 0.5], yr, { xl: 'Time t', yl: 'Observation', yticks: [1, 2, 3], yf: function (v) { return SY[Math.round(v) - 1] || ''; }, ylOff: 46 });
+        if (S.showTrue) degBands(c, ax, data.z, yr);
+        U.points(c, ax, ts, data.x.map(function (v) { return v + 1; }), { shape: 'circle', color: col.ink, size: T > 120 ? 4.5 : 6 });
+      } else {
+        var lo = Math.min(-3, Math.min.apply(null, data.x)), hi = Math.max(S.delta + 3, Math.max.apply(null, data.x));
+        yr = [Math.floor(lo), Math.ceil(hi)];
+        ax = U.axes(c, box, [0.5, T + 0.5], yr, { xl: 'Time t', yl: 'Sensor value (dimensionless)' });
+        if (S.showTrue) degBands(c, ax, data.z, yr);
+        U.hline(c, ax, 0, { color: col.gray, dash: dash.dotted, width: 1.3 });
+        U.hline(c, ax, S.delta, { color: col.purple, dash: dash.dotted, width: 1.3 });
+        U.points(c, ax, ts, data.x, { shape: 'circle', color: col.ink, size: T > 120 ? 4.5 : 6 });
+        var L = U.labeler(c, box);
+        L.add('Normal mean 0', box[2] - 46, ax.Y(0) + 10, { color: col.gray, size: 10 });
+        L.add('Degraded mean ' + fx(S.delta, 1), box[2] - 46, ax.Y(S.delta) - 10, { color: col.purple, size: 10 });
+      }
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      U.setCanvasLabel(q('cvObs'), 'Observation sequence (' + (S.type === 'discrete' ? 'discrete 3-valued' : 'Gaussian sensor value') + '). T = ' + T + ', seed ' + S.seed + '. The number of times at which the true state is degraded is ' + data.z.filter(function (v) { return v === 1; }).length + (S.showTrue ? ' (hatched bands)' : ' (not shown)') + '.');
+      q('capObs').innerHTML = '<strong>Synthetic data for teaching purposes</strong> (seed ' + S.seed + ', <i>T</i> = ' + T + ', <i>π</i> = (' + fx(S.pi1, 2) + ', ' + fx(1 - S.pi1, 2) + '), <i>A</i><sub>11</sub> = ' + fx(S.a11, 2) + ', <i>A</i><sub>22</sub> = ' + fx(S.a22, 2) + ', ' +
+        (S.type === 'discrete' ? 'discrete 3-valued, <i>s</i> = ' + fx(S.s, 2) + ': <i>B</i><sub>1·</sub> = (' + [0, 1, 2].map(function (v) { return fx(data.obs.B[0][v], 3); }).join(', ') + '), <i>B</i><sub>2·</sub> = (' + [0, 1, 2].map(function (v) { return fx(data.obs.B[1][v], 3); }).join(', ') + ')'
+          : 'Gaussian <i>x</i><sub><i>t</i></sub> = <i>μ</i><sub><i>z</i><sub><i>t</i></sub></sub> + <i>ε</i><sub><i>t</i></sub>, <i>μ</i><sub>1</sub> = 0, <i>μ</i><sub>2</sub> = ' + fx(S.delta, 1) + ', <i>σ</i> = 1 (dimensionless)') +
+        '). Dots are observations, hatched bands are times when the true state is degraded, and the vertical dashed line is the time under study <i>t</i> = ' + S.tSel + '.';
+    }
+    function drawProb() {
+      var F = U.fitCanvas(q('cvProb'), { aspect: 0.36, minHeight: 190, maxHeight: 280 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: BOXL, r: 12, t: 12, b: 38 }), T = S.T;
+      var ax = U.axes(c, box, [0.5, T + 0.5], [0, 1.08], { xl: 'Time t', yl: 'Probability of degradation', yticks: [0, 0.25, 0.5, 0.75, 1], ylOff: 46 });
+      if (S.showTrue) degBands(c, ax, data.z, [0, 1.08]);
+      U.hline(c, ax, 0.5, { color: col.gray, dash: dash.dotted, width: 1 });
+      var ts = data.x.map(function (_, i) { return i + 1; });
+      var fl = res.scaled.filter.map(function (p) { return p[1]; }), gm = res.scaled.gamma.map(function (p) { return p[1]; });
+      U.line(c, ax, ts.slice(0, S.tSel), fl.slice(0, S.tSel), { color: col.orange, dash: dash.dashed, width: 2 });
+      U.line(c, ax, ts.slice(S.tSel - 1), fl.slice(S.tSel - 1), { color: col.orange, dash: dash.dashed, width: 1.6, alpha: 0.35 });
+      U.line(c, ax, ts, gm, { color: col.accent, width: 2.4 });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      var k = S.tSel - 1;
+      U.marker(c, ax.X(S.tSel), ax.Y(fl[k]), 'triangle', 9, col.orange, true);
+      U.marker(c, ax.X(S.tSel), ax.Y(gm[k]), 'circle', 8, col.accent, true);
+      U.setCanvasLabel(q('cvProb'), 'Probability of degradation. At time ' + S.tSel + ', filtering ' + fx(fl[k], 3) + ', smoothing ' + fx(gm[k], 3) + '.');
+    }
+    function drawSeq() {
+      var rows = [], T = S.T;
+      if (S.showTrue) rows.push(['True state', data.z, false]);
+      rows.push(['Viterbi', res.viterbi.path, true]); rows.push(['γ max', res.zSmooth, true]); rows.push(['Filter', res.zFilter, true]);
+      var rh = 22, F = U.fitCanvas(q('cvSeq'), { height: 26 + rows.length * (rh + 8) + 34 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: BOXL, r: 12, t: 10, b: 34 });
+      var ax = U.axes(c, box, [0.5, T + 0.5], [0, rows.length], { xl: 'Time t', yticks: [], grid: false });
+      var cw = (box[2] - box[0]) / T;
+      rows.forEach(function (r, k) {
+        var y0 = box[1] + 4 + k * (rh + 8);
+        MLUI.label(c, r[0], box[0] - 6, y0 + rh / 2, { size: 10.5, align: 'right', color: col.ink, halo: false });
+        c.save();
+        for (var t = 0; t < T; t++) {
+          var x0 = box[0] + t * cw;
+          if (r[1][t] === 1) { c.fillStyle = k === 0 && S.showTrue ? col.purple : col.accent; c.fillRect(x0, y0, Math.max(1, cw - (cw > 3 ? 0.6 : 0)), rh); }
+          if (r[2] && r[1][t] !== data.z[t] && S.showTrue) { U.marker(c, x0 + cw / 2, y0 + rh + 4, 'triangle', Math.min(7, Math.max(4, cw)), col.red, true); }
+        }
+        c.strokeStyle = 'rgba(31,35,40,.35)'; c.lineWidth = 1; c.strokeRect(box[0] + 0.5, y0 + 0.5, box[2] - box[0] - 1, rh);
+        c.restore();
+      });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      U.setCanvasLabel(q('cvSeq'), 'State sequences. ' + (S.showTrue ? 'Accuracy against the true state: Viterbi ' + U.fmtPct(res.accViterbi, 0) + ', γ max ' + U.fmtPct(res.accSmooth, 0) + ', Filter ' + U.fmtPct(res.accFilter, 0) + '.' : ''));
+    }
+    function eqGen() {
+      var k = S.tSel - 1, sc = res.scaled, pred = sc.pred[k], e = data.logE[k].map(Math.exp), cReal = sc.c[k] * Math.exp(sc.m[k]);
+      var x = data.x[k], rows = [];
+      q('tNow').textContent = 't = ' + S.tSel;
+      var emis = function (j) { return S.type === 'discrete' ? Bj(j, x) : mi('𝒩') + par(sub(mi('x'), mT) + mo('∣') + sub(mi('μ'), mn(j)) + mo(',') + mn(1)); };
+      var xt = S.type === 'discrete' ? mt(SY[x]) : mn(fx(x, 3));
+      rows.push(row(sub(mi('x'), mT) + mo('=') + xt + '<mspace width="1em"/>' + mt('(observation at time ' + S.tSel + ')')));
+      if (k === 0) rows.push(row(mt('Prediction: ') + mi('p') + par(sub(mi('z'), mn(1)) + mo('=') + mn(2)) + mo('=') + sub(mi('π'), mn(2)) + mo('=') + mn(f4(pred[1]))));
+      else rows.push(row(pzx(2, x1to(mi('t') + mo('−') + mn(1))) + mo('=') + alphaHat(mi('t') + mo('−') + mn(1), mn(1)) + Aij(1, 2) + mo('+') + alphaHat(mi('t') + mo('−') + mn(1), mn(2)) + Aij(2, 2) +
+        BR + mo('=') + mn(f4(sc.alphaHat[k - 1][0])) + mo('×') + mn(f4(data.A[0][1])) + mo('+') + mn(f4(sc.alphaHat[k - 1][1])) + mo('×') + mn(f4(data.A[1][1])) + mo('=') + mn(f4(pred[1]))));
+      rows.push(row(sub(mi('c'), mT) + mo('=') + emis(1) + mo('·') + mn(f4(pred[0])) + mo('+') + emis(2) + mo('·') + mn(f4(pred[1])) + BR + mo('=') + mn(f4(e[0])) + mo('×') + mn(f4(pred[0])) + mo('+') + mn(f4(e[1])) + mo('×') + mn(f4(pred[1])) + mo('=') + mn(f4(cReal))));
+      rows.push(row(mt('Filtering: ') + alphaHat(mT, mn(2)) + mo('=') + pzx(2, x1to(mT)) + BR + mo('=') + frac(mn(f4(e[1])) + mo('×') + mn(f4(pred[1])), mn(f4(cReal))) + mo('=') + mn(f4(sc.alphaHat[k][1]))));
+      rows.push(row(mt('Smoothing: ') + sub(mi('γ'), mT) + par(mn(2)) + mo('=') + alphaHat(mT, mn(2)) + betaHat(mT, mn(2)) + BR + mo('=') + mn(f4(sc.alphaHat[k][1])) + mo('×') + mn(f4(sc.betaHat[k][1])) + mo('=') + mn(f4(sc.gamma[k][1]))));
+      rows.push(row(mi('ln') + mi('p') + par(x1to(mi('T'))) + mo('=') + '<munderover><mo>∑</mo><mrow><mi>t</mi><mo>=</mo><mn>1</mn></mrow><mn>' + S.T + '</mn></munderover>' + mi('ln') + sub(mi('c'), mT) + mo('=') + mn(fx(res.logLik, 4))));
+      q('eqGen').innerHTML = table(rows);
+    }
+    function readGen() {
+      var nDeg = data.z.filter(function (v) { return v === 1; }).length;
+      var r = [
+        ['Sequence length <i>T</i>, seed', S.T + ', ' + S.seed],
+        ['Log-likelihood ln <i>p</i>(<i>x</i><sub>1:<i>T</i></sub>) (scaled version)', fx(res.logLik, 4)],
+        ['Difference from the log version', fmt(res.diffLogLik, 2)],
+        ['Maximum difference in γ (scaled − log version)', fmt(res.diffGamma, 2)]];
+      if (S.showTrue) r = r.concat([
+        ['Times when the true state is degraded', nDeg],
+        ['Accuracy: filtering (most probable state)', fx(res.accFilter, 2)],
+        ['Accuracy: γ max (smoothing)', fx(res.accSmooth, 2)],
+        ['Accuracy: Viterbi', fx(res.accViterbi, 2)],
+        ['ln <i>p</i>(<i>x</i>, <i>z</i>): true state sequence', fx(res.logJointTrue, 3)]]);
+      r = r.concat([
+        ['ln <i>p</i>(<i>x</i>, <i>z</i>): Viterbi path (maximum)', fx(res.logJointViterbi, 3)],
+        ['ln <i>p</i>(<i>x</i>, <i>z</i>): γ max sequence', res.logJointSmoothSeq === -Infinity ? '−∞ (impossible sequence)' : fx(res.logJointSmoothSeq, 3)]]);
+      q('readHmm').innerHTML = kv(r) + (S.showTrue ? '' : '<p class="hint">The true states are hidden, so the accuracies are not shown.</p>');
+    }
+
+    /* ---- 手計算モード：描画 ---- */
+    var HR = null;
+    function drawTrellis() {
+      var F = U.fitCanvas(q('cvTrellis'), { aspect: 0.62, minHeight: 280, maxHeight: 380 }), c = F.c, W = F.W, Hh = F.H;
+      var L0 = 56, R0 = 8, top = 34, cwid = (W - L0 - R0) / 3, nodeW = Math.min(104, cwid - 14), nodeH = 58;
+      var cx = function (t) { return L0 + cwid * (t + 0.5); }, cy = function (j) { return j === 0 ? top + 30 + nodeH / 2 : Hh - 22 - nodeH / 2; };
+      c.save(); c.fillStyle = '#fff'; c.fillRect(0, 0, W, Hh); c.restore();
+      /* 見出し */
+      for (var t = 0; t < 3; t++) MLUI.label(c, 't = ' + (t + 1) + ': ' + SY[H.x[t]], cx(t), 14, { size: 11.5, bold: true, color: col.ink, halo: false });
+      MLUI.label(c, 'Normal', 8, cy(0) - 7, { size: 11, bold: true, align: 'left', color: col.ink, halo: false });
+      MLUI.label(c, '(1)', 8, cy(0) + 8, { size: 10, align: 'left', color: col.sub, halo: false });
+      MLUI.label(c, 'Degraded', 8, cy(1) - 7, { size: 11, bold: true, align: 'left', color: col.ink, halo: false });
+      MLUI.label(c, '(2)', 8, cy(1) + 8, { size: 10, align: 'left', color: col.sub, halo: false });
+      if (!HR || HR.error) { MLUI.label(c, HR ? HR.error : '', W / 2, Hh / 2, { size: 11, color: col.red }); return; }
+      /* 遷移の線（すべて） */
+      c.save(); c.strokeStyle = '#b8c0c8'; c.lineWidth = 1.2;
+      for (t = 0; t < 2; t++) for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) { c.beginPath(); c.moveTo(cx(t) + nodeW / 2, cy(i)); c.lineTo(cx(t + 1) - nodeW / 2, cy(j)); c.stroke(); }
+      c.restore();
+      /* Viterbi の経路 */
+      var p = HR.viterbi.path;
+      for (t = 0; t < 2; t++) U.arrow(c, cx(t) + nodeW / 2, cy(p[t]), cx(t + 1) - nodeW / 2 - 2, cy(p[t + 1]), col.green, 3.5, 9);
+      /* ます目 */
+      for (t = 0; t < 3; t++) for (j = 0; j < 2; j++) {
+        var x0 = cx(t) - nodeW / 2, y0 = cy(j) - nodeH / 2, onV = p[t] === j, onG = HR.zGamma[t] === j;
+        c.save();
+        c.fillStyle = onV ? 'rgba(0,135,108,.10)' : '#f7f9fb'; c.fillRect(x0, y0, nodeW, nodeH);
+        c.strokeStyle = onV ? col.green : 'rgba(31,35,40,.45)'; c.lineWidth = onV ? 2.2 : 1; c.strokeRect(x0 + 0.5, y0 + 0.5, nodeW - 1, nodeH - 1);
+        if (onG) { c.strokeStyle = col.orange; c.lineWidth = 1.6; c.setLineDash([]); c.strokeRect(x0 - 3.5, y0 - 3.5, nodeW + 7, nodeH + 7); }
+        c.restore();
+        var sz = nodeW < 90 ? 9.5 : 10.5;
+        MLUI.label(c, 'α ' + f5(HR.raw.alpha[t][j]), x0 + 5, y0 + 11, { size: sz, align: 'left', color: col.ink, halo: false });
+        MLUI.label(c, 'β ' + f5(HR.raw.beta[t][j]), x0 + 5, y0 + 28, { size: sz, align: 'left', color: col.ink, halo: false });
+        MLUI.label(c, 'γ ' + f5(HR.raw.gamma[t][j]), x0 + 5, y0 + 45, { size: sz, align: 'left', bold: true, color: col.accent, halo: false });
+      }
+      U.setCanvasLabel(q('cvTrellis'), 'Trellis diagram of the hand calculation. Observations ' + H.x.map(function (v) { return SY[v]; }).join(', ') + '. Viterbi path ' + p.map(function (v) { return ST[v]; }).join(', ') + ', state with the largest γ at each time ' + HR.zGamma.map(function (v) { return ST[v]; }).join(', ') + '. p(x) = ' + f5(HR.raw.lik) + '.');
+      q('capTrellis').innerHTML = '<i>π</i> = (' + d1(H.pi1) + ', ' + d1(1 - H.pi1) + '), <i>A</i> = ((' + d1(H.a11) + ', ' + d1(1 - H.a11) + '), (' + d1(1 - H.a22) + ', ' + d1(H.a22) + ')), <i>B</i><sub>1·</sub> = (' + H.B[0].map(d1).join(', ') + '), <i>B</i><sub>2·</sub> = (' + H.B[1].map(d1).join(', ') + ') (in the order Low, Mid, High). Numbers are given to 5 significant digits.' +
+        (HR.agree ? 'In this example the Viterbi path and the γ max sequence agree.' : '<strong>In this example the Viterbi path and the γ max sequence differ.</strong>');
+    }
+    function tablesHand() {
+      var R = HR.raw, h = '<div class="tablewrap"><table class="grid"><thead><tr><th><i>t</i></th><th><i>x</i><sub><i>t</i></sub></th><th><i>α</i><sub><i>t</i></sub>(1)</th><th><i>α</i><sub><i>t</i></sub>(2)</th><th><i>β</i><sub><i>t</i></sub>(1)</th><th><i>β</i><sub><i>t</i></sub>(2)</th><th><i>γ</i><sub><i>t</i></sub>(1)</th><th><i>γ</i><sub><i>t</i></sub>(2)</th><th>Filtering<br><i>p</i>(<i>z</i><sub><i>t</i></sub>=2 | <i>x</i><sub>1:<i>t</i></sub>)</th></tr></thead><tbody>';
+      for (var t = 0; t < 3; t++) h += '<tr><td>' + (t + 1) + '</td><td class="l">' + SY[H.x[t]] + '</td><td>' + f5(R.alpha[t][0]) + '</td><td>' + f5(R.alpha[t][1]) + '</td><td>' + f5(R.beta[t][0]) + '</td><td>' + f5(R.beta[t][1]) + '</td><td>' + f5(R.gamma[t][0]) + '</td><td>' + f5(R.gamma[t][1]) + '</td><td>' + f5(R.filter[t][1]) + '</td></tr>';
+      h += '</tbody></table></div><p class="hint">At every time, Σ<sub><i>j</i></sub> <i>α</i><sub><i>t</i></sub>(<i>j</i>)<i>β</i><sub><i>t</i></sub>(<i>j</i>) = ' + R.sumAB.map(f5).join(', ') + ' = <i>p</i>(<i>x</i><sub>1:3</sub>). At the last time, filtering and smoothing give the same value (<i>β</i><sub>3</sub> = 1).</p>';
+      q('tblFB').innerHTML = h;
+      var E = HR.enumr, best = HR.viterbi.path.join(''), gseq = HR.zGamma.join('');
+      var e = '<div class="tablewrap"><table class="grid"><thead><tr><th class="l">State sequence <i>z</i><sub>1</sub><i>z</i><sub>2</sub><i>z</i><sub>3</sub></th><th class="l"><i>π</i>·<i>B</i>·<i>A</i>·<i>B</i>·<i>A</i>·<i>B</i></th><th><i>p</i>(<i>x</i>, <i>z</i>)</th><th><i>p</i>(<i>z</i> | <i>x</i>)</th></tr></thead><tbody>';
+      var pi = [H.pi1, 1 - H.pi1], A = M.makeA(H.a11, H.a22);
+      E.rows.forEach(function (w) {
+        var z = w.z, k = z.join(''), terms = [pi[z[0]], H.B[z[0]][H.x[0]], A[z[0]][z[1]], H.B[z[1]][H.x[1]], A[z[1]][z[2]], H.B[z[2]][H.x[2]]].map(d1).join('·');
+        var tag = (k === best ? ' ★Viterbi' : '') + (k === gseq ? ' ◇γ max' : '');
+        e += '<tr' + (k === best ? ' class="best"' : '') + '><td class="l">' + z.map(function (v) { return ST[v]; }).join(', ') + tag + '</td><td class="l">' + terms + '</td><td>' + f5(w.p) + '</td><td>' + f5(w.post) + '</td></tr>';
+      });
+      e += '<tr class="sum"><td class="l" colspan="2">Sum = <i>p</i>(<i>x</i><sub>1:3</sub>)</td><td>' + f5(E.lik) + '</td><td>' + f5(1) + '</td></tr></tbody></table></div>';
+      e += '<p class="hint">The difference between the full-enumeration sum ' + f5(E.lik) + ' and the forward algorithm’s Σ<sub><i>j</i></sub> <i>α</i><sub>3</sub>(<i>j</i>) = ' + f5(HR.raw.lik) + ' is ' + fmt(Math.abs(E.lik - HR.raw.lik), 2) + ', and the maximum difference between <i>γ</i> marginalized from the full enumeration and <i>αβ</i>/<i>p</i>(<i>x</i>) is ' + fmt(maxDiff(E.gamma, HR.raw.gamma), 2) + ' (rounding error). ★ marks the Viterbi path, and ◇ marks the sequence of the state with the largest γ at each time.</p>';
+      q('tblEnum').innerHTML = e;
+      var V = HR.viterbi, v = '<div class="tablewrap"><table class="grid"><thead><tr><th><i>t</i></th><th><i>ω</i><sub><i>t</i></sub>(1)</th><th><i>ω</i><sub><i>t</i></sub>(2)</th><th><i>ψ</i><sub><i>t</i></sub>(1)</th><th><i>ψ</i><sub><i>t</i></sub>(2)</th></tr></thead><tbody>';
+      for (t = 0; t < 3; t++) v += '<tr><td>' + (t + 1) + '</td><td>' + f5(Math.exp(V.logOmega[t][0])) + '</td><td>' + f5(Math.exp(V.logOmega[t][1])) + '</td><td>' + (t ? ST[V.psi[t][0]] : '—') + '</td><td>' + (t ? ST[V.psi[t][1]] : '—') + '</td></tr>';
+      v += '</tbody></table></div><p class="hint">Tracing <i>ψ</i> backward from the state with the larger <i>ω</i><sub>3</sub>(<i>j</i>) at the end (' + ST[V.path[2]] + ') gives the path ' + V.path.map(function (s) { return ST[s]; }).join(' → ') + ' (joint probability ' + f5(Math.exp(V.logPmax)) + '). The computation is done in logarithms, and the table shows the values converted back to probabilities.</p>';
+      q('tblVit').innerHTML = v;
+    }
+    function maxDiff(P, Q) { var d = 0; for (var t = 0; t < P.length; t++) for (var j = 0; j < P[t].length; j++) d = Math.max(d, Math.abs(P[t][j] - Q[t][j])); return d; }
+    function eqHand() {
+      var R = HR.raw, pi = [H.pi1, 1 - H.pi1], A = M.makeA(H.a11, H.a22), x = H.x, rows = [], t, j;
+      var a = function (t, j) { return sub(mi('α'), mn(t)) + par(mn(j)); }, b = function (t, j) { return sub(mi('β'), mn(t)) + par(mn(j)); };
+      var om = function (t, j) { return sub(mi('ω'), mn(t)) + par(mn(j)); };
+      if (H.eq === 'alpha') {
+        for (j = 0; j < 2; j++) rows.push(row(a(1, j + 1) + mo('=') + sub(mi('π'), mn(j + 1)) + Bj(j + 1, x[0]) + BR + mo('=') + mn(d1(pi[j])) + mo('×') + mn(d1(H.B[j][x[0]])) + mo('=') + mn(f5(R.alpha[0][j]))));
+        for (t = 1; t < 3; t++) for (j = 0; j < 2; j++) rows.push(row(a(t + 1, j + 1) + mo('=') + Bj(j + 1, x[t]) + par(a(t, 1) + Aij(1, j + 1) + mo('+') + a(t, 2) + Aij(2, j + 1)) + BR + mo('=') +
+          mn(d1(H.B[j][x[t]])) + mo('×') + par(mn(f5(R.alpha[t - 1][0])) + mo('×') + mn(d1(A[0][j])) + mo('+') + mn(f5(R.alpha[t - 1][1])) + mo('×') + mn(d1(A[1][j]))) + mo('=') + mn(f5(R.alpha[t][j]))));
+        rows.push(row(mi('p') + par(x1to(mn(3))) + mo('=') + a(3, 1) + mo('+') + a(3, 2) + mo('=') + mn(f5(R.alpha[2][0])) + mo('+') + mn(f5(R.alpha[2][1])) + mo('=') + mn(f5(R.lik))));
+      } else if (H.eq === 'beta') {
+        rows.push(row(b(3, 1) + mo('=') + b(3, 2) + mo('=') + mn(1)));
+        for (t = 1; t >= 0; t--) for (var i = 0; i < 2; i++) rows.push(row(b(t + 1, i + 1) + mo('=') + Aij(i + 1, 1) + Bj(1, x[t + 1]) + b(t + 2, 1) + mo('+') + Aij(i + 1, 2) + Bj(2, x[t + 1]) + b(t + 2, 2) + BR + mo('=') +
+          mn(d1(A[i][0])) + mo('×') + mn(d1(H.B[0][x[t + 1]])) + mo('×') + mn(f5(R.beta[t + 1][0])) + mo('+') + mn(d1(A[i][1])) + mo('×') + mn(d1(H.B[1][x[t + 1]])) + mo('×') + mn(f5(R.beta[t + 1][1])) + mo('=') + mn(f5(R.beta[t][i]))));
+        rows.push(row(mi('p') + par(x1to(mn(3))) + mo('=') + sub(mi('π'), mn(1)) + Bj(1, x[0]) + b(1, 1) + mo('+') + sub(mi('π'), mn(2)) + Bj(2, x[0]) + b(1, 2) + BR + mo('=') + mn(f5(pi[0] * H.B[0][x[0]] * R.beta[0][0] + pi[1] * H.B[1][x[0]] * R.beta[0][1]))));
+      } else if (H.eq === 'gamma') {
+        for (t = 0; t < 3; t++) for (j = 0; j < 2; j++) rows.push(row(sub(mi('γ'), mn(t + 1)) + par(mn(j + 1)) + mo('=') + frac(a(t + 1, j + 1) + b(t + 1, j + 1), mi('p') + par(x1to(mn(3)))) + BR + mo('=') + frac(mn(f5(R.alpha[t][j])) + mo('×') + mn(f5(R.beta[t][j])), mn(f5(R.lik))) + mo('=') + mn(f5(R.gamma[t][j]))));
+      } else {
+        var V = HR.viterbi, w = function (t, j) { return Math.exp(V.logOmega[t][j]); };
+        for (j = 0; j < 2; j++) rows.push(row(om(1, j + 1) + mo('=') + sub(mi('π'), mn(j + 1)) + Bj(j + 1, x[0]) + BR + mo('=') + mn(d1(pi[j])) + mo('×') + mn(d1(H.B[j][x[0]])) + mo('=') + mn(f5(w(0, j)))));
+        for (t = 1; t < 3; t++) for (j = 0; j < 2; j++) rows.push(row(om(t + 1, j + 1) + mo('=') + Bj(j + 1, x[t]) + mi('max') + par(mn(f5(w(t - 1, 0))) + mo('×') + mn(d1(A[0][j])) + mo(',') + mn(f5(w(t - 1, 1))) + mo('×') + mn(d1(A[1][j]))) + BR + mo('=') + mn(f5(w(t, j))) +
+          '<mspace width="0.6em"/>' + sub(mi('ψ'), mn(t + 1)) + par(mn(j + 1)) + mo('=') + mt(ST[V.psi[t][j]])));
+      }
+      q('eqHand').innerHTML = table(rows);
+    }
+    function readHand() {
+      var r = [['<i>p</i>(<i>x</i><sub>1:3</sub>) (forward)', f5(HR.raw.lik)], ['<i>p</i>(<i>x</i><sub>1:3</sub>) (sum over 8 sequences)', f5(HR.enumr.lik)],
+        ['Viterbi path', HR.viterbi.path.map(function (v) { return ST[v]; }).join(', ')], ['Its joint probability', f5(HR.pViterbi)],
+        ['State with the largest γ at each time', HR.zGamma.map(function (v) { return ST[v]; }).join(', ')], ['Joint probability of that sequence', f5(HR.pGammaSeq)],
+        ['Do they agree?', HR.agree ? 'Yes' : '<span style="color:#b2182b">No</span>']];
+      q('readHmm').innerHTML = kv(r);
+    }
+
+    regen();
+    var self = {
+      update: function () {
+        if (S.mode === 'gen') {
+          if (!data) regen();
+          if (res.error) { U.status(msg, 'Computation stopped: ' + res.error, 'warn'); return; }
+          if (!C.allFinite([res.logLik]) || !U.guardFinite(res.scaled.gamma, msg, 'smoothing probabilities')) { U.status(msg, 'Computation stopped: the log-likelihood became NaN or infinite.', 'warn'); return; }
+          U.status(msg, '');
+          drawObs(); drawProb(); drawSeq(); eqGen(); readGen();
+        } else {
+          HR = M.handAll([H.pi1, r10(1 - H.pi1)], M.makeA(H.a11, H.a22), H.B, H.x);
+          if (HR.error) { U.status(msg, 'Computation stopped: ' + HR.error, 'warn'); drawTrellis(); q('tblFB').innerHTML = ''; q('tblEnum').innerHTML = ''; q('tblVit').innerHTML = ''; q('eqHand').innerHTML = ''; q('readHmm').innerHTML = ''; return; }
+          U.status(msg, '');
+          drawTrellis(); tablesHand(); eqHand(); readHand();
+        }
+      },
+      hide: function () { run.stop(); },
+      state: S
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② Kalman フィルター
+     ================================================================= */
+  function KalmanSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var S = { qT: 0.2, rT: 1.0, qF: 0.2, rF: 1.0, same: true, T: 100, miss: false, tSel: 3, seed: DEFAULT_SEED, mu0: 0, P0: 1 };
+    var raw = null, x = null, kf = null, sm = null, st = null, mask = null;
+    var ctl = q('ctlK'), msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    var redraw = function () { self.update(); };
+    function regen() { raw = M.sampleRW(C.rng(S.seed), S.T, S.qT, S.rT, S.mu0, S.P0); }
+    function compute() {
+      mask = S.miss ? M.missingMask(S.T) : raw.x.map(function () { return false; });
+      x = M.applyMask(raw.x, mask);
+      kf = M.kalman(x, S.qF, S.rF, S.mu0, S.P0);
+      if (!kf.error) { sm = M.kalmanSummary(raw.z, x, kf); st = M.kalmanSteady(S.qF, S.rF); }
+    }
+    var lfmt = function (v) { return fmt(v, 3); };
+    ctl.appendChild(U.el('div', 'ctlhead', 'Synthetic data (for teaching)'));
+    var rq = U.range({ label: 'Process-noise variance <i>q</i> (data)', min: 0.001, max: 1, step: 0.01, log: true, value: S.qT, fmt: lfmt, onInput: function (v) { S.qT = v; if (S.same) { S.qF = v; rqF.set(v, true); } regen(); redraw(); } });
+    var rr = U.range({ label: 'Observation-noise variance <i>r</i> (data)', min: 0.01, max: 4, step: 0.01, log: true, value: S.rT, fmt: lfmt, onInput: function (v) { S.rT = v; if (S.same) { S.rF = v; rrF.set(v, true); } regen(); redraw(); } });
+    var rTT = U.range({ label: 'Sequence length <i>T</i>', min: M.LIMITS.KalmanTmin, max: M.LIMITS.KalmanTmax, step: 1, value: S.T, fmt: function (v) { return String(v); }, onInput: function (v) { S.T = v; rTs.setRange({ max: v }, true); S.tSel = rTs.get(); regen(); syncMissLabel(); redraw(); } });
+    var ckM = U.check({ label: 'Insert missing observations', checked: false, onChange: function (v) { S.miss = v; redraw(); } });
+    var missHint = U.el('span', 'hint', '');
+    function syncMissLabel() { var m = M.missingMask(S.T), a = [], st0 = -1; for (var t = 0; t <= S.T; t++) { var on = t < S.T && m[t]; if (on && st0 < 0) st0 = t + 1; if (!on && st0 > 0) { a.push(st0 + '–' + t); st0 = -1; } } missHint.textContent = 'Missing times: t = ' + a.join(', ') + ' (the observation values themselves do not change).'; }
+    syncMissLabel();
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; regen(); U.status(msg, 'Sequence regenerated with seed ' + s + '.', ''); redraw(); } });
+    [rq, rr, rTT].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(ckM.el); ctl.appendChild(missHint); ctl.appendChild(seed.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(U.el('div', 'ctlhead', 'Values assumed by the filter'));
+    var ckS = U.check({ label: 'Use the same q, r as the data', checked: true, onChange: function (v) { S.same = v; rqF.input.disabled = v; rrF.input.disabled = v; if (v) { S.qF = S.qT; S.rF = S.rT; rqF.set(S.qF, true); rrF.set(S.rF, true); } redraw(); } });
+    var rqF = U.range({ label: 'Filter <i>q</i>', min: 0.001, max: 1, step: 0.01, log: true, value: S.qF, fmt: lfmt, onInput: function (v) { S.qF = v; redraw(); } });
+    var rrF = U.range({ label: 'Filter <i>r</i>', min: 0.01, max: 4, step: 0.01, log: true, value: S.rF, fmt: lfmt, onInput: function (v) { S.rF = v; redraw(); } });
+    rqF.input.disabled = true; rrF.input.disabled = true;
+    ctl.appendChild(ckS.el); ctl.appendChild(rqF.el); ctl.appendChild(rrF.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    var rTs = U.range({ label: 'Time under study <i>t</i>', min: 1, max: S.T, step: 1, value: S.tSel, fmt: function (v) { return String(v); }, onInput: function (v) { S.tSel = v; redraw(); } });
+    var run = U.runner({
+      labels: { run: 'Advance time', stop: 'Stop', step: 'Step 1 time step', reset: 'Back to time 1' },
+      stepsPerFrame: 1,
+      isVisible: function () { return !panel.hidden; },
+      step: function () { if (S.tSel >= S.T) return false; S.tSel++; rTs.set(S.tSel, true); return S.tSel < S.T; },
+      reset: function () { S.tSel = 1; rTs.set(1, true); },
+      draw: function () { self.update(); }
+    });
+    ctl.appendChild(rTs.el); ctl.appendChild(run.el); ctl.appendChild(msg);
+
+    U.legendHTML(q('lgK'), [
+      { label: 'True state <i>z</i><sub><i>t</i></sub>', color: col.gray, dash: dash.dashed, width: 2 },
+      { label: 'Observation <i>x</i><sub><i>t</i></sub>', color: col.orange, shape: 'cross', kind: 'marker' },
+      { label: 'Estimated mean <i>μ</i><sub><i>t</i></sub>', color: col.accent, width: 2.4 },
+      { label: '±2√<i>P</i><sub><i>t</i></sub>(uncertainty of the estimate)', color: col.accent, kind: 'band', alpha: 0.2 },
+      { label: 'No observation (hatched)', color: col.gray, kind: 'band', hatch: true, alpha: 0.1 }]);
+    U.legendHTML(q('lgG'), [
+      { label: 'Kalman gain <i>K</i><sub><i>t</i></sub>', color: col.green, width: 3.6 },
+      { label: 'Estimate variance <i>P</i><sub><i>t</i></sub>', color: col.purple, dash: dash.dashed, width: 2 },
+      { label: 'Steady state <i>K</i><sub>∞</sub>, <i>P</i><sub>∞</sub>', color: col.gray, dash: dash.dotted, width: 1.4 }]);
+
+    function missBands(c, ax, yr) {
+      for (var t = 0; t < S.T; t++) {
+        if (!mask[t]) continue;
+        var t1 = t; while (t1 + 1 < S.T && mask[t1 + 1]) t1++;
+        U.band(c, ax, [t + 0.5, t1 + 1.5], [yr[0], yr[0]], [yr[1], yr[1]], { color: col.gray, alpha: 0.08, hatch: true });
+        t = t1;
+      }
+    }
+    function drawK() {
+      var F = U.fitCanvas(q('cvK'), { aspect: 0.5, minHeight: 230, maxHeight: 360 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 14, b: 38 }), T = S.T;
+      var ts = raw.z.map(function (_, i) { return i + 1; });
+      var lo = Infinity, hi = -Infinity;
+      for (var t = 0; t < T; t++) { var s2 = 2 * Math.sqrt(kf.P[t]); lo = Math.min(lo, raw.z[t], kf.mu[t] - s2, x[t] === null ? Infinity : x[t]); hi = Math.max(hi, raw.z[t], kf.mu[t] + s2, x[t] === null ? -Infinity : x[t]); }
+      var pad = 0.08 * (hi - lo || 1), yr = [lo - pad, hi + pad * 2.2];
+      var ax = U.axes(c, box, [0.5, T + 0.5], yr, { xl: 'Time t', yl: 'State and observation (dimensionless)' });
+      missBands(c, ax, yr);
+      U.band(c, ax, ts, kf.mu.map(function (m, i) { return m - 2 * Math.sqrt(kf.P[i]); }), kf.mu.map(function (m, i) { return m + 2 * Math.sqrt(kf.P[i]); }), { color: col.accent, alpha: 0.2 });
+      U.line(c, ax, ts, raw.z, { color: col.gray, dash: dash.dashed, width: 2 });
+      var ox = [], oy = []; x.forEach(function (v, i) { if (v !== null) { ox.push(i + 1); oy.push(v); } });
+      U.points(c, ax, ox, oy, { shape: 'cross', color: col.orange, size: T > 120 ? 5 : 6.5 });
+      U.line(c, ax, ts, kf.mu, { color: col.accent, width: 2.4 });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      U.marker(c, ax.X(S.tSel), ax.Y(kf.mu[S.tSel - 1]), 'circle', 8, col.accent, true);
+      if (S.miss) { var m0 = mask.indexOf(true); if (m0 >= 0) MLUI.label(c, 'No observation', ax.X(m0 + 1), box[1] + 9, { size: 10, color: col.sub, align: 'left' }); }
+      U.setCanvasLabel(q('cvK'), 'Kalman filter estimate. T = ' + T + ', seed ' + S.seed + ', data q = ' + fmt(S.qT, 3) + ', r = ' + fmt(S.rT, 3) + '. Root-mean-square error of the estimate ' + fx(sm.rmseEst, 3) + ', error of the observations themselves ' + (sm.rmseObs === null ? '—' : fx(sm.rmseObs, 3)) + '.');
+      q('capK').innerHTML = '<strong>Synthetic data for teaching purposes</strong> (seed ' + S.seed + ', <i>T</i> = ' + T + ', <i>z</i><sub>1</sub> ~ 𝒩(0, 1), <i>z</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i>−1</sub> + √<i>q</i> <i>ε</i><sub><i>t</i></sub>, <i>x</i><sub><i>t</i></sub> = <i>z</i><sub><i>t</i></sub> + √<i>r</i> <i>η</i><sub><i>t</i></sub>, data <i>q</i> = ' + fmt(S.qT, 3) + ', <i>r</i> = ' + fmt(S.rT, 3) + ', dimensionless). The filter assumes <i>q</i> = ' + fmt(S.qF, 3) + ', <i>r</i> = ' + fmt(S.rF, 3) + ', <i>μ</i><sub>0</sub> = 0, <i>P</i><sub>0</sub> = 1. The band is the uncertainty of the estimate of the latent state <i>z</i><sub><i>t</i></sub> (±2√<i>P</i><sub><i>t</i></sub>), not the prediction interval of the observed values.';
+    }
+    function drawG() {
+      var F = U.fitCanvas(q('cvG'), { aspect: 0.34, minHeight: 180, maxHeight: 260 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 50, r: 12, t: 12, b: 38 }), T = S.T;
+      var ts = kf.K.map(function (_, i) { return i + 1; });
+      var ymax = Math.max(1, Math.max.apply(null, kf.P)) * 1.12;
+      var ax = U.axes(c, box, [0.5, T + 0.5], [0, ymax], { xl: 'Time t', yl: 'Gain, variance' });
+      missBands(c, ax, [0, ymax]);
+      U.hline(c, ax, st.K, { color: col.gray, dash: dash.dotted, width: 1.4 });
+      U.hline(c, ax, st.P, { color: col.gray, dash: dash.dotted, width: 1.4 });
+      U.line(c, ax, ts, kf.K, { color: col.green, width: 3.6 });
+      U.line(c, ax, ts, kf.P, { color: col.purple, dash: dash.dashed, width: 2 });
+      U.vline(c, ax, S.tSel, { color: col.gray, dash: dash.dashed, width: 1.2 });
+      var L = U.labeler(c, box), tl = Math.min(T, Math.max(4, Math.round(T * 0.12)));
+      L.add('K', ax.X(tl), ax.Y(kf.K[tl - 1]) - 10, { color: col.green, bold: true, size: 11 });
+      L.add('P', ax.X(tl), ax.Y(kf.P[tl - 1]) + 12, { color: col.purple, bold: true, size: 11 });
+      L.add('K∞ = ' + fx(st.K, 3), box[2] - 50, ax.Y(st.K) - 9, { color: col.sub, size: 10 });
+      L.add('P∞ = ' + fx(st.P, 3), box[2] - 50, ax.Y(st.P) + 10, { color: col.sub, size: 10 });
+      U.setCanvasLabel(q('cvG'), 'Evolution of the Kalman gain and the estimate variance. Steady-state values K∞ = ' + fx(st.K, 3) + ', P∞ = ' + fx(st.P, 3) + '.');
+    }
+    function eqK() {
+      var k = S.tSel - 1, rows = [], t = S.tSel;
+      q('tNowK').textContent = 't = ' + t;
+      var muP = sub(mi('μ'), mi('t') + mo('∣') + mi('t') + mo('−') + mn(1)), PP = sub(mi('P'), mi('t') + mo('∣') + mi('t') + mo('−') + mn(1));
+      if (k === 0) rows.push(row(mt('Prediction: ') + muP + mo('=') + sub(mi('μ'), mn(0)) + mo('=') + mn(fx(kf.muPred[0], 4)) + BR + PP + mo('=') + sub(mi('P'), mn(0)) + mo('=') + mn(fmt(kf.PPred[0], 5))));
+      else rows.push(row(mt('Prediction: ') + muP + mo('=') + sub(mi('μ'), mi('t') + mo('−') + mn(1)) + mo('=') + mn(fx(kf.muPred[k], 4)) + BR + PP + mo('=') + sub(mi('P'), mi('t') + mo('−') + mn(1)) + mo('+') + mi('q') + mo('=') + mn(fmt(kf.P[k - 1], 5)) + mo('+') + mn(fmt(S.qF, 3)) + mo('=') + mn(fmt(kf.PPred[k], 5))));
+      if (x[k] === null) {
+        rows.push(row(mt('No observation (missing): ') + sub(mi('K'), mi('t')) + mo('=') + mn(0) + BR + sub(mi('μ'), mi('t')) + mo('=') + muP + mo('=') + mn(fx(kf.mu[k], 4)) + mo(',') + '<mspace width="0.4em"/>' + sub(mi('P'), mi('t')) + mo('=') + PP + mo('=') + mn(fmt(kf.P[k], 5))));
+      } else {
+        rows.push(row(mt('Gain: ') + sub(mi('K'), mi('t')) + mo('=') + frac(PP, PP + mo('+') + mi('r')) + BR + mo('=') + frac(mn(fmt(kf.PPred[k], 5)), mn(fmt(kf.PPred[k], 5)) + mo('+') + mn(fmt(S.rF, 3))) + mo('=') + mn(fmt(kf.K[k], 5))));
+        rows.push(row(mt('Update: ') + sub(mi('μ'), mi('t')) + mo('=') + muP + mo('+') + sub(mi('K'), mi('t')) + par(sub(mi('x'), mi('t')) + mo('−') + muP) + BR + mo('=') + mn(fx(kf.muPred[k], 4)) + mo('+') + mn(fmt(kf.K[k], 5)) + mo('×') + par(mn(fx(x[k], 4)) + mo('−') + pn(kf.muPred[k])) + BR + mo('=') + mn(fx(kf.mu[k], 4))));
+        rows.push(row(sub(mi('P'), mi('t')) + mo('=') + par(mn(1) + mo('−') + sub(mi('K'), mi('t'))) + PP + BR + mo('=') + par(mn(1) + mo('−') + mn(fmt(kf.K[k], 5))) + mo('×') + mn(fmt(kf.PPred[k], 5)) + mo('=') + mn(fmt(kf.P[k], 5))));
+      }
+      rows.push(row(mt('Steady state: ') + sub(mi('K'), mi('∞')) + mo('=') + mn(fmt(st.K, 5)) + BR + sub(mi('P'), mi('∞')) + mo('=') + mn(fmt(st.P, 5)) + mt('(from the filter’s q, r)')));
+      q('eqK').innerHTML = table(rows);
+    }
+    function readK() {
+      q('readK').innerHTML = kv([
+        ['Error of the estimate √(mean (<i>μ</i><sub><i>t</i></sub> − <i>z</i><sub><i>t</i></sub>)<sup>2</sup>)', fx(sm.rmseEst, 3)],
+        ['Error of the observations themselves √(mean (<i>x</i><sub><i>t</i></sub> − <i>z</i><sub><i>t</i></sub>)<sup>2</sup>)', sm.rmseObs === null ? '—' : fx(sm.rmseObs, 3)],
+        ['Fraction of true values inside ±2√<i>P</i><sub><i>t</i></sub>', U.fmtPct(sm.coverage, 1)],
+        ['Times with an observation', sm.nObs + ' / ' + S.T],
+        ['Steady state <i>K</i><sub>∞</sub>, <i>P</i><sub>∞</sub>', fx(st.K, 4) + ', ' + fx(st.P, 4)],
+        ['Log-likelihood ln <i>p</i>(observed <i>x</i><sub><i>t</i></sub>)', fx(kf.logLik, 3)]]);
+      var h = '<div class="tablewrap"><table class="grid"><thead><tr><th><i>t</i></th><th><i>x</i><sub><i>t</i></sub></th><th><i>μ</i><sub><i>t</i>|<i>t</i>−1</sub></th><th><i>P</i><sub><i>t</i>|<i>t</i>−1</sub></th><th><i>K</i><sub><i>t</i></sub></th><th><i>μ</i><sub><i>t</i></sub></th><th><i>P</i><sub><i>t</i></sub></th></tr></thead><tbody>';
+      for (var t = 0; t < Math.min(3, S.T); t++) h += '<tr><td>' + (t + 1) + '</td><td>' + (x[t] === null ? 'missing' : fmt(x[t], 5)) + '</td><td>' + fmt(kf.muPred[t], 5) + '</td><td>' + fmt(kf.PPred[t], 5) + '</td><td>' + fmt(kf.K[t], 5) + '</td><td>' + fmt(kf.mu[t], 5) + '</td><td>' + fmt(kf.P[t], 5) + '</td></tr>';
+      h += '</tbody></table></div><p class="hint">5 significant digits. <i>K</i><sub><i>t</i></sub> and <i>P</i><sub><i>t</i></sub> do not depend on the observed values; they are determined only by <i>q</i>, <i>r</i>, <i>P</i><sub>0</sub>, and whether observations are missing.</p>';
+      q('first3').innerHTML = h;
+    }
+    regen();
+    var self = {
+      update: function () {
+        if (!raw) regen();
+        compute();
+        if (kf.error) { U.status(msg, 'Computation stopped: ' + kf.error, 'warn'); return; }
+        if (!U.guardFinite([kf.mu, kf.P], msg, 'estimate')) return;
+        U.status(msg, '');
+        drawK(); drawG(); eqK(); readK();
+      },
+      hide: function () { run.stop(); },
+      state: S
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { hmm: HmmSim, kalman: KalmanSim }, initial: 'hmm' });
+})();
+</script>
+</body>
+</html>

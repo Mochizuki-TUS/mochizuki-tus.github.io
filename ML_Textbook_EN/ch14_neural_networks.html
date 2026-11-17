@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>Chapter 14 Representations in Neural Networks — Learning the Basis Functions — Machine Learning</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => '14.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">Machine Learning — Contents</a>
+  <span class="series">Part IV Neural Networks / Chapter 14</span>
+</header>
+<main>
+<h1><span class="chapter-no">Chapter 14</span>Representations in Neural Networks — Learning the Basis Functions</h1>
+
+<div class="lead">
+<div class="question">
+<strong>The question this chapter answers</strong>
+<ul>
+  <li>No matter how many linear transformations we stack, the result can do nothing more than a single linear transformation. So what must we insert between the stages to be able to represent curved decision boundaries and curves?</li>
+  <li>In the linear regression of Chapter 8, a person chose the centers and widths of the Gaussian basis functions in advance. What, in terms of equations, does it mean to learn the basis functions themselves from data?</li>
+  <li>There is a theorem that “a sufficiently large neural network can approximate any continuous function,” and yet learning sometimes fails. Why?</li>
+</ul>
+</div>
+<p>When we fit a curve to the data on firing temperature and relative density (data A, used in Chapters 6 and 8), in Chapter 8 a person chose “polynomials” or “Gaussian basis functions with equally spaced centers,” and only their weights were determined by least squares. Choosing the shape of the basis functions was the person’s job. With one input, equal spacing is enough, but for materials data with eight descriptors, placing five centers along each axis gives $5^{8}=390625$ basis functions. That is unusable.</p>
+<p>A neural network is a model that determines even the location, direction, and slope of these basis functions from data, as weights. A single component (a neuron) is simple: it “forms a weighted sum and passes it through a nonlinear function.” But when we line neurons up to form a layer and stack layers, we can represent curved boundaries and complicated curves. In this chapter we build up, in order, the <strong>neuron</strong> and the <strong>activation function</strong>, <strong>layers and the shapes of matrices</strong>, <strong>why nonlinearity is necessary</strong> (a hand calculation for XOR), the view of the network as a <strong>model that learns basis functions</strong>, and the <strong>output layer and the loss</strong> (the fact that, for every combination, the error at the output becomes $\hat{\bm{y}}-\bm{y}$). In the second half we treat the meaning and the limits of the <strong>universal approximation theorem</strong>, <strong>the number of parameters and the symmetries of weight space</strong>, and the idea of a <strong>neural network potential</strong>, which represents the total energy as a sum of per-atom energies. The computation of the gradients of the weights (backpropagation) is treated in the next chapter, Chapter 15; this chapter concentrates on “what can be represented.”</p>
+<div class="goals">
+  <strong>What you will learn in this chapter</strong>
+  <ul>
+    <li>Write the neuron equations $a=\bm{w}^{\tp}\bm{x}+b$ and $z=h(a)$, and explain that logistic regression is a single neuron.</li>
+    <li>Write the formulas and derivatives of sigmoid, tanh, and ReLU, and state the characteristics of each.</li>
+    <li>Tabulate the shapes (dimensions) of the weight matrix, bias, and activation of each layer, and show that for a minibatch the computation becomes a matrix product.</li>
+    <li>Prove that if the activation function is the identity map, then stacking any number of layers gives a single linear map, and verify by hand the weights that solve XOR with two hidden units.</li>
+    <li>Contrast the outputs of the hidden layer, viewed as “basis functions that move to fit the data,” with the fixed basis functions of Chapter 8.</li>
+    <li>Derive the output layer and loss for regression, binary classification, and multiclass classification from maximum likelihood estimation, and derive that the error at the output is $\hat{\bm{y}}-\bm{y}$ in every case.</li>
+    <li>State the universal approximation theorem, and explain with examples that “what can be represented,” “what can be found by learning,” and “what generalizes” are separate problems.</li>
+    <li>Count the parameters of a fully connected layer, and explain what the symmetries of weight space (permutation, sign flip, and scaling) mean.</li>
+  </ul>
+</div>
+<div class="prereq"><strong>Prerequisites:</strong> in this book, <a href="ch04_bayesian_inference.html#sec4-2">Chapter 4, Section 4.2</a> (maximum likelihood estimation), <a href="ch05_information.html#sec5-5">Chapter 5, Section 5.5</a> (cross-entropy loss), <a href="ch06_generalization.html">Chapter 6</a> (overfitting and validation data), <a href="ch07_optimization.html#sec7-4">Chapter 7, Section 7.4</a> (convex and nonconvex; detailed route; the key points on convexity are in Chapter 8, Section 8.2), <a href="ch08_linear_regression.html#sec8-1">Chapter 8, Section 8.1</a> (linear models with basis functions), <a href="ch09_linear_classification.html#sec9-3">Chapter 9, Section 9.3</a> (logistic regression), and <a href="ch09_linear_classification.html#sec9-5">Section 9.5</a> (softmax). Also matrix products and the composition of linear maps (<a href="../UnivMath_Textbook_EN/ch08_matrices_determinants.html#sec8-1">University Mathematics, Section 8.1</a>, <a href="../UnivMath_Textbook_EN/ch11_linear_maps.html#sec11-4">Section 11.4</a>) and differentiation of composite functions (<a href="../UnivMath_Textbook_EN/ch06_partial_derivatives.html#sec6-4">University Mathematics, Section 6.4</a>). Even if you have not read Chapters 8 and 9, the equations needed in this chapter are restated on the spot.</div>
+<p class="route"><strong>Sections for the introductory route:</strong> <a href="#sec14-1">14.1</a>, <a href="#sec14-2">14.2</a>, <a href="#sec14-3">14.3</a>, <a href="#sec14-4">14.4</a>, <a href="#sec14-5">14.5</a>, <a href="#sec14-6">14.6</a>, <a href="#sec14-11">14.11</a>. Sections marked “Detailed Route” may be skipped on a first reading.</p>
+</div>
+
+<nav class="chapter-toc">
+  <strong>Contents of this chapter</strong>
+  <ol>
+    <li><a href="#sec14-1">14.1 The Neuron — Weighted Sum and Activation</a></li>
+    <li><a href="#sec14-2">14.2 Activation Functions — Sigmoid, Tanh, and ReLU</a></li>
+    <li><a href="#sec14-3">14.3 Layers and the Shapes of Matrices</a></li>
+    <li><a href="#sec14-4">14.4 Why Nonlinearity Is Necessary — Stacked Linear Maps and XOR</a></li>
+    <li><a href="#sec14-5">14.5 Models That Learn Basis Functions</a></li>
+    <li><a href="#sec14-6">14.6 The Output Layer and the Loss — The Error Is Always ŷ − y</a></li>
+    <li><a href="#sec14-7">14.7 The Universal Approximation Theorem — What Can Be Represented, What Can Be Found, and What Generalizes</a></li>
+    <li><a href="#sec14-8">14.8 Counting Parameters and the Symmetries of Weight Space</a></li>
+    <li><a href="#sec14-9">14.9 Connections to Materials Engineering and Condensed Matter Physics — Regression from Descriptors and Per-Atom Energies</a></li>
+    <li><a href="#sec14-10">14.10 Common Misconceptions and Limits of Applicability</a></li>
+    <li><a href="#sec14-11">14.11 Summary, Link to the Next Chapter, Exercises, and References</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="sec14-1">14.1 The Neuron — Weighted Sum and Activation</h2>
+
+<h3>14.1.1 What We Want to Do</h3>
+
+<p>Suppose we want to predict, from the normalized firing temperature $x_1$ and the normalized dopant amount $x_2$, “whether the sintered body becomes sufficiently dense.” The simplest approach is to multiply the two inputs by weights, add them, and judge that the body “densifies” if the value is large. The value of a weighted sum can become arbitrarily large or small, so it cannot be read as a probability as it stands. We therefore pass the sum through a function that squeezes it between 0 and 1. This single unit of computation, “form a weighted sum and pass it through a function,” is called a <strong>neuron</strong> (also called a unit) (<a href="#fig14-1">Figure 14.1</a>).</p>
+
+<figure id="fig14-1">
+<svg role="img" aria-label="Schematic diagram of a neuron. On the left is a column of circles for the inputs x1, x2, through xD; each enters the central sum circle through an arrow with weights w1, w2, wD. The bias b also enters the sum circle. The value a leaving the sum circle enters a box for the activation function h, and the output z = h(a) leaves to the right." viewBox="0 0 620 270" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>Figure 14.1: A single neuron</title>
+<defs><marker id="arr-fig14-1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker></defs>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="17" fill="#1a1a1a">
+<circle cx="70" cy="50" r="22" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle>
+<text x="70" y="56" text-anchor="middle"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="12">1</tspan></text>
+<circle cx="70" cy="120" r="22" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle>
+<text x="70" y="126" text-anchor="middle"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="12">2</tspan></text>
+<text x="70" y="172" text-anchor="middle" font-size="20">⋮</text>
+<circle cx="70" cy="220" r="22" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle>
+<text x="70" y="226" text-anchor="middle"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="12">D</tspan></text>
+<line x1="92" y1="56" x2="252" y2="124" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig14-1)"></line>
+<line x1="92" y1="120" x2="250" y2="133" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig14-1)"></line>
+<line x1="92" y1="214" x2="252" y2="146" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig14-1)"></line>
+<text x="160" y="76" text-anchor="middle"><tspan font-style="italic">w</tspan><tspan baseline-shift="sub" font-size="12">1</tspan></text>
+<text x="165" y="118" text-anchor="middle"><tspan font-style="italic">w</tspan><tspan baseline-shift="sub" font-size="12">2</tspan></text>
+<text x="160" y="205" text-anchor="middle"><tspan font-style="italic">w</tspan><tspan baseline-shift="sub" font-size="12">D</tspan></text>
+<circle cx="280" cy="135" r="28" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.8"></circle>
+<text x="280" y="143" text-anchor="middle" font-size="24">Σ</text>
+<line x1="280" y1="40" x2="280" y2="103" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#arr-fig14-1)"></line>
+<text x="280" y="32" text-anchor="middle"><tspan font-style="italic">b</tspan></text>
+<line x1="308" y1="135" x2="388" y2="135" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig14-1)"></line>
+<text x="346" y="125" text-anchor="middle"><tspan font-style="italic">a</tspan></text>
+<rect x="392" y="108" width="80" height="54" rx="8" fill="#5b2a5e" stroke="#5b2a5e"></rect>
+<text x="432" y="142" text-anchor="middle" fill="#fff"><tspan font-style="italic">h</tspan>( · )</text>
+<line x1="472" y1="135" x2="552" y2="135" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig14-1)"></line>
+<text x="585" y="141" text-anchor="middle"><tspan font-style="italic">z</tspan></text>
+</g>
+<text x="280" y="196" text-anchor="middle" font-size="14" fill="#1a1a1a">weighted sum</text>
+<text x="432" y="196" text-anchor="middle" font-size="14" fill="#1a1a1a">activation function</text>
+<text x="300" y="254" text-anchor="middle" font-size="16" fill="#4a5568" font-family="Times New Roman, STIXGeneral, serif"><tspan font-style="italic">a</tspan> = <tspan font-style="italic">w</tspan><tspan baseline-shift="sub" font-size="11">1</tspan><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="11">1</tspan> + ⋯ + <tspan font-style="italic">w</tspan><tspan baseline-shift="sub" font-size="11">D</tspan><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="11">D</tspan> + <tspan font-style="italic">b</tspan>, <tspan font-style="italic">z</tspan> = <tspan font-style="italic">h</tspan>(<tspan font-style="italic">a</tspan>)</text>
+</svg>
+<figcaption>Figure 14.1: A single neuron (schematic). The inputs $x_1,\dots,x_D$ are multiplied by the weights $w_1,\dots,w_D$ and added, the bias $b$ (dashed arrow) is added, and the resulting value $a$ is passed through the activation function $h$ to obtain the output $z$. Taking $h$ to be the sigmoid gives logistic regression.</figcaption>
+</figure>
+
+<h3>14.1.2 Definitions and Notation</h3>
+
+<div class="box def">
+<p class="box-title">Definition 14.1: Neuron</p>
+<p>For an input $\bm{x}=(x_1,\dots,x_D)^{\tp}\in\R^{D}$, using a weight $\bm{w}\in\R^{D}$ and a bias $b\in\R$, the unit that computes</p>
+\begin{equation}
+\begin{aligned}
+a&=\bm{w}^{\tp}\bm{x}+b\\
+&=\sum_{i=1}^{D}w_ix_i+b,\\
+z&=h(a)
+\end{aligned} \label{eq:14-neuron}
+\end{equation}
+<p>is called a <strong>neuron</strong>. We call $a\in\R$ the <strong>activation</strong> (the weighted sum itself), $h:\R\to\R$ the <strong>activation function</strong>, and $z=h(a)$ the <strong>output</strong> of the neuron.</p>
+</div>
+
+<div class="box note">
+<p class="box-title">Notation: Symbols Used in This Chapter</p>
+<p>The symbol $z$ is used for the output of a neuron (hidden unit). In Chapters 17 and 18 the same $z$ is used for a latent variable, but it is a different object. We write the number of hidden units as $H$ (distinct from the entropy $H[p]$ of Chapter 5). The sigmoid function is always written with its argument, as $\sigma(a)$. The same letter $\sigma$ is also used for the standard deviation of Gaussian noise, but where both appear in Section 14.6, we distinguish them in the text.</p>
+</div>
+
+<p>If we take $h$ to be the sigmoid function $\sigma(a)=1/(1+e^{-a})$, the output lies between 0 and 1 and can be read as $p(y=1\mid\bm{x})$. This is exactly the <strong>logistic regression</strong> of <a href="ch09_linear_classification.html#sec9-3">Chapter 9, Section 9.3</a>. In other words, logistic regression is “a single neuron.” Likewise, if we take $h$ to be the identity map $h(a)=a$, we obtain linear regression on the inputs (the case of Chapter 8 with basis functions $\phi_i(\bm{x})=x_i$).</p>
+
+<p>The decision boundary lies where $\sigma(a)=1/2$, that is, where $a=\bm{w}^{\tp}\bm{x}+b=0$. This is a hyperplane in $\R^{D}$ (a line when $D=2$), and $\bm{w}$ gives the direction of its normal. The only classification a single neuron can perform is “which side of the hyperplane.” This constraint leads to the XOR problem of Section 14.4.</p>
+
+<div class="box ex">
+<p class="box-title">Example 14.1: Computing the probability of densification with a single neuron</p>
+<p>Consider a neuron with weight $\bm{w}=(2,\,-1)^{\tp}$, bias $b=-0.5$, and sigmoid activation function (the numbers are provisional values for illustration). The inputs are the normalized firing temperature $x_1$ and the normalized dopant amount $x_2$ (both dimensionless). (1) Find the activation $a$ and the output $z$ for $\bm{x}=(1,\,0.5)^{\tp}$ and for $\bm{x}=(0,\,1)^{\tp}$. (2) Write the equation of the decision boundary.</p>
+<p><strong>Solution.</strong> (1) For $\bm{x}=(1,0.5)^{\tp}$, $a=2\times1+(-1)\times0.5+(-0.5)$ $=2-0.5-0.5=1.0$, and $z=\sigma(1.0)=1/(1+e^{-1})$ $=1/1.367879=0.731$. For $\bm{x}=(0,1)^{\tp}$, $a=0-1-0.5=-1.5$, and $z=1/(1+e^{1.5})=1/(1+4.481689)=0.182$.</p>
+<p>(2) Setting $a=0$ gives $2x_1-x_2-0.5=0$, that is, the line $x_2=2x_1-0.5$. Below this line ($x_2\lt 2x_1-0.5$) we have $z\gt 1/2$. The signs of the weights express the provisional relationship that raising the temperature (increasing $x_1$) makes densification easier, while increasing the dopant amount makes it harder.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-2">14.2 Activation Functions — Sigmoid, Tanh, and ReLU</h2>
+
+<h3>14.2.1 Three representative functions</h3>
+
+<p>An activation function is the component that gives a neuron its “bend.” The following three are used most often (<a href="#fig14-2">Figure 14.2</a>).</p>
+
+<div class="box def">
+<p class="box-title">Definition 14.2: Sigmoid, tanh, and ReLU</p>
+\begin{align}
+\sigma(a)&=\frac{1}{1+e^{-a}}, \notag\\
+\sigma'(a)&=\sigma(a)\bigl(1-\sigma(a)\bigr) \label{eq:14-sigmoid}
+\end{align}
+\begin{align}
+\tanh a&=\frac{e^{a}-e^{-a}}{e^{a}+e^{-a}}, \notag\\
+(\tanh a)'&=1-\tanh^{2}a \label{eq:14-tanh}
+\end{align}
+\begin{align}
+\relu(a)&=\max(0,a), \notag\\
+\relu'(a)&=\begin{cases}1 & a\gt0\\ 0 & a\lt0\end{cases} \label{eq:14-relu}
+\end{align}
+<p>ReLU (rectified linear unit, a function that passes only the positive part) is not differentiable at $a=0$, but in actual computation we adopt the convention $\relu'(0)=0$.</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">Derivation: The derivatives of sigmoid and tanh</p>
+<p>Sigmoid: differentiate $\sigma(a)=(1+e^{-a})^{-1}$ by the chain rule.</p>
+\begin{align*}
+\sigma'(a)&=-(1+e^{-a})^{-2}\cdot(-e^{-a})\\
+&=\frac{e^{-a}}{(1+e^{-a})^{2}}=\frac{1}{1+e^{-a}}\cdot\frac{e^{-a}}{1+e^{-a}}\\
+&=\sigma(a)\bigl(1-\sigma(a)\bigr).
+\end{align*}
+<p>In the last equality we used $\dfrac{e^{-a}}{1+e^{-a}}=\dfrac{(1+e^{-a})-1}{1+e^{-a}}$ $=1-\sigma(a)$.</p>
+<p>Tanh: in the quotient rule, let the numerator be $u=e^{a}-e^{-a}$ and the denominator $v=e^{a}+e^{-a}$. Then $u'=v$ and $v'=u$, so</p>
+$$
+\begin{aligned}
+(\tanh a)'&=\frac{u'v-uv'}{v^{2}}=\frac{v^{2}-u^{2}}{v^{2}}\\
+&=1-\Bigl(\frac{u}{v}\Bigr)^{2}=1-\tanh^{2}a .
+\end{aligned}
+$$
+<p>In both cases the derivative can be obtained from the value of the function itself. This property is useful in the backpropagation of Chapter 15, where $h'$ is computed directly from the $z$ already obtained in forward propagation.</p>
+<p style="text-align:right">∎</p>
+</div>
+
+<figure id="fig14-2">
+<img src="figs/ch14_fig14-2.svg" alt="The left graph plots, against the horizontal axis a, the sigmoid (a solid line rising from 0 to 1), tanh (a dashed line rising from −1 to 1), ReLU (a dash-dot line equal to 0 for negative a and to a for positive a), and GELU (a dotted line, a smoothed ReLU). The right graph shows their derivatives: the derivative of the sigmoid has its maximum 0.25 at a = 0, the derivative of tanh has its maximum 1 at a = 0, the derivative of ReLU is a step equal to 0 for negative a and 1 for positive a, and the derivative of GELU has a hump slightly exceeding 1." style="max-width:640px;width:100%">
+<figcaption>Figure 14.2: (a) Representative activation functions. The solid line is the sigmoid $\sigma(a)$, the dashed line is $\tanh a$, the dash-dot line is ReLU, and the dotted line is GELU. (b) Their derivatives. The maximum of the sigmoid derivative is $1/4$ at $a=0$, and that of tanh is 1. The ReLU derivative is 0 for $a\lt0$ and 1 for $a\gt0$ (the open circle marks the discontinuity at $a=0$).</figcaption>
+</figure>
+
+<h3>14.2.2 The character of each function</h3>
+
+<ul>
+  <li><strong>Sigmoid</strong>: Its output lies in $(0,1)$, so it can be read as a probability. It suits the output layer (binary classification). When used in a hidden layer, $\sigma'(a)$ becomes almost 0 where $\abs{a}$ is large (saturation), and the maximum of the derivative is also small, $1/4$. This is the entrance to the vanishing gradient of <a href="ch15_backpropagation.html#sec15-7">Chapter 15, Section 15.7</a>.</li>
+  <li><strong>Tanh</strong>: Its output lies in $(-1,1)$ and is symmetric about 0 (an odd function, $\tanh(-a)=-\tanh a$). The relation $\tanh a=2\sigma(2a)-1$ holds (Exercise 14.2), so it is merely a translated and scaled sigmoid, but because its slope at the origin is 1, it is often easier to train than the sigmoid in hidden layers. It also saturates at both ends.</li>
+  <li><strong>ReLU</strong>: It is cheap to compute, and for $a\gt0$ its derivative is 1, so it does not saturate. It is widely used in deep networks. On the other hand, for $a\lt0$ the derivative is 0, so a unit that stays at $a\lt0$ throughout training never moves again (a “dead” unit). The output of a network built from ReLUs is a <strong>piecewise linear function</strong>. We use this property in Sections 14.7 and 14.10.</li>
+</ul>
+
+<p>In addition, <strong>GELU</strong> (Gaussian error linear unit) is often used in the Transformer (Chapter 25) and elsewhere. Let $\Phi(a)$ be the cumulative distribution function of the standard Gaussian distribution (the light-face $\Phi$, distinct from the bold $\bm{\Phi}$ of the design matrix). Then</p>
+\begin{equation}
+\mathrm{GELU}(a)=a\,\Phi(a) \label{eq:14-gelu}
+\end{equation}
+<p>is the definition (Hendrycks &amp; Gimpel). When $a$ is large and positive, $\Phi(a)\approx1$ and $a$ passes through unchanged; when it is large and negative, $\Phi(a)\approx0$ and the output is 0. It is a form in which the kink of ReLU is smoothed, and for $a\lt0$ the value is slightly negative (the minimum is about $-0.17$ at $a\approx-0.75$; see the dotted line in <a href="#fig14-2">Figure 14.2</a>(a)). In this chapter we only introduce its name and shape.</p>
+
+<div class="box why">
+<p class="box-title">Why are so many activation functions monotone?</p>
+<p>The sigmoid, tanh, and ReLU listed here are all increasing functions (GELU decreases slightly in part of the negative side, but it is nearly monotone). Monotonicity is not essential, but it keeps the readability of “the larger the weighted sum, the larger the output” and does not make the loss landscape extremely complicated, so it is preferred. Conversely, if an activation function such as a polynomial is used, the property described in Section 14.4 below, that “stacking layers increases the functions that can be represented,” is limited (a composition of polynomials is again a polynomial, and for networks whose degree is bounded the set of representable functions does not grow; this is the result of Leshno et al. in Section 14.7).</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Example 14.2: Values of the derivatives and saturation</p>
+<p>(1) Find $\sigma(a)$, $\sigma'(a)$, $\tanh a$, $(\tanh a)'$, and $\relu'(a)$ at $a=0$ and $a=2$. (2) Verify numerically that $\tanh 2=2\sigma(4)-1$. (3) Find the values at $a=-2$ from the results of (1), without computing them afresh.</p>
+<p><strong>Solution.</strong> (1) $a=0$: $\sigma(0)=1/2$, $\sigma'(0)=\tfrac12\cdot\tfrac12=0.25$, $\tanh0=0$, $(\tanh)'(0)=1$, $\relu'(0)=0$ (by the convention). $a=2$: $\sigma(2)=1/(1+e^{-2})=1/1.135335=0.880797$, $\sigma'(2)=0.880797\times0.119203=0.104994$. $\tanh2=0.964028$, $(\tanh)'(2)=1-0.964028^{2}$ $=1-0.929350=0.070651$. $\relu'(2)=1$. Merely by increasing $a$ from 0 to 2, the slope of the sigmoid drops from $0.25$ to $0.105$ and the slope of tanh drops from 1 to $0.071$ (saturation), whereas the slope of ReLU remains 1.</p>
+<p>(2) $\sigma(4)=1/(1+e^{-4})=1/1.018316=0.982014$, and $2\times0.982014-1=0.964028$, which agrees with $\tanh2$.</p>
+<p>(3) From $\sigma(-a)=1-\sigma(a)$ we get $\sigma(-2)=1-0.880797=0.119203$. $\sigma'(-2)=\sigma(-2)\{1-\sigma(-2)\}$ $=0.119203\times0.880797$ $=0.104994$ ($\sigma'$ is an even function). $\tanh(-2)=-0.964028$ (an odd function), $(\tanh)'(-2)=0.070651$ (an even function). $\relu'(-2)=0$.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-3">14.3 Layers and the Shapes of Matrices</h2>
+
+<h3>14.3.1 Arranging neurons into a layer</h3>
+
+<p>If we line up $D_1$ neurons that receive the same input $\bm{x}$, we can write the $D_1$ activations together using a matrix $\bm{W}^{(1)}$ whose rows are the $D_1$ weight vectors. If the output $\bm{z}^{(1)}$ is used as the input of the next layer, we obtain a network of stacked layers. A network in which the computation flows in one direction from input to output, and in which neurons within the same layer are not connected to each other, is called a <strong>feed-forward</strong> network, or a <strong>multilayer perceptron</strong> (MLP). The layers between the input and the output are called <strong>hidden layers</strong>, and their neurons are called <strong>hidden units</strong>.</p>
+
+<div class="box def">
+<p class="box-title">Definition 14.3: Fully connected feed-forward network</p>
+<p>Number the layers $l=1,\dots,n_{\mathrm{layer}}$ ($n_{\mathrm{layer}}$ is the number of layers; many books write $L$ for the number of layers, but in this book $L$ is used for the loss), let $D_l$ be the number of units in layer $l$, and let the input dimension be $D_0=D$. Starting from $\bm{z}^{(0)}=\bm{x}$, compute, in the order $l=1,\dots,n_{\mathrm{layer}}$,</p>
+\begin{equation}
+\begin{aligned}
+\bm{a}^{(l)}&=\bm{W}^{(l)}\bm{z}^{(l-1)}+\bm{b}^{(l)},\\
+\bm{z}^{(l)}&=h_l\bigl(\bm{a}^{(l)}\bigr)
+\end{aligned} \label{eq:14-layer}
+\end{equation}
+<p>We call $\bm{W}^{(l)}\in\R^{D_l\times D_{l-1}}$ the weight matrix, $\bm{b}^{(l)}\in\R^{D_l}$ the bias, and $\bm{a}^{(l)},\bm{z}^{(l)}\in\R^{D_l}$ the activation and the output of layer $l$. The function $h_l$ acts componentwise (the $j$th component of $\bm{z}^{(l)}$ is $h_l(a^{(l)}_j)$). The output of the last layer, $\hat{\bm{y}}=\bm{z}^{(n_{\mathrm{layer}})}$, is the prediction of the network.</p>
+<p>$W^{(l)}_{ji}$ is the weight “from unit $i$ of layer $l-1$ to unit $j$ of layer $l$,” so <strong>the row index is the destination and the column index is the source</strong>.</p>
+</div>
+
+<p>Following this computation in order from input to output is called <strong>forward propagation</strong>. The activation function may differ from layer to layer: hidden layers use tanh or ReLU, and the output layer uses the identity, sigmoid, or softmax according to the task (Section 14.6). In this book the hidden-layer activation function is often simply written $h$. The way of counting layers differs from book to book; in this book the number of layers is the number of weight matrices, $n_{\mathrm{layer}}$ (a network with one hidden layer has $n_{\mathrm{layer}}=2$).</p>
+
+<h3>14.3.2 Checking the shapes with a 2–3–1 network</h3>
+
+<p>A network with two inputs, three hidden units, and one output is written “2–3–1” (<a href="#fig14-3">Figure 14.3</a>). The shapes of the quantities are collected in <a href="#tab14-1">Table 14.1</a>. Making the shapes consistent is the first thing to check, both when reading equations and when writing programs.</p>
+
+<figure id="fig14-3">
+<svg role="img" aria-label="Schematic diagram of the 2–3–1 network. There are two input units on the left, three hidden units in the middle, and one output unit on the right, and every pair of units in adjacent layers is joined by a line. Between the input and the hidden layer, W(1) is labeled as 3 rows by 2 columns; between the hidden layer and the output, W(2) is labeled as 1 row by 3 columns." viewBox="0 0 620 300" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>Figure 14.3: The 2–3–1 network</title>
+<g stroke="#888" stroke-width="1.3">
+<line x1="120" y1="105" x2="300" y2="65"></line><line x1="120" y1="105" x2="300" y2="145"></line><line x1="120" y1="105" x2="300" y2="225"></line>
+<line x1="120" y1="185" x2="300" y2="65"></line><line x1="120" y1="185" x2="300" y2="145"></line><line x1="120" y1="185" x2="300" y2="225"></line>
+<line x1="300" y1="65" x2="480" y2="145"></line><line x1="300" y1="145" x2="480" y2="145"></line><line x1="300" y1="225" x2="480" y2="145"></line>
+</g>
+<line x1="120" y1="105" x2="300" y2="65" stroke="#5b2a5e" stroke-width="2.6"></line>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="16" fill="#1a1a1a">
+<circle cx="120" cy="105" r="22" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle>
+<text x="120" y="111" text-anchor="middle"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<circle cx="120" cy="185" r="22" fill="#fff" stroke="#1a1a1a" stroke-width="1.5"></circle>
+<text x="120" y="191" text-anchor="middle"><tspan font-style="italic">x</tspan><tspan baseline-shift="sub" font-size="11">2</tspan></text>
+<circle cx="300" cy="65" r="22" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></circle>
+<text x="300" y="71" text-anchor="middle"><tspan font-style="italic">z</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<circle cx="300" cy="145" r="22" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></circle>
+<text x="300" y="151" text-anchor="middle"><tspan font-style="italic">z</tspan><tspan baseline-shift="sub" font-size="11">2</tspan></text>
+<circle cx="300" cy="225" r="22" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.6"></circle>
+<text x="300" y="231" text-anchor="middle"><tspan font-style="italic">z</tspan><tspan baseline-shift="sub" font-size="11">3</tspan></text>
+<circle cx="480" cy="145" r="22" fill="#5b2a5e" stroke="#5b2a5e" stroke-width="1.6"></circle>
+<text x="480" y="151" text-anchor="middle" fill="#fff"><tspan font-style="italic">ŷ</tspan></text>
+<text x="196" y="66" text-anchor="middle" fill="#5b2a5e"><tspan font-style="italic">W</tspan><tspan baseline-shift="super" font-size="11">(1)</tspan><tspan baseline-shift="sub" font-size="11">11</tspan></text>
+<text x="210" y="275" text-anchor="middle"><tspan font-weight="bold">W</tspan><tspan baseline-shift="super" font-size="11">(1)</tspan> ∈ ℝ<tspan baseline-shift="super" font-size="11">3×2</tspan></text>
+<text x="390" y="275" text-anchor="middle"><tspan font-weight="bold">W</tspan><tspan baseline-shift="super" font-size="11">(2)</tspan> ∈ ℝ<tspan baseline-shift="super" font-size="11">1×3</tspan></text>
+</g>
+<text x="120" y="30" text-anchor="middle" font-size="14" fill="#1a1a1a">Input layer</text>
+<text x="300" y="30" text-anchor="middle" font-size="14" fill="#1a1a1a">Hidden layer</text>
+<text x="480" y="30" text-anchor="middle" font-size="14" fill="#1a1a1a">Output layer</text>
+<text x="120" y="232" text-anchor="middle" font-size="14" fill="#4a5568">2 units</text>
+<text x="352" y="250" text-anchor="middle" font-size="14" fill="#4a5568">3 units</text>
+<text x="480" y="190" text-anchor="middle" font-size="14" fill="#4a5568">1 unit</text>
+</svg>
+<figcaption>Figure 14.3: The 2–3–1 network (schematic; the bias of each unit is not drawn). Units in adjacent layers are all connected (fully connected). The thick line is the weight $W^{(1)}_{11}$ from the input $x_1$ to hidden unit 1. The output $z_j$ of a hidden unit is shorthand for $z^{(1)}_j$.</figcaption>
+</figure>
+
+<div class="tablewrap">
+<table id="tab14-1">
+<caption>Table 14.1: Shapes of the quantities in the 2–3–1 network ($D_0=2$, $D_1=3$, $D_2=1$)</caption>
+<thead><tr><th>Quantity</th><th>Symbol</th><th>Shape</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Input</td><td>$\bm{x}=\bm{z}^{(0)}$</td><td>$\R^{2}$</td><td>2 descriptors</td></tr>
+<tr><td>Weights of layer 1</td><td>$\bm{W}^{(1)}$</td><td>$\R^{3\times2}$</td><td>Row $j$ is the weight $\bm{w}_j^{\tp}$ of hidden unit $j$</td></tr>
+<tr><td>Bias of layer 1</td><td>$\bm{b}^{(1)}$</td><td>$\R^{3}$</td><td></td></tr>
+<tr><td>Activation and output of the hidden layer</td><td>$\bm{a}^{(1)}$, $\bm{z}^{(1)}$</td><td>$\R^{3}$</td><td>$\bm{z}^{(1)}=h(\bm{a}^{(1)})$</td></tr>
+<tr><td>Weights of layer 2</td><td>$\bm{W}^{(2)}$</td><td>$\R^{1\times3}$</td><td>Row vector (components $W^{(2)}_j$)</td></tr>
+<tr><td>Bias of layer 2</td><td>$\bm{b}^{(2)}=b^{(2)}$</td><td>$\R$</td><td></td></tr>
+<tr><td>Output</td><td>$a^{(2)}$, $\hat{y}$</td><td>$\R$</td><td>For regression, $\hat{y}=a^{(2)}$</td></tr>
+<tr><td>Number of parameters</td><td></td><td>$3\cdot(2+1)+1\cdot(3+1)=13$</td><td>Section 14.8</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>14.3.3 Minibatches turn vectors into matrices</h3>
+
+<p>In training, we compute $B$ data points together (a minibatch; <a href="ch07_optimization.html#sec7-5">Chapter 7, Section 7.5</a>). If we form the matrix $\bm{Z}^{(0)}=(\bm{x}_1,\dots,\bm{x}_B)\in\R^{D_0\times B}$ by arranging the $B$ inputs in <strong>columns</strong>, then Eq. \eqref{eq:14-layer} for all $B$ points together can be written as</p>
+\begin{equation}
+\begin{aligned}
+\bm{A}^{(l)}&=\bm{W}^{(l)}\bm{Z}^{(l-1)}+\bm{b}^{(l)}\bm{1}_B^{\tp},\\
+\bm{Z}^{(l)}&=h\bigl(\bm{A}^{(l)}\bigr)
+\end{aligned} \label{eq:14-batch}
+\end{equation}
+<p>Here $\bm{A}^{(l)},\bm{Z}^{(l)}\in\R^{D_l\times B}$, and the $n$th column is $\bm{a}^{(l)}$, $\bm{z}^{(l)}$ for the $n$th data point. $\bm{1}_B\in\R^{B}$ is the vector all of whose components are 1, and $\bm{b}^{(l)}\bm{1}_B^{\tp}$ is the $D_l\times B$ matrix in which the same bias is lined up for $B$ columns. The computation of one layer is a single product of a $D_l\times D_{l-1}$ matrix and a $D_{l-1}\times B$ matrix ($D_lD_{l-1}B$ multiplications). Since matrix multiplication is one of the operations that a computer can execute fastest, the computation of a neural network is carried out in this batched form.</p>
+
+<div class="box note">
+<p class="box-title">Notation: The convention of arranging data in rows</p>
+<p>Many programming libraries, and Chapters 24–26 of this book (attention and the Transformer), use the matrix $\bm{X}\in\R^{B\times D}$ with the data arranged in <strong>rows</strong>, and multiply the weights from the right: $\bm{A}=\bm{X}\bm{W}^{\tp}+\bm{1}_B\bm{b}^{\tp}$. This is the transpose of the whole of Eq. \eqref{eq:14-batch}, and the content is the same. Which convention is in use can be told from the shapes of the matrices.</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Example 14.3: Forward propagation of a 2–3–1 network (a minibatch of two)</p>
+<p>Let the hidden-layer activation function be ReLU, let the output layer be the identity map, and let</p>
+$$
+\bm{W}^{(1)}=\begin{pmatrix}1&0\\0.5&-1\\-1&1\end{pmatrix},\quad \bm{b}^{(1)}=\begin{pmatrix}0\\0.5\\0\end{pmatrix},
+$$
+$$
+\bm{W}^{(2)}=\begin{pmatrix}1&-2&0.5\end{pmatrix},\quad b^{(2)}=0.1
+$$
+<p>Arrange the two inputs $\bm{x}_1=(2,1)^{\tp}$ and $\bm{x}_2=(0,1)^{\tp}$ in columns, and find $\bm{A}^{(1)}$, $\bm{Z}^{(1)}$, and $\bm{A}^{(2)}$ by Eq. \eqref{eq:14-batch}.</p>
+<p><strong>Solution.</strong> We have $\bm{Z}^{(0)}=\begin{pmatrix}2&0\\1&1\end{pmatrix}\in\R^{2\times2}$. Each component of $\bm{W}^{(1)}\bm{Z}^{(0)}$ is the dot product of a “row of $\bm{W}^{(1)}$” and a “column of $\bm{Z}^{(0)}$,” so</p>
+$$
+\begin{aligned}
+\bm{W}^{(1)}\bm{Z}^{(0)}&=\begin{pmatrix}1\cdot2+0\cdot1 & 1\cdot0+0\cdot1\\ 0.5\cdot2-1\cdot1 & 0.5\cdot0-1\cdot1\\ -1\cdot2+1\cdot1 & -1\cdot0+1\cdot1\end{pmatrix}\\
+&=\begin{pmatrix}2&0\\0&-1\\-1&1\end{pmatrix}.
+\end{aligned}
+$$
+<p>Adding the bias to each column gives $\bm{A}^{(1)}=\begin{pmatrix}2&0\\0.5&-0.5\\-1&1\end{pmatrix}$. ReLU sets negative components to 0, so $\bm{Z}^{(1)}=\begin{pmatrix}2&0\\0.5&0\\0&1\end{pmatrix}$. The output is</p>
+$$
+\begin{aligned}
+\bm{A}^{(2)}&=\begin{pmatrix}1&-2&0.5\end{pmatrix}\bm{Z}^{(1)}+0.1\,\bm{1}_2^{\tp}\\
+&=\begin{pmatrix}2-1+0+0.1 & 0+0+0.5+0.1\end{pmatrix}\\
+&=\begin{pmatrix}1.1&0.6\end{pmatrix}.
+\end{aligned}
+$$
+<p>The shapes are $\bm{A}^{(1)},\bm{Z}^{(1)}\in\R^{3\times2}$ and $\bm{A}^{(2)}\in\R^{1\times2}$, and the columns correspond to the individual data points. For $\bm{x}_1$, hidden unit 3 is “switched off” (output 0), and for $\bm{x}_2$, hidden units 1 and 2 are. The fact that the set of active units changes with the input is the mechanism by which a ReLU network builds a piecewise linear function.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-4">14.4 Why Nonlinearity Is Necessary — Stacked Linear Maps and XOR</h2>
+
+<h3>14.4.1 Stacking linear layers, however many, gives a single layer</h3>
+
+<p>One is tempted to think that stacking layers makes a model stronger. However, if the activation function is the identity map ($h(a)=a$), stacking any number of layers adds nothing.</p>
+
+<div class="box thm">
+<p class="box-title">Theorem 14.1: A composition of linear layers is a single linear map (affine map)</p>
+<p>If the activation function of every layer is the identity map, the output of an $n_{\mathrm{layer}}$-layer network can be written as $\hat{\bm{y}}=\bm{W}\bm{x}+\bm{b}$, using some matrix $\bm{W}\in\R^{D_{n_{\mathrm{layer}}}\times D_0}$ and some vector $\bm{b}\in\R^{D_{n_{\mathrm{layer}}}}$.</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">Proof</p>
+<p>We use mathematical induction on the number of layers. It suffices to show that the output $\bm{z}^{(k)}$ up through $k$ layers ($k=1,\dots,n_{\mathrm{layer}}$) can be written as an affine map of $\bm{x}$. For $k=1$, we have $\bm{z}^{(1)}=\bm{W}^{(1)}\bm{x}+\bm{b}^{(1)}$, so the claim holds. Suppose that the output up through $k-1$ layers can be written as $\bm{z}^{(k-1)}=\bm{W}'\bm{x}+\bm{b}'$ (with $\bm{W}'\in\R^{D_{k-1}\times D_0}$ and $\bm{b}'\in\R^{D_{k-1}}$). Since the $k$th layer is also the identity map,</p>
+\begin{align}
+\bm{z}^{(k)}&=\bm{W}^{(k)}\bm{z}^{(k-1)}+\bm{b}^{(k)} \notag\\
+&=\bm{W}^{(k)}\bigl(\bm{W}'\bm{x}+\bm{b}'\bigr) \notag\\
+&\quad+\bm{b}^{(k)} \notag\\
+&=\bigl(\bm{W}^{(k)}\bm{W}'\bigr)\bm{x} \notag\\
+&\quad+\bigl(\bm{W}^{(k)}\bm{b}'+\bm{b}^{(k)}\bigr) \label{eq:14-collapse}
+\end{align}
+<p>Here $\bm{W}^{(k)}\bm{W}'$ is the product of a $D_k\times D_{k-1}$ matrix and a $D_{k-1}\times D_0$ matrix, hence a $D_k\times D_0$ matrix, and $\bm{W}^{(k)}\bm{b}'+\bm{b}^{(k)}\in\R^{D_k}$. Therefore the claim also holds for $k$ layers. Setting $k=n_{\mathrm{layer}}$ and letting $\bm{W}=\bm{W}^{(n_{\mathrm{layer}})}\bm{W}'$ and $\bm{b}=\bm{W}^{(n_{\mathrm{layer}})}\bm{b}'+\bm{b}^{(n_{\mathrm{layer}})}$, we obtain $\hat{\bm{y}}=\bm{z}^{(n_{\mathrm{layer}})}=\bm{W}\bm{x}+\bm{b}$.</p>
+<p style="text-align:right">∎</p>
+</div>
+
+<p>A matrix product is a composition of linear maps (<a href="../UnivMath_Textbook_EN/ch11_linear_maps.html#sec11-4">University Mathematics, Chapter 11, Section 11.4</a>). No matter how many linear maps we compose, the result is a linear map, so stacking layers yields the same set of functions as a single layer. In fact, if an intermediate layer is narrow, the rank of the composed matrix $\bm{W}$ is limited by that width, and <strong>what can be represented may even shrink</strong> (Exercise 14.8). Only by inserting nonlinear activation functions does composition produce “new functions.”</p>
+
+<h3>14.4.2 A single neuron cannot separate XOR</h3>
+
+<p>The smallest example in which nonlinearity is necessary is <strong>XOR</strong> (exclusive OR). For an input $(x_1,x_2)\in\{0,1\}^{2}$, let $y=1$ when the two values differ and $y=0$ when they are the same:</p>
+$$
+\begin{aligned}
+&(0,0)\mapsto0,\qquad (1,0)\mapsto1,\\
+&(0,1)\mapsto1,\qquad (1,1)\mapsto0 .
+\end{aligned}
+$$
+<p>The two points at opposite corners of the square belong to the same class, so a single straight line cannot separate them. We confirm this with equations. If a single neuron (logistic regression) could separate them, then $f(\bm{x})=w_1x_1+w_2x_2+b$ would have to be positive at the points with $y=1$ and negative at the points with $y=0$:</p>
+\begin{equation}
+\begin{aligned}
+b&\lt0, & w_1+b&\gt0,\\
+w_2+b&\gt0, & w_1+w_2+b&\lt0 .
+\end{aligned} \label{eq:14-xor-ineq}
+\end{equation}
+<p>Adding the second and third gives $w_1+w_2+2b\gt0$. Adding the first and fourth gives $w_1+w_2+2b\lt0$. Both cannot hold at the same time, so this is a contradiction. Therefore no $w_1,w_2,b$ separate XOR correctly. The fact that XOR cannot be handled by a one-layer perceptron became widely known through the book by Minsky &amp; Papert (1969).</p>
+
+<h3>14.4.3 Solving XOR with two hidden units</h3>
+
+<p>Inserting one hidden layer lets us solve XOR. The idea is to “map the inputs to an arrangement that a straight line can separate, and then separate them.” Here we use two ReLU hidden units:</p>
+<ul>
+  <li>Hidden unit 1: $z_1=\relu(x_1-x_2)$ (positive only when $x_1$ is larger than $x_2$)</li>
+  <li>Hidden unit 2: $z_2=\relu(x_2-x_1)$ (positive only when $x_2$ is larger than $x_1$)</li>
+</ul>
+<p>Since $z_1+z_2=\abs{x_1-x_2}$, whether “the two inputs differ” shows up in $z_1+z_2$. In the output layer, let $a^{(2)}=6(z_1+z_2)-3$ and $\hat{y}=\sigma(a^{(2)})$; then $\hat{y}=\sigma(3)$ when $z_1+z_2=1$, and $\hat{y}=\sigma(-3)$ when $z_1+z_2=0$. Written in the form of Eq. \eqref{eq:14-layer}, this is</p>
+$$
+\bm{W}^{(1)}=\begin{pmatrix}1&-1\\-1&1\end{pmatrix},\quad \bm{b}^{(1)}=\begin{pmatrix}0\\0\end{pmatrix},
+$$
+$$
+\bm{W}^{(2)}=\begin{pmatrix}6&6\end{pmatrix},\quad b^{(2)}=-3
+$$
+<p>.</p>
+
+<div class="box ex">
+<p class="box-title">Example 14.4: Computing the four XOR points by hand</p>
+<p>With the weights above, find $\bm{z}^{(1)}$, $a^{(2)}$, and $\hat{y}$ for all four points, together with the cross-entropy loss $\ell=-\{y\ln\hat{y}+(1-y)\ln(1-\hat{y})\}$, and verify that all four points are classified correctly.</p>
+<p><strong>Solution.</strong> Compute $\bm{a}^{(1)}=(x_1-x_2,\;x_2-x_1)^{\tp}$ and pass it through ReLU.</p>
+<div class="tablewrap">
+<table>
+<thead><tr><th>$(x_1,x_2)$</th><th>$y$</th><th>$\bm{a}^{(1)}$</th><th>$\bm{z}^{(1)}$</th><th>$a^{(2)}=6(z_1+z_2)-3$</th><th>$\hat{y}=\sigma(a^{(2)})$</th><th>$\ell$</th></tr></thead>
+<tbody>
+<tr><td>$(0,0)$</td><td>0</td><td>$(0,0)$</td><td>$(0,0)$</td><td>$-3$</td><td>$0.0474$</td><td>$0.0486$</td></tr>
+<tr><td>$(1,0)$</td><td>1</td><td>$(1,-1)$</td><td>$(1,0)$</td><td>$3$</td><td>$0.9526$</td><td>$0.0486$</td></tr>
+<tr><td>$(0,1)$</td><td>1</td><td>$(-1,1)$</td><td>$(0,1)$</td><td>$3$</td><td>$0.9526$</td><td>$0.0486$</td></tr>
+<tr><td>$(1,1)$</td><td>0</td><td>$(0,0)$</td><td>$(0,0)$</td><td>$-3$</td><td>$0.0474$</td><td>$0.0486$</td></tr>
+</tbody>
+</table>
+</div>
+<p>We have $\sigma(3)=1/(1+e^{-3})=1/1.049787=0.952574$ and $\sigma(-3)=1-\sigma(3)=0.047426$. At the points with $y=1$, $\ell=-\ln0.952574=0.048587$; at the points with $y=0$, $\ell=-\ln(1-0.047426)$ $=-\ln0.952574=0.048587$, so all four points have the same loss. Judging with the threshold $1/2$, all four points are correct.</p>
+<p>The key point is the comparison of the second and fourth columns. (0,0) and (1,1) lie at opposite corners of the diagonal in the input space, but in the hidden layer they are <strong>mapped to the same point (0,0)</strong>. (1,0) and (0,1) are mapped to $(1,0)$ and $(0,1)$. In the space of the hidden layer, the two classes are separated by the line $z_1+z_2=1/2$ (<a href="#fig14-4">Figure 14.4</a>). The neuron of the output layer merely draws a single straight line in this “mapped space.”</p>
+</div>
+
+<figure id="fig14-4">
+<img src="figs/ch14_fig14-4.svg" alt="The left panel is the input space: (0,0) and (1,1) are white circles, and (1,0) and (0,1) are triangles. The lower right of the diagonal x1 = x2 is shaded as the region where z1 is positive, and the upper left as the region where z2 is positive. The right panel is the hidden-layer space: (0,0) and (1,1) are both mapped to the white circle at the origin, (1,0) is mapped to the triangle at (1,0), and (0,1) to the triangle at (0,1). The line z1 + z2 = 1/2 separates the white circles from the triangles." style="max-width:640px;width:100%">
+<figcaption>Figure 14.4: Mapping XOR with a hidden layer (the weights of Example 14.4; no random numbers are used). (a) The input space. White circles are $y=0$ and triangles are $y=1$. Below and to the right of the dashed line $x_1=x_2$ (filled area) $z_1\gt0$, and above and to the left (hatching) $z_2\gt0$. (b) The hidden-layer space $(z_1,z_2)$. The two points with $y=0$ coincide at the same origin, and the solid line $z_1+z_2=1/2$ separates the two classes by a straight line.</figcaption>
+</figure>
+
+<p>The weights from the hand calculation were devised by a person. Even with the same two hidden units, training by gradient descent does not always arrive at this answer. We check this with the following simulator.</p>
+
+<div class="box sim" id="sim14-1">
+<p class="box-title">Simulator 14.1: Training on XOR (varying the number of hidden units)</p>
+<p>This simulator lets a network with one hidden layer learn points arranged as XOR, and shows how whether they can be separated changes with the number of hidden units $H$. The XOR here consists of four clusters centered at $(\pm0.5,\pm0.5)$ (Gaussian noise with standard deviation 0.2 in each coordinate; synthetic data for teaching purposes), with the quadrants where $x_1x_2\gt0$ (upper right and lower left) labeled $y=1$. If the four points $\{0,1\}^{2}$ of the hand calculation above are shifted by $(0.5,0.5)$, the arrangement of the centers is the same but the labels are reversed (in the hand calculation, the two points with $(x_1-0.5)(x_2-0.5)\lt0$ have $y=1$). The structure “clusters at opposite corners belong to the same class” is the same. The hidden layer uses tanh, the output layer uses sigmoid with cross-entropy, and training is by minibatch gradient descent (a simplified simulator that does not use momentum and the like).</p>
+<iframe class="qsim-embed" src="sim/neural-net.html?embed=1&amp;only=train" title="Neural network simulator (watching training: XOR)" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/neural-net.html#train" target="_blank" rel="noopener noreferrer">Open in a separate window at full size &rarr;</a></p>
+<p><strong>Operate and Observe</strong></p>
+<ol class="sim-steps">
+  <li>Set “Task” to “XOR” and “Number of hidden units <em>H</em>” to 2 (leave the rest at their defaults: activation function tanh, learning rate 0.10, minibatch 8, weight decay 0, initial value “Random (Xavier/He)”, number of training data points 100, both seeds 20261112). Press “Run” and stop when the epoch reaches about 1000 → In the readout, “Accuracy training/validation” levels off at around 75.0 % / 73.5 %, and the validation loss is about 0.369. In the figure above, the upper-right cluster ($y=1$) falls in the whitish region with $\hat{y}\approx0.49$ and is misclassified. This is a case in which a single neuron cannot represent XOR (Eq. \eqref{eq:14-xor-ineq}) and, as in Example 14.4, weights that can represent it exist with two hidden units, yet training did not find them.</li>
+  <li>Set $H$ to 1 (training starts over from the beginning). Advance with “Run” to 2000 epochs → The accuracy stays at 73.0 % / 70.5 %. With one hidden unit, XOR cannot be separated in principle (Exercise 14.4).</li>
+  <li>Set $H$ to 4 and press “Run” → At 300 epochs the accuracy reaches 100.0 % / 99.5 %. After 700 epochs, “Minimum validation loss (epoch)” is displayed as 0.0230 (696).</li>
+  <li>Return $H$ to 2 and press “Change seed” under random-number seed (the seed becomes 20261113, and training starts over from the beginning). Advance with “Run” to 1000 epochs → The accuracy becomes 98.0 % / 91.0 %, and this time the XOR shape is learned. Even with the same structure, where training ends up changes depending on the initial values (the random-number seed).</li>
+</ol>
+<p><strong>Questions After Operating</strong></p>
+<ol class="sim-questions">
+  <li>Why does the accuracy stop at 75 % in step 1? How many of the four clusters are classified correctly?
+    <details class="ans"><summary>Sample answers</summary><p>Three of the four clusters (upper left, lower left, lower right) are correct, and the one in the upper right is wrong, so the accuracy is about 75 %. The two hidden units learned here map the centers of both the upper-left $(-0.5,0.5)$ and the upper-right $(0.5,0.5)$ clusters to nearly the same point $(z_1,z_2)\approx(1,-1)$ (tanh is saturated at both ends). Inputs mapped to the same point in the hidden layer cannot be distinguished by the output layer either, so the same $\hat{y}\approx0.49$ comes out for two clusters with different labels. The gradient is also small, so it is hard to escape.</p></details></li>
+  <li>From step 2 and Example 14.4, summarize the relationship between “two hidden units can represent XOR” and “training can find it.”
+    <details class="ans"><summary>Sample answers</summary><p>With one hidden unit, no choice of weights can represent XOR (a lack of representational power). With two, weights that can represent it exist (Example 14.4), but gradient descent merely falls into a valley near the initial values, so depending on the seed it may stay at a local solution with 75 %. With four, the set of weights that can represent it grows considerably, and training finds it more easily. “Can represent” is a matter of existence, and “can find” is a matter of optimization; they are separate problems (Section 14.7).</p></details></li>
+  <li>In step 4, if you change the seed in 20 ways from 20261112 to 20261131 and train with $H=2$ for 1000 epochs, there are five cases in which the training accuracy does not reach 80 %. From this result, explain what one should be careful about when reporting the performance of a network.
+    <details class="ans"><summary>Sample answers</summary><p>The result of a single training run depends on the luck of the initial values, so one must not judge “this structure is usable / not usable” from the result of a single seed. Either train with several seeds and show the spread of the results (such as the median and range), or make the result less dependent on the initial values, for example by increasing the number of hidden units. Comparisons should be made on the validation data.</p></details></li>
+</ol>
+<noscript><p>JavaScript is disabled, so this simulator does not run. To see what it is meant to check, read the explanation above and the equations in the text.</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-5">14.5 Models That Learn Basis Functions</h2>
+
+<h3>14.5.1 Fixed bases and moving bases</h3>
+
+<p>In the linear regression of <a href="ch08_linear_regression.html#sec8-1">Chapter 8, Section 8.1</a>, we fixed the basis functions $\phi_j(\bm{x})$ ($j=1,\dots,M$) in advance, and the model</p>
+\begin{equation}
+f(\bm{x};\bm{w})=\sum_{j=1}^{M}w_j\phi_j(\bm{x})+w_0 \label{eq:14-fixed-basis}
+\end{equation}
+<p>learned only the weights $w_j$. For example, the centers $\mu_j$ and the width $s$ of Gaussian basis functions $\phi_j(x)=\exp\{-(x-\mu_j)^{2}/(2s^{2})\}$ are chosen by a person. Since $f$ is linear in $\bm{w}$, minimizing the squared error can be solved as a system of linear equations, the normal equations, and the loss was convex in $\bm{w}$ (<a href="ch07_optimization.html#sec7-4">Chapter 7, Section 7.4</a>).</p>
+
+<p>If we take a network with one hidden layer and make the output layer the identity map, the output is</p>
+\begin{equation}
+\begin{aligned}
+f(\bm{x};\bm{\theta})={}&\sum_{j=1}^{H}W^{(2)}_j\,h\bigl(\bm{w}_j^{\tp}\bm{x}+b^{(1)}_j\bigr)\\
+&+b^{(2)}
+\end{aligned} \label{eq:14-nn-basis}
+\end{equation}
+<p>Here $\bm{w}_j^{\tp}$ is the $j$th row of $\bm{W}^{(1)}$, and $\bm{\theta}$ collects all the weights and biases. Placing this next to Eq. \eqref{eq:14-fixed-basis}, we see that $h(\bm{w}_j^{\tp}\bm{x}+b^{(1)}_j)$ plays the role of the basis function $\phi_j(\bm{x})$, $W^{(2)}_j$ plays the role of its coefficient $w_j$, and $b^{(2)}$ plays the role of $w_0$. The difference is that <strong>$\bm{w}_j$ and $b^{(1)}_j$ inside the basis function are also learned</strong>. A neural network can be read as a linear model with “basis functions that move to fit the data.”</p>
+
+<div class="tablewrap">
+<table id="tab14-2">
+<caption>Table 14.2: Comparison of a fixed-basis linear model (Chapter 8) and a network with one hidden layer</caption>
+<thead><tr><th></th><th>Fixed-basis linear model</th><th>Network with one hidden layer</th></tr></thead>
+<tbody>
+<tr><td>Basis function</td><td>$\phi_j(\bm{x})$ (chosen by a person)</td><td>$h(\bm{w}_j^{\tp}\bm{x}+b^{(1)}_j)$ (learned)</td></tr>
+<tr><td>What is learned</td><td>Only the coefficients $w_j$</td><td>The coefficients $W^{(2)}_j$ and the shape of the basis, $\bm{w}_j$ and $b^{(1)}_j$</td></tr>
+<tr><td>In terms of the parameters</td><td>Linear</td><td>Nonlinear</td></tr>
+<tr><td>Loss for the squared error</td><td>Convex. Solvable by the normal equations</td><td>Nonconvex. Iterated by a gradient method (local minima exist)</td></tr>
+<tr><td>As the input dimension $D$ grows</td><td>If arranged on a grid, the number of basis functions grows exponentially in $D$</td><td>$D+2$ parameters per unit</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>14.5.2 A single tanh unit is a “step with a location and a width”</h3>
+
+<p>When the input is one-dimensional ($x=s$), a tanh hidden unit $z_j(s)=\tanh(w_js+b_j)$ ($w_j\ne0$) is a step that changes smoothly from $-1$ to $+1$ (from $+1$ to $-1$ if $w_j\lt0$) around the point where $a=w_js+b_j=0$,</p>
+$$
+s_j^{\ast}=-\frac{b_j}{w_j}
+$$
+<p>The slope at the center is $w_j$, and the width of the transition on which $\abs{a}\le1$ is $2/\abs{w_j}$. In other words, learning the bias $b_j$ and the weight $w_j$ amounts to learning the <strong>location and sharpness</strong> of the step. If the input is $D$-dimensional, $z_j(\bm{x})=\tanh(\bm{w}_j^{\tp}\bm{x}+b_j)$ is a “ridge”-like function (a ridge function) that changes only in the direction of the normal $\bm{w}_j$, across the hyperplane $\bm{w}_j^{\tp}\bm{x}+b_j=0$. Since the direction of $\bm{w}_j$ is also learned, the data decide which direction of change is picked up.</p>
+
+<div class="box ex">
+<p class="box-title">Example 14.5: Converting the location of a step into a firing temperature</p>
+<p>The input of data A is the normalized temperature $s=(T-1300\ ^{\circ}\mathrm{C})/(200\ ^{\circ}\mathrm{C})$. (1) For the hidden unit $z(s)=\tanh(4s-2)$, give the center of the step and the range of the transition on which $\abs{a}\le1$ in terms of the temperature $T$. (2) When the input is 8-dimensional, compare the number of basis functions of a fixed-basis model that places five Gaussian basis function centers on each axis in a grid with the number of parameters of a network with 50 hidden units (one output).</p>
+<p><strong>Solution.</strong> (1) From $4s-2=0$, the center is $s=0.5$, so $T=1300+200\times0.5=1400\ ^{\circ}\mathrm{C}$. The condition $\abs{4s-2}\le1$ means $1\le4s\le3$, that is, $0.25\le s\le0.75$, so $T=1350$–$1450\ ^{\circ}\mathrm{C}$. Outside this range $z$ sticks almost to $\pm1$ ($\tanh1=0.76$, $\tanh2=0.96$).</p>
+<p>(2) The grid has $5^{8}=390625$ basis functions (and the same number of coefficients). For a one-dimensional input there are 5, for two dimensions 25, and for three dimensions 125, so the number grows exponentially in the dimension. The network has $\bm{W}^{(1)}\in\R^{50\times8}$ and $\bm{b}^{(1)}\in\R^{50}$, giving $50\times(8+1)=450$ parameters, plus $50+1=51$ for the output layer, for a total of 501. The basis functions of the network are not tied to a grid; they are placed where the data are and in the directions in which there is variation. However, we have to search for those placements with a gradient method, and there is no guarantee that they will be found (Section 14.7).</p>
+</div>
+
+<h3>14.5.3 How the bases move during learning</h3>
+
+<p>In the next simulator, a tanh network with three hidden units is trained on the 20 points of data A (synthetic data for teaching purposes), and we plot the output $z_j(s)$ of each hidden unit and the <strong>contribution</strong> obtained by multiplying it by its coefficient. The regression targets are standardized with the mean $\bar{y}$ and standard deviation $s_y$ of the training data during training, so the prediction converted back to % is</p>
+$$
+\hat{y}(s)=\underbrace{\bar{y}+s_y\,b^{(2)}}_{\text{constant}}+\sum_{j=1}^{H}\underbrace{s_y\,W^{(2)}_j\,z_j(s)}_{\text{contribution } j}
+$$
+<p>With the default settings, $\bar{y}=85.14\ \%$ and $s_y=7.15\ \%$. <a href="#fig14-5">Figure 14.5</a> shows the result of 2000 epochs of training with the same settings and the same seed as this simulator.</p>
+
+<figure id="fig14-5">
+<img src="figs/ch14_fig14-5.svg" alt="A figure in two stacked panels. In the upper panel, the horizontal axis is the normalized temperature s and the vertical axis is the output of the hidden units; before training, the three dotted curves all pass through 0 at s = 0. After training, the locations and slopes of the three curves have changed: z1 becomes a step that changes sign at about s = −0.7, z2 a step that changes sign at about s = −0.2, and z3 is close to a gentle straight line. The lower panel shows the three contributions, their sum (thick black line), and the training data with the constant subtracted (blue squares); the sum rises from −6 % to 12 % along the arrangement of the data." style="max-width:440px;width:100%">
+<figcaption>Figure 14.5: The outputs of the hidden layer are basis functions that move during learning. A network with three hidden units (tanh) and an identity output was trained for 2000 epochs with learning rate 0.1 and minibatch size 8 on data A (synthetic data for teaching purposes: the same formula $g(s)=88+8s-5s^{2}+2\sin3s$ as in <a href="ch08_linear_regression.html#sec8-1">Chapter 8</a> and <a href="ch06_generalization.html#sec6-2">Chapter 6, Section 6.2</a>, with Gaussian noise of standard deviation 1.0 %, 20 training data points, data seed 20261112; initial-value seed 20261112; the default of Simulator 14.2). (a) The outputs $z_j(s)$ of the hidden units. The dotted lines are before training; the solid, dashed, and dash-dotted lines are after training. (b) The contribution $s_yW^{(2)}_jz_j(s)$ of each hidden unit and their sum (thick black line). The squares are the training data with the constant $\bar{y}+s_yb^{(2)}=81.20\ \%$ subtracted.</figcaption>
+</figure>
+
+<p>Before training, the initial value of the bias is 0, so the centers $s_j^{\ast}=-b_j/w_j$ of the three steps are all at $s=0$. After training, the centers have moved to $s\approx-0.69$, $-0.18$, and $-0.38$ ($T\approx1161$, $1264$, and $1223\ ^{\circ}\mathrm{C}$), respectively, and the slopes have changed as well. The third unit has a small slope $\abs{w_3}\approx0.30$, so on the range $[-1,1]$ it works almost as a straight line. The curve of data A rises steeply on the low-temperature side and levels off on the high-temperature side, so it makes sense that the steps gathered on the low-temperature side.</p>
+
+<div class="box sim" id="sim14-2">
+<p class="box-title">Simulator 14.2: Viewing the outputs of the hidden units as “moving basis functions”</p>
+<p>This simulator lets you see how the outputs $z_j(s)$ of the hidden units and the contributions $s_yW^{(2)}_jz_j(s)$ move during learning in the regression on data A. It has one hidden layer and one output, and uses only plain minibatch gradient descent (the targets are standardized with the mean and standard deviation of the training data during training).</p>
+<iframe class="qsim-embed" src="sim/neural-net.html?embed=1&amp;only=train" title="Neural network simulator (viewing the learning: regression and the outputs of the hidden units)" loading="lazy" style="height:760px"></iframe>
+<p class="sim-links"><a href="sim/neural-net.html#train" target="_blank" rel="noopener noreferrer">Open in a separate window at full size &rarr;</a></p>
+<p><strong>Operate and Observe</strong></p>
+<ol class="sim-steps">
+  <li>Leave everything at the default (task “Regression (Data A)”, <em>H</em> = 3, tanh, learning rate 0.10, minibatch 8, 20 training data points, both seeds 20261112; if you have already operated Simulator 14.1, set the “task” back and press “Reset to defaults” for the seeds). Without pressing “Run” yet, look at the bottom plot (where “what to draw in the lower plot” is <em>z<sub>j</sub></em>(<em>s</em>)) → all three curves pass through 0 at $s=0$. This is because the initial value of the bias is 0.</li>
+  <li>Press “Run” and stop at around 2000 epochs → the centers and slopes of the three curves move (<a href="#fig14-5">Figure 14.5</a>(a)), and the prediction curve in the upper plot follows the data. “RMSE training / validation” is around 0.927 / 1.239 %, about the same as the noise standard deviation of 1 %. Confirm that the basis functions $h(\bm{w}_j^{\tp}\bm{x}+b_j)$ of Eq. \eqref{eq:14-nn-basis} have moved through learning.</li>
+  <li>Switch “what to draw in the lower plot” to “contribution” → adding the three contributions (in %) and then the constant (about 81.20 %) gives the prediction curve in the upper plot. For example, at $s=0.5$ (1400 °C) the contributions are about $8.72$, $3.02$, and $-0.76\ \%$, and the prediction is $81.20+8.72+3.02-0.76\approx92.17\ \%$ (true value 92.74 %).</li>
+  <li>Change <em>H</em> to 1 and to 8 and train each up to 2000 epochs → RMSE training / validation is 0.945 / 1.240 % for $H=1$ and 0.919 / 1.215 % for $H=8$, hardly different from $H=3$.</li>
+</ol>
+<p><strong>Questions After Operating</strong></p>
+<ol class="sim-questions">
+  <li>In step 4, why does the validation RMSE hardly improve even when the hidden units are increased to 8?
+    <details class="ans"><summary>Sample answers</summary><p>The true function of data A is smooth, and even the step of a single hidden unit can approximate it down to the magnitude of the noise (standard deviation 1 %). Most of the remaining error is observation noise, which cannot be reduced by making the model more flexible (the bias–variance decomposition of Chapter 6). That more shapes can be represented and that predictions get better are different matters.</p></details></li>
+  <li>What is the “constant” in step 3 of the figure? Why does the sum of all the contributions differ from the prediction curve by exactly a constant?
+    <details class="ans"><summary>Sample answers</summary><p>The constant is $\bar{y}+s_yb^{(2)}$: the bias of the output layer converted back to %, plus the mean subtracted in the standardization. The prediction is “constant + sum of contributions,” so the sum of the contributions alone is off by the amount of the constant. It plays the same role as the intercept $w_0$ of a fixed-basis model.</p></details></li>
+  <li>Compare the result of this simulator with the regression using the Gaussian basis functions of Chapter 8 (centers fixed at equal spacing). What are the advantages and disadvantages of the network?
+    <details class="ans"><summary>Sample answers</summary><p>Advantage: because the locations and widths of the basis functions are learned, a small number of basis functions (here, three) can be fitted to where the data change, and even for a multidimensional input there is no need to arrange the basis functions on a grid. Disadvantage: the loss becomes nonconvex, there is no one-shot solution like the normal equations, and the result depends on the initial values and the learning rate. For a problem like data A, with a one-dimensional input and only 20 points, a fixed basis or a Gaussian process (Chapter 12) is easier to handle and can also give the uncertainty.</p></details></li>
+</ol>
+<noscript><p>JavaScript is disabled, so this simulator does not run. Please read the explanation above and the equations in the text to see what it is meant to check.</p></noscript>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-6">14.6 The Output Layer and the Loss — The Error Is Always ŷ − y</h2>
+
+<h3>14.6.1 Choosing the output layer for the task</h3>
+
+<p>The hidden layers can be built in the same way whatever the task, but the activation function and the loss of the output layer are determined by the task. All of them come from the same idea: “read the output as the parameters of a probability distribution, and take the negative log-likelihood of the data under that distribution as the loss” (maximum likelihood estimation (MLE); <a href="ch04_bayesian_inference.html#sec4-2">Chapter 4, Section 4.2</a>). Below, we write the activation of the last layer as $\bm{a}=\bm{a}^{(n_{\mathrm{layer}})}$, the output as $\hat{\bm{y}}$, and the loss of one data point as $\ell$, and define the error of the output layer as</p>
+$$
+\bm{\delta}^{(n_{\mathrm{layer}})}\equiv\pdiff{\ell}{\bm{a}^{(n_{\mathrm{layer}})}}\quad(\text{component }\delta_k=\partial\ell/\partial a_k)
+$$
+<p>. In Chapter 15 we distribute this $\bm{\delta}$ in order from the output toward the input.</p>
+
+<div class="tablewrap">
+<table id="tab14-3">
+<caption>Table 14.3: Combinations of the output-layer activation function and the loss (for one data point)</caption>
+<thead><tr><th>Task</th><th>Probability model of the output</th><th>Output layer</th><th>Loss $\ell$</th><th>$\bm{\delta}^{(n_{\mathrm{layer}})}$</th></tr></thead>
+<tbody>
+<tr><td>Regression</td><td>$p(y\mid\bm{x})=\Normal(y\mid\hat{y},\sigma^{2})$</td><td>identity $\hat{y}=a$</td><td>$\tfrac12(\hat{y}-y)^{2}$</td><td>$\hat{y}-y$</td></tr>
+<tr><td>Binary classification</td><td>Bernoulli: $p(y=1\mid\bm{x})=\hat{y}$</td><td>$\hat{y}=\sigma(a)$</td><td>$-y\ln\hat{y}-(1-y)\ln(1-\hat{y})$</td><td>$\hat{y}-y$</td></tr>
+<tr><td>$K$-class classification</td><td>Categorical: $p(y_k=1\mid\bm{x})=\hat{y}_k$</td><td>$\hat{\bm{y}}=\softmax(\bm{a})$</td><td>$-\sum_k y_k\ln\hat{y}_k$</td><td>$\hat{\bm{y}}-\bm{y}$</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>14.6.2 Regression: the identity map and the sum of squares</h3>
+
+<p>Suppose the target value is $y=f(\bm{x};\bm{\theta})+\varepsilon$ with $\varepsilon\sim\Normal(0,\sigma^{2})$ (here $\sigma$ is the noise standard deviation, not the sigmoid). Then the negative log-likelihood of one data point is</p>
+$$
+\begin{aligned}
+-\ln\Normal(y\mid\hat{y},\sigma^{2})&=\frac{1}{2\sigma^{2}}(\hat{y}-y)^{2}+\frac12\ln(2\pi\sigma^{2}),\\
+\hat{y}&=f(\bm{x};\bm{\theta})
+\end{aligned}
+$$
+<p>. If $\sigma^{2}$ is fixed, only the first term depends on $\bm{\theta}$, and apart from the positive constant $1/\sigma^{2}$ we obtain $\ell=\tfrac12(\hat{y}-y)^{2}$. The output layer is taken to be the identity map $\hat{y}=a$ (the target value can take any real value, so we do not restrict the range).</p>
+\begin{equation}
+\delta=\pdiff{\ell}{a}=a-y=\hat{y}-y . \label{eq:14-delta-reg}
+\end{equation}
+
+<h3>14.6.3 Binary classification: sigmoid and cross-entropy</h3>
+
+<p>We model $y\in\{0,1\}$ by the Bernoulli distribution $p(y\mid\bm{x})=\hat{y}^{\,y}(1-\hat{y})^{1-y}$. The negative log-likelihood is</p>
+$$
+\ell=-\ln p(y\mid\bm{x})=-y\ln\hat{y}-(1-y)\ln(1-\hat{y})
+$$
+<p>, which is the cross-entropy (<a href="ch05_information.html#sec5-5">Chapter 5, Section 5.5</a>). Since $\hat{y}$ must lie between 0 and 1, we take the output layer to be $\hat{y}=\sigma(a)$. Differentiating with respect to $a$:</p>
+\begin{align}
+\pdiff{\ell}{a}&=\Bigl(-\frac{y}{\hat{y}}+\frac{1-y}{1-\hat{y}}\Bigr)\diff{\hat{y}}{a} \notag\\
+&=\Bigl(-\frac{y}{\hat{y}}+\frac{1-y}{1-\hat{y}}\Bigr)\hat{y}(1-\hat{y}) \notag\\
+&=-y(1-\hat{y})+(1-y)\hat{y} \notag\\
+&=\hat{y}-y . \label{eq:14-delta-bin}
+\end{align}
+<p>In the second line we used $\sigma'(a)=\sigma(a)\{1-\sigma(a)\}$ from Eq. \eqref{eq:14-sigmoid}. The expansion in the third and fourth lines is $-y+y\hat{y}+\hat{y}-y\hat{y}=\hat{y}-y$. The derivative of the sigmoid, $\hat{y}(1-\hat{y})$, cancels exactly against the denominators of the cross-entropy.</p>
+<p>In numerical computation, to avoid $\hat{y}$ being rounded to 0 or 1 and giving $\ln0$, we use the form of $\ell$ written directly in terms of $a$, $\ell=\ln(1+e^{a})-ya$ (when $a$ is large, rewrite $\ln(1+e^{a})$ as $a+\ln(1+e^{-a})$ to prevent overflow).</p>
+
+<h3>14.6.4 Multiclass classification: softmax and cross-entropy</h3>
+
+<p>We represent the label of $K$ classes by a one-hot vector $\bm{y}\in\{0,1\}^{K}$ (only the component of the correct class is 1). The output layer is the softmax</p>
+$$
+\hat{y}_k=\softmax(\bm{a})_k=\frac{e^{a_k}}{\sum_{j=1}^{K}e^{a_j}}\qquad(k=1,\dots,K)
+$$
+<p>, so that $\hat{y}_k\gt0$ and $\sum_k\hat{y}_k=1$ are satisfied. The negative log-likelihood of the categorical distribution is $\ell=-\sum_k y_k\ln\hat{y}_k$. Since $\ln\hat{y}_k=a_k-\ln\sum_j e^{a_j}$, differentiating with respect to $a_m$ gives</p>
+$$
+\pdiff{\ln\hat{y}_k}{a_m}=\delta_{km}-\frac{e^{a_m}}{\sum_j e^{a_j}}=\delta_{km}-\hat{y}_m
+$$
+<p>($\delta_{km}$ is the Kronecker delta: 1 if $k=m$ and 0 otherwise; it is distinct from the error $\bm{\delta}$). Therefore</p>
+\begin{align}
+\pdiff{\ell}{a_m}&=-\sum_{k=1}^{K}y_k\bigl(\delta_{km}-\hat{y}_m\bigr) \notag\\
+&=-y_m+\hat{y}_m\sum_{k=1}^{K}y_k \notag\\
+&=\hat{y}_m-y_m \label{eq:14-delta-soft}
+\end{align}
+<p>. In the last step we used the one-hot property $\sum_k y_k=1$. To compute the softmax, we subtract $\max_j a_j$ from all components before exponentiating (the log-sum-exp trick; <a href="ch09_linear_classification.html#sec9-5">Chapter 9, Section 9.5</a>), which prevents overflow.</p>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+\bm{\delta}^{(n_{\mathrm{layer}})}&=\pdiff{\ell}{\bm{a}^{(n_{\mathrm{layer}})}}\\
+&=\hat{\bm{y}}-\bm{y}
+\end{aligned} \label{eq:14-delta}
+\end{equation}
+<p>(This holds for each of identity + half the sum of squares, sigmoid + cross-entropy, and softmax + cross-entropy.)</p>
+</div>
+
+<p>In the three combinations, the error of the output layer takes the same form, “prediction − correct answer”. This is not a coincidence: each is a combination in which the natural parameter of an exponential family (<a href="ch03_distributions.html#sec3-11">Chapter 3, Section 3.11</a>) is taken to be $a$ (the canonical link function). Conversely, if we combine the sigmoid output with the squared error, we get $\delta=(\hat{y}-y)\hat{y}(1-\hat{y})$, and the error becomes small when the prediction is far off and saturated (Exercise 14.3).</p>
+
+<h3>14.6.5 Conventions for the minibatch loss and weight decay</h3>
+
+<p>In Chapters 14 and 15 of this book and in Simulator S05, we write the loss of a minibatch $\mathcal{B}$ (a set of data indices, of size $B=\abs{\mathcal{B}}$) as a <strong>mean</strong>, and add weight decay (the regularization of <a href="ch06_generalization.html#sec6-6">Chapter 6, Section 6.6</a>):</p>
+\begin{equation}
+\begin{aligned}
+L(\bm{\theta})={}&\frac{1}{B}\sum_{n\in\mathcal{B}}\ell_n\\
+&+\frac{\lambda}{2}\sum_{l=1}^{n_{\mathrm{layer}}}\norm{\bm{W}^{(l)}}^{2}
+\end{aligned} \label{eq:14-loss-mean}
+\end{equation}
+<p>Here $\ell_n$ is the loss of the $n$th data point, and $\norm{\bm{W}^{(l)}}^{2}$ is the sum of the squares of all components of the matrix. Weight decay is <strong>not applied to the biases</strong> (a bias is merely a translation of the output, and there is no reason to make it small). In Chapters 8 and 9 we wrote the loss as a <strong>sum</strong>, so even for the same $\lambda$ the effect differs by a factor of $B$ (or $N$ if all the data are used). When comparing values of $\lambda$ in the literature or in software, we must check whether the loss is a mean or a sum. Writing the loss as a mean has the advantage that the appropriate magnitude of the learning rate $\eta$ depends little on the number of data points (<a href="ch07_optimization.html#sec7-5">Chapter 7, Section 7.5</a>).</p>
+
+<div class="box ex">
+<p class="box-title">Example 14.6: The error of a three-class softmax</p>
+<p>Suppose the activations of the output layer are $\bm{a}=(2,\,1,\,0)^{\tp}$ and the correct answer is class 1 ($\bm{y}=(1,0,0)^{\tp}$). Find (1) $\hat{\bm{y}}$, (2) the loss $\ell$, and (3) $\bm{\delta}^{(n_{\mathrm{layer}})}$, and (4) explain why the components of $\bm{\delta}^{(n_{\mathrm{layer}})}$ sum to 0.</p>
+<p><strong>Solution.</strong> (1) $e^{2}=7.389056$, $e^{1}=2.718282$, $e^{0}=1$, and the sum is $11.107338$. $\hat{\bm{y}}=(7.389056,\,2.718282,\,1)/11.107338$ $=(0.665241,\,0.244728,\,0.090031)$.</p>
+<p>(2) $\ell=-\ln0.665241=0.407606$.</p>
+<p>(3) By Eq. \eqref{eq:14-delta-soft}, $\bm{\delta}^{(n_{\mathrm{layer}})}=\hat{\bm{y}}-\bm{y}$ $=(0.665241-1,\;0.244728,\;0.090031)$ $=(-0.334759,\;0.244728,\;0.090031)$. Learning proceeds in the direction that raises the activation of the correct class (the direction of the negative gradient) and lowers the others. Computing the change of $\ell$ by a central difference with $a_m$ shifted by $\pm10^{-6}$ also gives the same values to six digits.</p>
+<p>(4) $\sum_m\delta_m=\sum_m\hat{y}_m-\sum_my_m=1-1=0$. The output of the softmax does not change when the same constant is added to all components ($\softmax(\bm{a}+c\bm{1})=\softmax(\bm{a})$), so the loss does not change when $\bm{a}$ is moved in the direction of $\bm{1}$, and the derivative in that direction, $\sum_m\partial\ell/\partial a_m$, is 0.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-7">14.7 The Universal Approximation Theorem — What Can Be Represented, What Can Be Found, and What Generalizes<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>14.7.1 Statement of the theorem</h3>
+
+<p>How far does the class of functions a network can represent extend when we insert just one hidden layer? The answer is: “if we increase the number of hidden units enough, any continuous function can be approximated to arbitrary accuracy.”</p>
+
+<div class="box thm">
+<p class="box-title">Theorem 14.2: Universal approximation theorem (one hidden layer)</p>
+<p>Let $K\subset\R^{D}$ be a bounded closed set and $g:K\to\R$ a continuous function. Suppose the activation function $h$ is continuous and not a polynomial (sigmoid, tanh, and ReLU satisfy this). Then for any $\varepsilon\gt0$ there exist a number of hidden units $H$ and weights $\bm{w}_j\in\R^{D}$, $b_j,\,v_j,\,c\in\R$ such that, setting</p>
+$$
+f_H(\bm{x})=\sum_{j=1}^{H}v_j\,h\bigl(\bm{w}_j^{\tp}\bm{x}+b_j\bigr)+c
+$$
+<p>we have</p>
+\begin{equation}
+\sup_{\bm{x}\in K}\,\abs{g(\bm{x})-f_H(\bm{x})}\lt\varepsilon \label{eq:14-uat}
+\end{equation}
+<p>.</p>
+</div>
+
+<p>For sigmoid-type activation functions, Cybenko (1989) (for continuous functions that approach 0 as $a\to-\infty$ and 1 as $a\to+\infty$) and Hornik, Stinchcombe &amp; White (1989) (for monotone nondecreasing functions that change from 0 to 1) proved the result independently in the same year. Leshno et al. (1993) showed that, for locally bounded, piecewise continuous activation functions, a network with one hidden layer can approximate any continuous function to arbitrary accuracy (uniformly on a bounded closed set) if and only if the activation function is not a polynomial (assuming the bias $b_j$ is included). Theorem 14.2 is a special case of this. $f_H$ is exactly the network of Eq. \eqref{eq:14-nn-basis} with one hidden layer and an identity output.</p>
+
+<h3>14.7.2 In one dimension, ReLU piecewise linear functions can build the approximation</h3>
+
+<p>The proof for general $D$ uses tools from functional analysis, so this book does not cover it; but when the input is one-dimensional and ReLU is used, we can construct the approximating network explicitly.</p>
+
+<div class="box derive">
+<p class="box-title">Derivation: Piecewise linear interpolation with ReLU and an estimate of the error</p>
+<p>Divide the interval $[s_0,s_K]$ into $K$ equal parts, and build the piecewise linear function that connects the values $g(s_k)$ at the nodes $s_k=s_0+kh_s$ (with $h_s=(s_K-s_0)/K$). Let $m_k=\{g(s_k)-g(s_{k-1})\}/h_s$ denote the slope on the $k$th interval $[s_{k-1},s_k]$.</p>
+<p>(i) Write the piecewise linear function as a sum of ReLUs. Since $\relu(s-s_k)$ is 0 for $s\le s_k$ and a function of slope 1 for $s\ge s_k$, if we set</p>
+$$
+\begin{aligned}
+f_K(s)={}&g(s_0)+m_1\,\relu(s-s_0)\\
+&+\sum_{k=1}^{K-1}(m_{k+1}-m_k)\,\relu(s-s_k)
+\end{aligned}
+$$
+<p>then the slope on the interval $[s_{k-1},s_k]$ is $m_1+(m_2-m_1)+\dots+(m_k-m_{k-1})=m_k$. Together with $f_K(s_0)=g(s_0)$, this shows that $f_K$ is a piecewise linear function that agrees with $g$ at the nodes. There are $K$ hidden units (weights $w_k=1$, biases $b_k=-s_k$); the output-layer weights are $v_1=m_1$ and $v_{k+1}=m_{k+1}-m_k$, and the bias is $c=g(s_0)$.</p>
+<p>(ii) Estimate the error. Suppose $g$ is twice differentiable and $\abs{g''}\le M_2$. Within the interval $[s_{k-1},s_k]$, $e(s)=g(s)-f_K(s)$ is 0 at both endpoints, and $e''=g''$ ($f_K$ is a linear function within the interval). By the formula for the error of linear interpolation (a standard result obtained from Taylor's theorem),</p>
+\begin{equation}
+\begin{aligned}
+\abs{e(s)}&=\frac{\abs{g''(\xi)}}{2}\\
+&\quad\times(s-s_{k-1})\\
+&\quad\times(s_k-s)\\
+&\le\frac{M_2}{2}\cdot\frac{h_s^{2}}{4}\\
+&=\frac{M_2h_s^{2}}{8}
+\end{aligned} \label{eq:14-pl-err}
+\end{equation}
+<p>($\xi$ is some point in the interval; the maximum of $(s-s_{k-1})(s_k-s)$ is $h_s^{2}/4$, attained at the midpoint of the interval). Since $h_s=(s_K-s_0)/K$, the error decreases in proportion to $1/K^{2}$, and it can be made as small as we like by taking $K$ large. Even if $g$ is merely continuous, uniform continuity allows us to make the maximum error arbitrarily small by taking $K$ large.</p>
+<p style="text-align:right">∎</p>
+</div>
+
+<p>For the true function of data A, $g(s)=88+8s-5s^{2}+2\sin3s$, we have $g''(s)=-10-18\sin3s$, and its maximum on $[-1,1]$ is $M_2=28$ (at $s=\pi/6$, where $\sin3s=1$). Dividing $[-1,1]$ into $K$ equal parts gives $h_s=2/K$, so the upper limit in Eq. \eqref{eq:14-pl-err} is $28\cdot(2/K)^{2}/8=14/K^{2}$ (%). In <a href="#fig14-6">Figure 14.6</a>, the actual maximum error decreases along this upper limit. For comparison, we also drew an approximation of $g$ by steps, using sigmoids made steep enough to act as steps (step functions). With steps, the error decreases only as $1/K$. Even for the same statement “can be approximated,” the number of units required differs greatly depending on the activation function and on the smoothness of the function to be approximated.</p>
+
+<figure id="fig14-6">
+<img src="figs/ch14_fig14-6.svg" alt="The left panel draws the true function g(s) of data A as a thick gray curve, overlaid with ReLU piecewise linear functions for K = 2, 4, and 8. For K = 2 it consists of two line segments connecting (−1, 74.7), (0, 88), and (1, 91.3), and it falls about 3 % below the curve near s = 0.5. For K = 8 it nearly overlaps the curve. The right panel is a log-log plot of the maximum error against K on the horizontal axis: the ReLU piecewise linear function decreases with slope −2 from 3.1 to 0.0034, and the steps decrease with slope −1 from 7.2 to 0.23. The dotted line 14/K² nearly overlaps the error of the piecewise linear function." style="max-width:640px;width:100%">
+<figcaption>Figure 14.6: Representing $g(s)$ (the true function of data A, without noise) with ReLUs of $K$ hidden units. The weights were determined by formulas, not by learning (the derivation in Section 14.7.2). (a) Piecewise linear functions for $K=2$ (solid line), $4$ (dashed line), and $8$ (dash-dotted line). The markers are the nodes. (b) The maximum error on $[-1,1]$. Circles are the ReLU piecewise linear functions, open squares are the steps (sums of steep sigmoids), and the dotted line is the upper limit $14/K^{2}$ from Eq. \eqref{eq:14-pl-err}.</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">Example 14.7: Representing the curve of data A with two ReLUs</p>
+<p>For the network $f(s)=c+v_1\relu(s+1)+v_2\relu(s)$ that represents the true function $g(s)$ of data A by a piecewise linear function with nodes $s=-1,\,0,\,1$ ($K=2$), find $c$, $v_1$, and $v_2$. Compare $f$ and $g$ at $s=0.5$ (1400 °C), and compare the error with the upper limit in Eq. \eqref{eq:14-pl-err}.</p>
+<p><strong>Solution.</strong> The values at the nodes are $g(-1)=88-8-5+2\sin(-3)$ $=75-0.282240=74.717760$, $g(0)=88$, and $g(1)=88+8-5+2\sin3=91.282240$ (%). The slopes are $m_1=(88-74.717760)/1=13.282240$ and $m_2=(91.282240-88)/1=3.282240$. Hence $c=g(-1)=74.7178$, $v_1=m_1=13.2822$, and $v_2=m_2-m_1=-10.0000$, so that</p>
+$$
+\begin{aligned}
+f(s)={}&74.7178+13.2822\,\relu(s+1)\\
+&-10.0000\,\relu(s).
+\end{aligned}
+$$
+<p>At $s=0.5$, $f(0.5)=74.7178+13.2822\times1.5$ $-10.0000\times0.5$ $=74.7178+19.9234-5.0000$ $=89.6411$. The true value is $g(0.5)=88+4-1.25+2\sin1.5$ $=90.75+1.994990=92.7450$, so the error is $3.10\ \%$. The upper limit, with $h_s=1$ and $M_2=28$, is $28/8=3.5\ \%$, so the error lies within the upper limit. This is also the maximum error on $[-1,1]$ ($3.10\ \%$ at $s\approx0.505$).</p>
+</div>
+
+<h3>14.7.3 What the theorem does not say</h3>
+
+<p>The universal approximation theorem says only that approximating weights <strong>exist</strong>. It does not say the following three things.</p>
+<ol>
+  <li><strong>The number of units required</strong>: How large $H$ must be depends on $g$ and $D$. When the input dimension is high, there are functions that require exponentially many units with one hidden layer. For example, there are known $D$-dimensional (nearly spherically symmetric) functions that a small network with two hidden layers can represent, but that a network with one hidden layer cannot approximate to a fixed accuracy unless its width is made exponentially large in $D$ (Eldan &amp; Shamir 2016; this holds for most activation functions, including sigmoid and ReLU). Also for ReLU and similar networks, there are functions that deeper networks can represent with few units, whereas shallower networks require a number of units exponential in the number of layers (Telgarsky 2016). The existence of such families of functions that can be represented with few units by going deeper is one of the reasons for using deep networks (whether the function behind real data belongs to such a family is, however, a separate question).</li>
+  <li><strong>Whether learning can find it</strong>: Even if there are weights satisfying Eq. \eqref{eq:14-uat}, gradient descent is not guaranteed to reach them. The loss is nonconvex, with local solutions and flat regions. In the XOR example of Simulator 14.1, although the structure is capable of representing it ($H=2$), the accuracy stayed at 75 % with the default seed. This is because the two learned hidden units mapped two clusters with different labels to the same point in the hidden layer, so that the output layer could no longer distinguish them.</li>
+  <li><strong>Whether it generalizes</strong>: The theorem discusses approximation on the assumption that the true function $g$ is known. What we actually have in hand is only a finite amount of data containing noise, and being able to fit the training data does not guarantee predicting unknown data correctly (Chapter 6). The greater the expressive power, the greater the danger of overfitting, in which even the noise is memorized.</li>
+</ol>
+<p>To summarize, <strong>being able to represent (expressive power), being able to find by learning (optimization), and predicting unknown data correctly (generalization) are separate problems</strong>. The universal approximation theorem answers only the first. The second is treated in Chapter 7 and Chapter 15, and the third in Chapter 6 and <a href="ch15_backpropagation.html#sec15-8">Chapter 15, Section 15.8</a>.</p>
+
+<!-- ============================================================ -->
+<h2 id="sec14-8">14.8 Counting Parameters and the Symmetries of Weight Space<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>14.8.1 The number of parameters of a fully connected layer</h3>
+
+<p>The weight matrix $\bm{W}^{(l)}\in\R^{D_l\times D_{l-1}}$ of layer $l$ has $D_lD_{l-1}$ components, and the bias $\bm{b}^{(l)}\in\R^{D_l}$ has $D_l$ components. Therefore</p>
+\begin{align}
+(\text{layer }l\text{ })&=D_l\,(D_{l-1}+1), \notag\\
+(\text{total})&=\sum_{l=1}^{n_{\mathrm{layer}}}D_l\,(D_{l-1}+1) \label{eq:14-nparam}
+\end{align}
+<p>The “$+1$” accounts for the bias; if we think of it as appending a component that is always 1 to the input, the bias can be regarded as part of the weights. A 2–3–1 network has $3\cdot3+1\cdot4=13$ parameters (<a href="#tab14-1">Table 14.1</a>). If we double the width $D_l$, the parameters of the layers before and after it roughly double each, and if we double the widths on both sides, they become four times as many.</p>
+
+<h3>14.8.2 More than one set of weights represents the same function</h3>
+
+<p>Consider the network of Eq. \eqref{eq:14-nn-basis} with one hidden layer and $H$ hidden units.</p>
+<ul>
+  <li><strong>Permutation</strong>: for hidden units $j$ and $k$, if we swap the incoming weights $(\bm{w}_j,b_j)$ and the outgoing weight $W^{(2)}_j$ as a whole, only the order of the sum changes and the output is the same. There are $H!$ ways to permute.</li>
+  <li><strong>Sign flip</strong> (for odd functions such as tanh): since $\tanh(-a)=-\tanh a$, the quantity $W^{(2)}_j\tanh(\bm{w}_j^{\tp}\bm{x}+b_j)$ does not change under $(\bm{w}_j,b_j,W^{(2)}_j)\to(-\bm{w}_j,-b_j,-W^{(2)}_j)$. We can choose for each unit whether or not to flip, so there are $2^{H}$ ways.</li>
+  <li><strong>Scale</strong> (ReLU): ReLU is not an odd function, so there is no sign-flip symmetry. Instead, for $c\gt0$ we have $\relu(ca)=c\,\relu(a)$, so the output does not change under $(\bm{w}_j,b_j,W^{(2)}_j)\to(c\bm{w}_j,cb_j,W^{(2)}_j/c)$. This is a continuous (infinite) family of symmetries.</li>
+</ul>
+<p>In a tanh network with one hidden layer, at least $H!\,2^{H}$ sets of weights represent the same function as a given set. If there are several hidden layers, we multiply this number layer by layer.</p>
+
+<div class="box why">
+<p class="box-title">What the symmetries mean</p>
+<p>(1) If the loss $L(\bm{\theta})$ has a local minimum, every point obtained from it by a symmetry is also a local minimum with the same value. The loss landscape has many valleys of the same shape lined up, so it cannot be convex (if two points of a convex function were both minima, the whole line segment between them would also have to consist of minima, but at the midpoint of two permuted points the loss is in general larger). (2) The values of the weights themselves have no fixed meaning such as “hidden unit 1 is in charge of temperature.” If we train again, the numbering and the signs are exchanged. Care is needed when one tries to interpret individual weights physically. (3) If we set all the initial values equal (for example, all 0), training proceeds with the permutation symmetry preserved, and the hidden units keep the same values without ever becoming distinguishable. This is the reason initialization is discussed in <a href="ch15_backpropagation.html#sec15-6">Chapter 15, Section 15.6</a>.</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Example 14.8: Counting the parameters of a network for composition descriptors</p>
+<p>Consider a network (8–32–32–1) that takes 8 descriptors as input, has two hidden layers (32 units each, tanh), and has one output. (1) Find the number of parameters. (2) How many sets of weights represent the same function through hidden-unit permutations and sign flips alone? (3) When there are 200 training data points, what can be said about the relation between the number of parameters and the number of data points?</p>
+<p><strong>Solution.</strong> (1) By Eq. \eqref{eq:14-nparam}, the first layer has $32\times(8+1)=288$, the second layer $32\times(32+1)=1056$, and the third layer $1\times(32+1)=33$. The total is $288+1056+33=1377$ parameters.</p>
+<p>(2) For one hidden layer, $32!\times2^{32}$ $\approx2.63\times10^{35}\times4.29\times10^{9}$ $\approx1.13\times10^{45}$ ways. Since the two layers can be chosen independently, there are $(1.13\times10^{45})^{2}\approx1.28\times10^{90}$ ways.</p>
+<p>(3) The parameters (1377) outnumber the data points (200). This is a situation in which, for linear regression, the solution would not be uniquely determined, and the network is also likely to reproduce the training data almost perfectly. Weight decay (Eq. \eqref{eq:14-loss-mean}), early stopping, and checking with validation data (Chapter 6; <a href="ch15_backpropagation.html#sec15-8">Chapter 15, Section 15.8</a>) are indispensable. However, because of the symmetries, the “effective degrees of freedom that can be moved freely” are fewer than the number of parameters, and generalization cannot be judged from the ratio of the number of parameters to the number of data points alone.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-9">14.9 Connections to Materials Engineering and Condensed Matter Physics — Regression from Descriptors and Per-Atom Energies<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>14.9.1 Nonlinear regression from descriptors to physical properties</h3>
+
+<div class="box phys">
+<p class="box-title">Application: Predicting physical properties from composition descriptors</p>
+<p>From the composition of a material we compute numerical quantities such as the mean atomic mass, the mean electronegativity, the ratio of ionic radii, and the number of valence electrons (<strong>descriptors</strong>), take them as the input $\bm{x}\in\R^{D}$, and predict a physical property $y$ such as the band gap or the formation energy. This problem setting is fundamental in the analysis of materials data. Physical properties are often nonlinear functions of the descriptors, and combinations of descriptors (for example, “the electronegativity difference is large and, at the same time, the ratio of ionic radii is small”) often matter. A hidden unit in Eq. \eqref{eq:14-nn-basis} builds the weighted sum of the descriptors $\bm{w}_j^{\tp}\bm{x}+b_j$, a “new combination of descriptors,” and uses its nonlinear response as a basis function. The difference from regression with fixed basis functions (Chapter 8) is that a person does not have to decide which combinations matter.</p>
+<p>On the other hand, as we saw in Example 14.8, with several tens to several hundreds of experimental data points the number of parameters of a network quickly reaches several thousand. When data are scarce, it is better to try linear regression or Bayesian linear regression (Chapter 8) and Gaussian process regression (Chapter 12) first. These give solutions that are found stably and can also provide the uncertainty of the prediction. Networks show their real strength when the data are sufficiently abundant, as with thousands to millions of data points generated by first-principles calculations.</p>
+</div>
+
+<h3>14.9.2 Expressing the total energy as a sum of per-atom energies</h3>
+
+<p>A function that returns the energy from the arrangement (coordinates) of the atoms is called the <strong>potential energy surface</strong>. The force acting on an atom is its negative gradient, $\bm{F}_i=-\partial E/\partial\bm{r}_i$, and once this is known we can carry out molecular dynamics calculations that follow the motion of the atoms numerically. Computing the energy with first-principles calculations (calculations that obtain the state of the electrons from the equations of quantum mechanics) is highly accurate, but the computation time grows rapidly as the number of atoms increases. Therefore <strong>machine-learning potentials</strong>, which learn a function for the energy from data generated by first-principles calculations and then compute it cheaply and accurately, are being studied.</p>
+
+<p>Behler &amp; Parrinello (2007) proposed representing this function with a neural network. The idea is as follows (<a href="#fig14-7">Figure 14.7</a>).</p>
+<ol>
+  <li>Split the total energy into a sum of per-atom energies:
+\begin{equation}
+\begin{aligned}
+E&=\sum_{i=1}^{N_{\mathrm{at}}}E_i,\\
+E_i&=\mathrm{NN}_{\mathrm{el}(i)}\bigl(\bm{G}_i\bigr)
+\end{aligned} \label{eq:14-bp}
+\end{equation}
+  Here $N_{\mathrm{at}}$ is the number of atoms, $\mathrm{el}(i)$ is the element of atom $i$, and $\mathrm{NN}_{\mathrm{el}}$ is a network prepared for each element (atoms of the same element share the same weights).</li>
+  <li>The input $\bm{G}_i$ of each atom is a descriptor of the environment around atom $i$ (inside a cutoff radius), built only from interatomic distances and angles. For example, the simplest form, which uses only distances, is
+$$
+G_i=\sum_{j\ne i}\exp\!\left(-\eta_G\,r_{ij}^{2}\right)f_{\mathrm{c}}(r_{ij})
+$$
+  ($r_{ij}$ is the distance between atoms $i,j$, $\eta_G$ is a constant that determines the width, and $f_{\mathrm{c}}$ is a function that vanishes at the cutoff radius). Functions of this kind are called <strong>symmetry functions</strong> (Behler 2011).</li>
+</ol>
+<p>With this form, the physically required properties are satisfied automatically.</p>
+<ul>
+  <li><strong>Invariance under permutation</strong>: even if we relabel atoms of the same element, only the order of the sum in Eq. \eqref{eq:14-bp} changes and $E$ is the same.</li>
+  <li><strong>Invariance under translation and rotation</strong>: since $\bm{G}_i$ is determined only by distances and angles, $E$ is the same when the whole system is translated or rotated.</li>
+  <li><strong>Extensivity</strong>: if we compute two systems far apart together, the energy is the sum. The same network can be used for structures with different numbers of atoms.</li>
+</ul>
+<p>If we feed the vector that lists all the atomic coordinates directly into one large network, none of these properties holds (the labeling of the atoms alone produces $N_{\mathrm{at}}!$ different inputs, and the dimension of the input changes when the number of atoms changes). The general theory of building the symmetries of a structure into a model is treated in <a href="ch16_structured_deep_learning.html#sec16-7">Chapter 16, Section 16.7</a>, and machine-learning potentials are discussed in detail in <a href="ch27_materials_statmech.html#sec27-7">Chapter 27, Section 27.7</a>. The force $\bm{F}_i=-\partial E/\partial\bm{r}_i$ is obtained by differentiating through the network and the descriptors, and the backpropagation of Chapter 15 can be used as it is for this computation.</p>
+
+<figure id="fig14-7">
+<svg role="img" aria-label="Schematic diagram of a network that expresses the total energy as a sum of per-atom energies. On the left are circles for atoms 1, 2, and 3; from the environment around each, a descriptor G1, G2, or G3 is built. Each descriptor enters a network NN that shares the same weights, and the per-atom energies E1, E2, and E3 come out. Finally they are added to give the total energy E." viewBox="0 0 620 315" style="max-width:620px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>Figure 14.7: Expressing the total energy as a sum of per-atom energies</title>
+<defs><marker id="arr-fig14-7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker></defs>
+<text x="60" y="28" text-anchor="middle" font-size="14" fill="#1a1a1a">Atom</text>
+<text x="175" y="28" text-anchor="middle" font-size="14" fill="#1a1a1a">Descriptor</text>
+<text x="315" y="28" text-anchor="middle" font-size="14" fill="#1a1a1a">Atomic network</text>
+<text x="450" y="28" text-anchor="middle" font-size="14" fill="#1a1a1a">Atomic energy</text>
+<g font-family="Times New Roman, STIXGeneral, serif" font-size="16" fill="#1a1a1a">
+<circle cx="60" cy="75" r="20" fill="#e8f1f8" stroke="#0072b2" stroke-width="1.6"></circle><text x="60" y="81" text-anchor="middle">1</text>
+<circle cx="60" cy="155" r="20" fill="#e8f1f8" stroke="#0072b2" stroke-width="1.6"></circle><text x="60" y="161" text-anchor="middle">2</text>
+<circle cx="60" cy="235" r="20" fill="#e8f1f8" stroke="#0072b2" stroke-width="1.6"></circle><text x="60" y="241" text-anchor="middle">3</text>
+<line x1="60" y1="95" x2="60" y2="135" stroke="#888" stroke-width="1.2" stroke-dasharray="4 3"></line>
+<line x1="60" y1="175" x2="60" y2="215" stroke="#888" stroke-width="1.2" stroke-dasharray="4 3"></line>
+<rect x="145" y="58" width="60" height="34" rx="6" fill="#fff" stroke="#1a1a1a" stroke-width="1.3"></rect><text x="175" y="81" text-anchor="middle"><tspan font-weight="bold">G</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<rect x="145" y="138" width="60" height="34" rx="6" fill="#fff" stroke="#1a1a1a" stroke-width="1.3"></rect><text x="175" y="161" text-anchor="middle"><tspan font-weight="bold">G</tspan><tspan baseline-shift="sub" font-size="11">2</tspan></text>
+<rect x="145" y="218" width="60" height="34" rx="6" fill="#fff" stroke="#1a1a1a" stroke-width="1.3"></rect><text x="175" y="241" text-anchor="middle"><tspan font-weight="bold">G</tspan><tspan baseline-shift="sub" font-size="11">3</tspan></text>
+<rect x="270" y="55" width="90" height="40" rx="8" fill="#5b2a5e"></rect><text x="315" y="81" text-anchor="middle" fill="#fff">NN</text>
+<rect x="270" y="135" width="90" height="40" rx="8" fill="#5b2a5e"></rect><text x="315" y="161" text-anchor="middle" fill="#fff">NN</text>
+<rect x="270" y="215" width="90" height="40" rx="8" fill="#5b2a5e"></rect><text x="315" y="241" text-anchor="middle" fill="#fff">NN</text>
+<text x="450" y="81" text-anchor="middle"><tspan font-style="italic">E</tspan><tspan baseline-shift="sub" font-size="11">1</tspan></text>
+<text x="450" y="161" text-anchor="middle"><tspan font-style="italic">E</tspan><tspan baseline-shift="sub" font-size="11">2</tspan></text>
+<text x="450" y="241" text-anchor="middle"><tspan font-style="italic">E</tspan><tspan baseline-shift="sub" font-size="11">3</tspan></text>
+<circle cx="540" cy="155" r="24" fill="#f5eef5" stroke="#5b2a5e" stroke-width="1.8"></circle><text x="540" y="163" text-anchor="middle" font-size="22">Σ</text>
+<text x="596" y="161" text-anchor="middle"><tspan font-style="italic">E</tspan></text>
+</g>
+<g stroke="#1a1a1a" stroke-width="1.4">
+<line x1="80" y1="75" x2="141" y2="75" marker-end="url(#arr-fig14-7)"></line>
+<line x1="80" y1="155" x2="141" y2="155" marker-end="url(#arr-fig14-7)"></line>
+<line x1="80" y1="235" x2="141" y2="235" marker-end="url(#arr-fig14-7)"></line>
+<line x1="205" y1="75" x2="266" y2="75" marker-end="url(#arr-fig14-7)"></line>
+<line x1="205" y1="155" x2="266" y2="155" marker-end="url(#arr-fig14-7)"></line>
+<line x1="205" y1="235" x2="266" y2="235" marker-end="url(#arr-fig14-7)"></line>
+<line x1="360" y1="75" x2="432" y2="75" marker-end="url(#arr-fig14-7)"></line>
+<line x1="360" y1="155" x2="432" y2="155" marker-end="url(#arr-fig14-7)"></line>
+<line x1="360" y1="235" x2="432" y2="235" marker-end="url(#arr-fig14-7)"></line>
+<line x1="466" y1="80" x2="520" y2="140" marker-end="url(#arr-fig14-7)"></line>
+<line x1="466" y1="155" x2="513" y2="155" marker-end="url(#arr-fig14-7)"></line>
+<line x1="466" y1="230" x2="520" y2="170" marker-end="url(#arr-fig14-7)"></line>
+<line x1="564" y1="155" x2="584" y2="155"></line>
+</g>
+<path d="M 372 62 Q 392 155 372 248" fill="none" stroke="#5b2a5e" stroke-width="1.4" stroke-dasharray="5 4"></path>
+<text x="315" y="304" text-anchor="middle" font-size="14" fill="#5b2a5e">Same element: shared weights</text>
+<text x="175" y="282" text-anchor="middle" font-size="13" fill="#4a5568">Distances and angles only</text>
+</svg>
+<figcaption>Figure 14.7: The idea of a network that expresses the total energy as a sum of per-atom energies (schematic; the construction of Behler &amp; Parrinello (2007) is drawn in simplified form). The environment around each atom is converted into a descriptor $\bm{G}_i$ built from distances and angles, a network shared within each element outputs the atomic energy $E_i$, and these are added to give the total energy $E$. Because we take a sum, the result does not depend on how the atoms are numbered.</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">Example 14.9: Computing the energy of a toy model of three atoms</p>
+<p>In a system consisting of a single element, let the descriptor be $G_i=\sum_{j\ne i}\exp\{-(r_{ij}/r_0)^{2}\}$ ($r_0=2.5$ Å, no cutoff) and let the atomic network, with one hidden unit, be $E_i=0.5\tanh(2G_i-1)-3.0$ (eV) (the numbers are provisional values for illustration and do not represent any real material). (1) Place the atoms on a straight line at $x=0,\ 2.5,\ 5.0$ Å, and find $G_i$, $E_i$, and $E$. (2) Verify that $E$ does not change when the atoms are relabeled or when the whole system is rotated.</p>
+<p><strong>Solution.</strong> (1) The distances are $r_{12}=r_{23}=2.5$ Å and $r_{13}=5.0$ Å. The values of $r/r_0$ are 1 and 2, so $e^{-1}=0.367879$ and $e^{-4}=0.018316$. For the end atoms 1 and 3, $G=e^{-1}+e^{-4}=0.386195$, and for the central atom 2, $G=2e^{-1}=0.735759$.</p>
+<p>End atoms: $2G-1=-0.227610$, $\tanh(-0.227610)=-0.223757$, $E=0.5\times(-0.223757)-3.0=-3.111879$ eV. Central atom: $2G-1=0.471518$, $\tanh0.471518=0.439425$, $E=-2.780288$ eV. The total is $E=2\times(-3.111879)+(-2.780288)$ $=-9.004047$ eV.</p>
+<p>(2) Relabeling: if we place atom 1 at $x=5.0$, atom 2 at $x=0$, and atom 3 at $x=2.5$ Å, the central atom becomes number 3 and the list changes to $(E_1,E_2,E_3)$ $=(-3.111879,\,-3.111879,\,-2.780288)$, but the sum is the same, $-9.004047$ eV. Rotation: even if we rearrange the three atoms along the $y$ axis (for example, $(1,1,1)$, $(1,3.5,1)$, $(1,6.0,1)$ Å), the distances do not change, so $G_i$ and $E$ are the same. Because the input is built from distances alone and the per-atom outputs are combined by a sum, these invariances are guaranteed by design.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-10">14.10 Common Misconceptions and Limits of Applicability<span class="route-tag adv">Detailed Route</span></h2>
+
+<div class="box warn">
+<p class="box-title">Caution: A neural network is not a model of the brain</p>
+<p>The names “neuron” and “network” come from inspiration drawn from nerve cells. However, what we treated in this chapter is a family of mathematical functions built from weighted sums and compositions with nonlinear functions; it does not reproduce the electrical activity of real nerve cells or the mechanisms of learning in the brain. Do not read properties such as “thinks like a brain” or “understands” into the name. Discuss properties starting from Eq. \eqref{eq:14-layer} and the training procedure.</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Deeper and larger does not always mean better</p>
+<p>Adding layers or units increases the functions that can be represented, but it also increases the number of parameters, and with little data the model overfits more easily (Chapter 6). In data A of Simulator 14.2, increasing $H$ from 3 to 8 hardly changed the validation error. Making the network deeper also makes training itself harder (vanishing gradients; <a href="ch15_backpropagation.html#sec15-7">Chapter 15, Section 15.7</a>). Choose the size of the model according to its performance on validation data and to the quantity and quality of the data.</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Predictions outside the training range (extrapolation) are not guaranteed</p>
+<p>The universal approximation theorem merely states an approximation within a bounded range $K$. Outside the range, the shape of the network determines the prediction. A ReLU network is piecewise linear, so outside the range it becomes a straight line that simply extends the outermost line segment. A tanh network has its hidden units saturate outside the range, and the prediction approaches a constant. Neither knows about physical constraints (for example, that the relative density does not exceed 100 %) (Example 14.10).</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Do not read physical meaning into individual weights</p>
+<p>By the symmetry of Section 14.8, there are innumerable sets of weights that give the same prediction, and each time we train again, both the numbering and the signs of the hidden units are interchanged. It is risky to conclude that “because the weight of hidden unit 2 is large, this descriptor is important.” When we want to know which inputs matter, we use quantities that are unchanged by the symmetry, such as examining how the prediction changes when the input is varied slightly (for example, the derivative of the prediction with respect to the input).</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: “Universal” does not mean “can learn anything”</p>
+<p>As we saw in Section 14.7, the universal approximation theorem says only that weights that approximate exist. The number of units required, whether training can find them, and whether the model generalizes from limited data are separate questions. As in the XOR problem of Simulator 14.1, even for a small problem training sometimes fails to find weights that can represent the function.</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Example 14.10: Extrapolation of ReLU and tanh networks</p>
+<p>(1) For the ReLU network of Example 14.7, $f(s)=74.7178+13.2822\,\relu(s+1)$ $-10.0000\,\relu(s)$, find the predictions at $s=2,\ 3,\ 4$ ($T=1700,\ 1900,\ 2100\ ^{\circ}\mathrm{C}$), outside the training range. (2) The tanh network of <a href="#fig14-5">Figure 14.5</a> ($H=3$, after 2000 epochs) has weights $\bm{W}^{(1)}=(-1.2417,\ 1.5103,\ -0.2983)^{\tp}$, $\bm{b}^{(1)}=(-0.8601,\ 0.2723,\ -0.1143)^{\tp}$, $\bm{W}^{(2)}=(-1.3520,\ 0.5462,\ 0.4132)$, $b^{(2)}=-0.5512$, and standardization constants $\bar{y}=85.138\ \%$, $s_y=7.152\ \%$. Find the limits of the prediction as $s\to+\infty$ and as $s\to-\infty$.</p>
+<p><strong>Solution.</strong> (1) For $s\gt0$ both ReLUs are active, and $f(s)=74.7178+13.2822(s+1)-10.0000s$ $=88.0000+3.2822s$ is a straight line (the extension of the line segment on the last interval $[0,1]$). $f(2)=94.56\ \%$, $f(3)=97.85\ \%$, $f(4)=101.13\ \%$. At $T=2100\ ^{\circ}\mathrm{C}$ the relative density exceeds 100 %, a value that is physically impossible.</p>
+<p>(2) As $s\to+\infty$, $\tanh(w_js+b_j)\to\sgn(w_j)$, so $\bm{z}\to(-1,\,+1,\,-1)$. We have $W^{(2)}\bm{z}=1.3520+0.5462-0.4132=1.4851$; adding $b^{(2)}$ gives $0.9339$, and the prediction is $85.138+7.152\times0.9339=91.82\ \%$. As $s\to-\infty$, $\bm{z}\to(+1,-1,+1)$, $W^{(2)}\bm{z}=-1.4851$; adding $b^{(2)}$ gives $-2.0363$, and the prediction is $85.138-7.152\times2.0363=70.58\ \%$. The tanh network approaches a constant value outside the range (at $s=2$ it is 92.93 %). That ReLU and tanh behave completely differently under extrapolation shows that extrapolation is determined not by the data but by the form of the model. To trust predictions outside the data, we need either a model that incorporates physical constraints or a model that can report uncertainty (Chapter 12).</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec14-11">14.11 Summary, Link to the Next Chapter, Exercises, and References</h2>
+
+<h3>14.11.1 Summary</h3>
+<ul>
+  <li><strong>Neuron:</strong> pass the weighted sum $a=\bm{w}^{\tp}\bm{x}+b$ through an activation function to get $z=h(a)$. A single sigmoid neuron is logistic regression, and its decision boundary is a hyperplane.</li>
+  <li><strong>Activation functions:</strong> sigmoid ($\sigma'=\sigma(1-\sigma)\le1/4$), tanh ($1-\tanh^{2}$, $\tanh a=2\sigma(2a)-1$), ReLU (the derivative is 0 or 1). GELU is a smoothed version of ReLU.</li>
+  <li><strong>Layers:</strong> $\bm{a}^{(l)}=\bm{W}^{(l)}\bm{z}^{(l-1)}+\bm{b}^{(l)}$, $\bm{W}^{(l)}\in\R^{D_l\times D_{l-1}}$. With a minibatch this becomes the matrix product $\bm{W}^{(l)}\bm{Z}^{(l-1)}$. The number of parameters is $\sum_lD_l(D_{l-1}+1)$.</li>
+  <li><strong>Nonlinearity:</strong> no matter how many layers of the identity map we stack, the result is a single linear map. XOR cannot be separated by one neuron, but it can be separated if a hidden layer maps it to a “separable configuration.”</li>
+  <li><strong>Moving basis:</strong> a network with one hidden layer is a linear model that learns even the location, direction, and sharpness of the basis $h(\bm{w}_j^{\tp}\bm{x}+b_j)$. In exchange, the loss becomes nonconvex.</li>
+  <li><strong>Output layer and loss:</strong> identity + sum of squares/2, sigmoid + cross-entropy, and softmax + cross-entropy all follow from maximum likelihood estimation, and in every case the error at the output is $\hat{\bm{y}}-\bm{y}$. In Chapters 14 and 15 of this book we write the loss as the average over a minibatch, and weight decay is not applied to the biases.</li>
+  <li><strong>Universal approximation and symmetry:</strong> one hidden layer can approximate a continuous function to any accuracy, but being representable, being findable by training, and generalizing are separate matters. There are at least $H!\,2^{H}$ sets of weights representing the same function (tanh).</li>
+  <li><strong>Connections to materials:</strong> nonlinear regression from descriptors to physical properties, and machine-learning potentials based on the sum of per-atom energies $E=\sum_iE_i(\bm{G}_i)$. When data are scarce, the methods of Chapters 8 and 12 come first.</li>
+</ul>
+
+<div class="keyeq">
+\begin{equation}
+\begin{gathered}
+\bm{a}^{(l)}=\bm{W}^{(l)}\bm{z}^{(l-1)}+\bm{b}^{(l)},\\
+\bm{z}^{(l)}=h\bigl(\bm{a}^{(l)}\bigr),\\
+\bm{\delta}^{(n_{\mathrm{layer}})}=\hat{\bm{y}}-\bm{y}
+\end{gathered} \label{eq:14-key}
+\end{equation}
+</div>
+
+<h3>14.11.2 Link to the Next Chapter</h3>
+<p>In this chapter we examined “what a network can represent” with the weights given. To train a network, we need the gradient of the loss $L(\bm{\theta})$ with respect to all the weights and biases. There are thousands to hundreds of millions of parameters, and differentiating numerically one at a time would never finish computing. In the next chapter, <a href="ch15_backpropagation.html">Chapter 15</a>, starting from the output-layer error $\bm{\delta}^{(n_{\mathrm{layer}})}=\hat{\bm{y}}-\bm{y}$ of this chapter, we derive <strong>backpropagation</strong>, which distributes the error in order from the output to the input by differentiating composite functions (the chain rule). In the “① Following One Step Numerically” tab of Simulator S05, we verify the forward propagation, backward propagation, and weight update of a 2–2–1 network with all the numerical values.</p>
+
+<h3>14.11.3 Exercises</h3>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.1: Forward propagation in a 2–2–1 network (computation)</p>
+<p>Consider a 2–2–1 network with a tanh hidden layer and a sigmoid output, and let $\bm{W}^{(1)}=\begin{pmatrix}1&1\\1&-1\end{pmatrix}$, $\bm{b}^{(1)}=(0,\,-0.5)^{\tp}$, $\bm{W}^{(2)}=(2,\,-1)$, $b^{(2)}=-1$. (1) For the input $\bm{x}=(0.5,\,1.0)^{\tp}$, find $\bm{a}^{(1)}$, $\bm{z}^{(1)}$, $a^{(2)}$, and $\hat{y}$. (2) Find the cross-entropy loss and $\delta^{(2)}$ for $y=1$. (3) What is $\hat{y}$ if the hidden layer is replaced by ReLU? (4) Count the number of parameters of this network.</p>
+<p><em>Hint:</em> $\tanh1.5\approx0.905$, $\tanh1\approx0.762$. For (2), use Eq. \eqref{eq:14-delta-bin}.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-1">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.2: The relation between tanh and sigmoid (derivation)</p>
+<p>(1) Show that $\tanh a=2\sigma(2a)-1$. (2) Show that the network with a tanh hidden layer $f(\bm{x})=\sum_jW^{(2)}_j\tanh(\bm{w}_j^{\tp}\bm{x}+b_j)+b^{(2)}$ can be represented exactly by a network with a sigmoid hidden layer after changing the weights and biases, and write the formulas for the change. (3) From this result, does the “set of representable functions” change depending on whether the hidden layer is sigmoid or tanh? What about ease of learning?</p>
+<p><em>Hint:</em> For (1), write the right-hand side in terms of $e^{-2a}$ and put it over a common denominator. For (2), substitute (1) and collect the coefficient of $\sigma$ and the constant.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-2">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.3: What goes wrong if squared error is used with a sigmoid output? (derivation and computation)</p>
+<p>Consider the case where the squared error $\ell_{\mathrm{SE}}=\tfrac12(\hat{y}-y)^{2}$ is used with the output $\hat{y}=\sigma(a)$. (1) Find $\partial\ell_{\mathrm{SE}}/\partial a$. (2) For $y=1$ and $a=-5$ (a prediction that is far off), compare numerically $\delta=\hat{y}-y$ in the cross-entropy case with $\partial\ell_{\mathrm{SE}}/\partial a$ in the squared-error case. (3) State the effect of this difference on learning.</p>
+<p><em>Hint:</em> $\sigma(-5)=1/(1+e^{5})$.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-3">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.4: One hidden unit cannot separate XOR (derivation)</p>
+<p>Consider the 2–1–1 network $\hat{y}=\sigma\bigl(v\,h(\bm{w}^{\tp}\bm{x}+b)+c\bigr)$. Suppose $h$ is monotone nondecreasing (sigmoid, tanh, ReLU, and so on). (1) Show that $\{\bm{x}:\hat{y}\gt1/2\}$ can be written as one of the conditions “$u\gt t$,” “$u\ge t$,” “$u\lt t$,” “$u\le t$” on $u=\bm{w}^{\tp}\bm{x}+b$ (or as the set of all $\bm{x}$, or the empty set). (2) From this, show that the four XOR points cannot be separated correctly. (3) Relate this to the result of step 2 of Simulator 14.1 (accuracy 73 %).</p>
+<p><em>Hint:</em> $\hat{y}\gt1/2\iff vh(u)+c\gt0$. Split into cases by the sign of $v$ and use the monotonicity of $h$. (2) is the same argument as Eq. \eqref{eq:14-xor-ineq}.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-4">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.5: Representing the band gap of a mixed crystal with ReLU (computation, materials context)</p>
+<p>Consider data B (the band gap of a hypothetical mixed crystal A$_{1-x}$B$_x$C; the true function of the synthetic data for teaching purposes) $E_g(x)=(1-x)\,1.20+x\,2.40-0.80\,x(1-x)$ eV ($0\le x\le1$). (1) Find $E_g(0)$, $E_g(0.5)$, and $E_g(1)$. (2) Represent the piecewise linear function through these three points by a network of the form $f(x)=c+v_1\relu(x)+v_2\relu(x-0.5)$. (3) Find the maximum error of the piecewise linear function and the composition at which it occurs, and compare it with the noise standard deviation of 0.03 eV of data B. (4) How many hidden units are needed to bring the maximum error of an equally spaced piecewise linear function down to 0.01 eV or less? (5) State why, for this problem, linear regression with the basis $\{1,\,x,\,x(1-x)\}$ of Chapter 8 is better suited than a neural network.</p>
+<p><em>Hint:</em> For (3) and (4), use Eq. \eqref{eq:14-pl-err}. $E_g''(x)$ is a constant.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-5">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.6: Properties of the sum of per-atom energies (computation, materials context)</p>
+<p>Use the toy model of Example 14.9 ($G_i=\sum_{j\ne i}\exp\{-(r_{ij}/r_0)^{2}\}$, $r_0=2.5$ Å, $E_i=0.5\tanh(2G_i-1)-3.0$ eV). (1) Find the energy of two atoms (a dimer) at a distance of 2.5 Å. (2) Find the energy of a system of four atoms obtained by placing two such dimers on a straight line at $x=0,\ 2.5,\ 20,\ 22.5$ Å, and estimate how much it differs from twice the result of (1). (3) If we feed the vector of the 30 coordinates of 10 atoms directly into a single network, how many different inputs represent the same structure? List two problems with this approach.</p>
+<p><em>Hint:</em> In (2), estimate the magnitude of the contribution from distant atoms (for the nearest pair, $\exp\{-(17.5/2.5)^{2}\}$).</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-6">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.7: Symmetries of the weight space (discussion and computation)</p>
+<p>(1) For a tanh network with three hidden units (one input, one output), how many sets of weights represent the same function through permutations and sign flips? (2) For $f(s)=1.5\tanh(0.7s+0.2)$ $-0.8\tanh(-1.3s+0.4)+0.1$, write the weights with the sign of hidden unit 1 flipped, and verify that the value does not change at $s=0.37$. (3) Show by an example that the sign-flip symmetry does not hold for ReLU. Show, using $f(s)=2\relu(s-0.5)$ as an example, the symmetry that holds instead.</p>
+<p><em>Hint:</em> For (3), compare $\relu(-a)$ and $-\relu(a)$ at $a=1$. The scale symmetry is $\relu(ca)=c\,\relu(a)$ ($c\gt0$).</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-7">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 14.8: Linear networks and narrow layers (computation and derivation)</p>
+<p>(1) For a 2–3–1 network whose activation functions are all the identity map, let $\bm{W}^{(1)}=\begin{pmatrix}1&2\\0&1\\-1&1\end{pmatrix}$, $\bm{b}^{(1)}=(1,0,-1)^{\tp}$, $\bm{W}^{(2)}=(1,\,-1,\,2)$, $b^{(2)}=0.5$. Using Eq. \eqref{eq:14-collapse}, find the single-layer $\bm{W}$ and $\bm{b}$ that do the same job. (2) For a 3–1–3 network whose activation functions are the identity map (the width of the middle layer is 1), show that the composed $3\times3$ matrix $\bm{W}^{(2)}\bm{W}^{(1)}$ has rank at most 1. (3) (2) is an example in which “stacking layers reduces what can be represented.” What can this structure, which passes the input through a narrow layer and restores it, be used for?</p>
+<p><em>Hint:</em> For (2), use the fact that $\bm{W}^{(2)}\bm{W}^{(1)}$ is the product of a $3\times1$ matrix and a $1\times3$ matrix. For (3), see Chapter 18 (PCA and autoencoders).</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-14-8">→ Solution</a></p>
+</div>
+
+<h3>14.11.4 References</h3>
+<div class="refs">
+<ol>
+<li>C. M. Bishop, <em>Pattern Recognition and Machine Learning</em>, Springer (2006) (Chapter 5 treats the construction and training of neural networks).</li>
+<li>I. Goodfellow, Y. Bengio, A. Courville, <em>Deep Learning</em>, MIT Press (2016) (Chapter 6 treats feed-forward networks, output layers and losses, and activation functions. The full text can be read on the authors' website, deeplearningbook.org).</li>
+<li>G. Cybenko, "Approximation by superpositions of a sigmoidal function", <em>Mathematics of Control, Signals and Systems</em> <strong>2</strong>, 303–314 (1989), doi:10.1007/BF02551274 (the universal approximation theorem for continuous sigmoidal activation functions).</li>
+<li>K. Hornik, M. Stinchcombe, H. White, "Multilayer feedforward networks are universal approximators", <em>Neural Networks</em> <strong>2</strong>, 359–366 (1989), doi:10.1016/0893-6080(89)90020-8 (the universal approximation theorem for monotone squashing functions).</li>
+<li>M. Leshno, V. Ya. Lin, A. Pinkus, S. Schocken, "Multilayer feedforward networks with a nonpolynomial activation function can approximate any function", <em>Neural Networks</em> <strong>6</strong>, 861–867 (1993), doi:10.1016/S0893-6080(05)80131-5 (showed that for locally bounded, piecewise continuous activation functions, being nonpolynomial is necessary and sufficient).</li>
+<li>R. Eldan, O. Shamir, "The Power of Depth for Feedforward Neural Networks", <em>Proceedings of the 29th Annual Conference on Learning Theory</em>, PMLR <strong>49</strong>, 907–940 (2016) (functions that can be represented with two hidden layers but, with one hidden layer, require a width exponential in the input dimension).</li>
+<li>M. Telgarsky, "Benefits of depth in neural networks", <em>Proceedings of the 29th Annual Conference on Learning Theory</em>, PMLR <strong>49</strong>, 1517–1539 (2016) (functions that can be represented by deep networks but require exponentially many units in shallow networks).</li>
+<li>M. Minsky, S. Papert, <em>Perceptrons: An Introduction to Computational Geometry</em>, MIT Press (1969) (an analysis of the limits of the single-layer perceptron; an expanded edition appeared in 1988).</li>
+<li>D. Hendrycks, K. Gimpel, "Gaussian Error Linear Units (GELUs)", arXiv:1606.08415 (2016) (the proposal of GELU).</li>
+<li>J. Behler, M. Parrinello, "Generalized neural-network representation of high-dimensional potential-energy surfaces", <em>Physical Review Letters</em> <strong>98</strong>, 146401 (2007), doi:10.1103/PhysRevLett.98.146401 (a network that represents the potential energy surface by the sum of per-atom energies).</li>
+<li>J. Behler, "Atom-centered symmetry functions for constructing high-dimensional neural network potentials", <em>The Journal of Chemical Physics</em> <strong>134</strong>, 074106 (2011), doi:10.1063/1.3553717 (symmetry functions that represent the environment of an atom).</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch13_bayesian_optimization.html">← Chapter 13: Bayesian Optimization and Experimental Design — Where to Measure Next</a>
+  <span class="spacer"></span>
+  <a href="ch15_backpropagation.html">Chapter 15: Backpropagation and Learning — Distributing Gradients with the Chain Rule →</a>
+</nav>
+</main>
+</body>
+</html>

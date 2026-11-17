@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neural Network Simulator — Forward Propagation, Backpropagation, and Training</title>
+<meta name="description" content="A simulator that follows forward propagation, backpropagation, and the weight update of a 2–2–1 network numerically, lets you vary the number of hidden units, the activation function, and the learning rate to watch training and the learned basis functions, and checks the backpropagation gradient against central differences.">
+<!-- 発展教材「機械学習 — 確率から GPT まで」第14・15章のシミュレーター S05．
+     配色・角丸・フォントは望月研究室サイトに合わせてあります．スタイルはすべて #qsim 配下にスコープしてあります．
+     外部リソースは一切使いません（file:// でも動きます）．数式はブラウザ標準の MathML です． -->
+<link rel="stylesheet" href="lib/mlsim.css">
+<style>
+#qsim .stagebtns .btn { font-size: .8rem; }
+#qsim .stagebtns .btn.done { background: var(--accent-soft); }
+#qsim .tablewrap.tall { max-height: 26em; overflow-y: auto; }
+#qsim table.grid td.l, #qsim table.grid th.l { text-align: left; }
+#qsim table.grid td.eqc { text-align: left; color: var(--sub); font-size: .74rem; }
+#qsim table.grid tr.sec td { background: var(--panel-soft); font-weight: 700; text-align: left; color: #15202b; }
+#qsim table.grid tr.hi td { background: #fdf5e3; }
+#qsim .steplist { font-size: .78rem; color: var(--sub); margin: 6px 0 0; padding-left: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 12px; }
+#qsim .steplist li::before { content: counter(list-item) ". "; }
+#qsim [data-role=stepTrace] { margin-bottom: 12px; }
+#qsim .steplist li.now { color: var(--accent-strong); font-weight: 700; }
+#qsim .steplist li.done { color: var(--fg); }
+#qsim .basisstage[hidden] { display: none; }
+#qsim table.grid td { white-space: nowrap; }
+#qsim .narrowonly { display: none; }
+@media (max-width: 480px) { #qsim table.grid .eqc, #qsim table.grid .absc { display: none; } #qsim .narrowonly { display: block; } #qsim table.grid { font-size: .74rem; } }
+</style>
+</head>
+<body>
+<div id="qsim">
+  <h1>Neural Network — Forward Propagation, Backpropagation, and Training</h1>
+  <p class="lead">With a small network, follow one step at a time, with numbers, the forward pass that computes the output from the input, backpropagation that distributes the gradient of the loss from the output side, and the update that moves the weights along the gradient. Next, change the number of hidden units, the activation function, the learning rate, the minibatch, and the weight decay to observe how training proceeds and the “basis functions that move to fit the data,” and finally check that the backpropagation gradient agrees with the finite-difference approximation.</p>
+
+  <div class="tabs" role="tablist" aria-label="Switch simulator">
+    <button class="tab is-active" data-tab="trace" role="tab" type="button">① Following One Step Numerically</button>
+    <button class="tab" data-tab="train" role="tab" type="button">② Watching Training</button>
+    <button class="tab" data-tab="gradcheck" role="tab" type="button">③ Gradient Check</button>
+  </div>
+
+  <!-- ① trace：2–2–1 の 1 ステップ -->
+  <section class="panel" data-panel="trace">
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">A 2–2–1 network (hidden layer tanh, output sigmoid, cross-entropy loss)</p>
+        <p class="psub">Press “Forward,” “Backward,” and “Update weights” below the figure in order; numbers are added to the figure and the table as you go.</p>
+        <div class="stage">
+          <canvas data-role="cvNet"></canvas>
+          <div data-role="lgNet"></div>
+          <p class="cap" data-role="capNet">The circles are the input <i>x</i><sub><i>i</i></sub>, the hidden units h<sub><i>j</i></sub>, and the output. “<i>w</i>” beside a line is the weight (input <i>i</i> → hidden <i>j</i> is <i>W</i><sup>(1)</sup><sub><i>ji</i></sub>; hidden <i>j</i> → output is <i>W</i><sup>(2)</sup><sub><i>j</i></sub>), and “∂<i>L</i>/∂<i>w</i>” is its gradient. Because the bias gradient is ∂<i>L</i>/∂<i>b</i> = <i>δ</i>, only <i>δ</i> is written. Numbers in the figure have 4 significant digits; the table below has 6.</p>
+        </div>
+        <div class="controls" data-role="stepTrace"></div>
+        <div class="info">
+          <h3>Substituting the current numbers into the formulas</h3>
+          <div class="eq left" data-role="eqTrace" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>Table of values (6 significant digits)</h3>
+          <div class="tablewrap" data-role="tblTrace"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlTrace"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readTrace" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② train：学習を見る -->
+  <section class="panel" data-panel="train" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle" data-role="titleFit">Prediction curve and training data</p>
+        <p class="psub" data-role="subFit">“Run” advances training. One epoch is the set of updates needed to use every training data point once.</p>
+        <div class="stage">
+          <canvas data-role="cvFit"></canvas>
+          <div data-role="lgFit"></div>
+          <p class="cap" data-role="capFit"></p>
+        </div>
+        <div class="stage">
+          <canvas data-role="cvLoss"></canvas>
+          <div data-role="lgLoss"></div>
+          <p class="cap" data-role="capLoss"></p>
+        </div>
+        <div class="stage basisstage" data-role="basisStage">
+          <canvas data-role="cvBasis"></canvas>
+          <div data-role="lgBasis"></div>
+          <p class="cap" data-role="capBasis"></p>
+        </div>
+        <div class="info">
+          <h3>Substituting the current numbers into the formulas</h3>
+          <div class="eq left" data-role="eqTrain" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlTrain"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readTrain" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ gradcheck：勾配確認 -->
+  <section class="panel" data-panel="gradcheck" hidden>
+    <div class="layout">
+      <div class="col-main">
+        <p class="ptitle">Finite-difference step <i>ε</i> and the difference from the backpropagation gradient</p>
+        <p class="psub">For all parameters, the largest difference between the backpropagation gradient and the finite-difference approximation is plotted as a function of <i>ε</i>.</p>
+        <div class="stage">
+          <canvas data-role="cvV"></canvas>
+          <div data-role="lgV"></div>
+          <p class="cap" data-role="capV"></p>
+        </div>
+        <div class="info">
+          <h3>Substituting the current numbers into the formulas</h3>
+          <div class="eq left" data-role="eqGC" aria-live="polite"></div>
+        </div>
+        <div class="info">
+          <h3>Comparison of all parameters (at the current <i>ε</i>)</h3>
+          <div class="tablewrap tall" data-role="tblGC"></div>
+        </div>
+      </div>
+      <div class="col-side">
+        <div class="controls" data-role="ctlGC"></div>
+        <div class="info">
+          <h3>Readout</h3>
+          <div data-role="readGC" aria-live="polite"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <noscript><div class="noscript">The interactive part of this page runs on JavaScript. Because JavaScript is disabled, the figures and controls are not shown. The explanation below (procedure, formulas, conditions, questions) can still be read. The main text is available in <a href="../ch15_backpropagation.html#sec15-3" target="_top">Chapter 15, Section 15.3</a> and <a href="../ch14_neural_networks.html#sec14-5" target="_top">Chapter 14, Section 14.5</a>.</div></noscript>
+
+  <section class="about">
+    <details class="aboutfold" open>
+      <summary>About this simulator (procedure, formulas, conditions, questions)</summary>
+
+      <h2>Procedure and What to Observe</h2>
+      <ol>
+        <li>In ①, press “Forward.” <span class="look">What to look at: <i>a</i><sup>(1)</sup> = (0.45, 0.8), <i>z</i><sup>(1)</sup> = (0.421899, 0.664037), <i>a</i><sup>(2)</sup> = −0.0421378, <i>ŷ</i> = 0.489467, <i>L</i> = 0.714438. Although <i>y</i> = 1, <i>ŷ</i> is below 0.5, so the loss is a little larger than ln 2 ≈ 0.693.</span></li>
+        <li>Press “Backward.” <span class="look">What to look at: the output error <i>δ</i><sup>(2)</sup> = <i>ŷ</i> − <i>y</i> = −0.510533 is multiplied by the weights <i>W</i><sup>(2)</sup> = (1.0, −1.0) and the tanh slope 1 − <i>z</i><sup>2</sup> and distributed to the hidden layer, giving <i>δ</i><sup>(1)</sup> = (−0.419659, 0.285416). The sign of <i>δ</i> for hidden unit 2 is reversed because <i>W</i><sup>(2)</sup><sub>2</sub> is negative.</span></li>
+        <li>Press “Update weights.” <span class="look">What to look at: each weight moves by −<i>η</i>∂<i>L</i>/∂<i>w</i>, and the loss falls from 0.714438 to 0.343888. If you repeat from “Forward” again, the loss falls further.</span></li>
+        <li>In ①, set the learning rate <i>η</i> to 5 and do the same. Next set <i>y</i> = 0. <span class="look">What to look at: when <i>η</i> is large, a single update overshoots. Changing <i>y</i> flips the sign of <i>δ</i><sup>(2)</sup>, and the signs of all gradients reverse.</span></li>
+        <li>In ②, press “Run” with the task left at “Regression (Data A),” and change the number of hidden units <i>H</i> to 1, 3, and 8. <span class="look">What to look at: in the lower figure, the hidden-unit outputs <i>z</i><sub><i>j</i></sub>(<i>s</i>) are “moving basis functions” whose positions and slopes change as training proceeds. Switching to “Contribution” shows that their superposition is the prediction curve above. Data A is smooth, so with the default seed the training RMSE after 2000 epochs is 0.945, 0.927, and 0.919 % for <i>H</i> = 1, 3, and 8, about the noise standard deviation of 1 %, and the validation RMSE (1.24, 1.24, 1.22 %) hardly changes either. Increasing <i>H</i> increases the shapes that can be represented, but this data does not need them.</span></li>
+        <li>In ②, set the task to “Concentric circles” and train for about 2000 epochs (default <i>H</i> = 3). <span class="look">What to look at: the training loss keeps falling (0.0153 at 2000 epochs), but the validation loss reaches its minimum of 0.104 at epoch 806 and then starts to rise, reaching 0.360 at 2000 epochs (overfitting). Stopping at the epoch of minimum validation loss (◆) is early stopping. With <i>H</i> = 4 and the weight decay <i>λ</i> set to 0, 10<sup>−3</sup>, and 10<sup>−2</sup>, the validation loss at 2000 epochs is 0.342, 0.218, and 0.308; when <i>λ</i> is too large, the training loss also stops falling (0.0129, 0.0488, 0.214).</span></li>
+        <li>In ②, set the learning rate near its maximum and the minibatch to 1. <span class="look">What to look at: the loss oscillates, and when it diverges the computation stops and the reason is displayed.</span> Set “Initial value” to “All 0” and run. <span class="look">What to look at: with tanh the weights stay at 0 and do not move, and the prediction is a constant (the mean of the training data). With sigmoid the weights do move, but every hidden unit keeps the same value, so increasing <i>H</i> does not increase the shapes that can be represented (symmetry).</span></li>
+        <li>In ③, vary <i>ε</i> from 10<sup>−12</sup> to 10<sup>−1</sup>. <span class="look">What to look at: the error of the central difference is smallest (about 10<sup>−12</sup>) near <i>ε</i> ≈ 10<sup>−5</sup>; if <i>ε</i> is made too small the error grows because of rounding error, and if it is made too large the error grows because of truncation error (a V shape). On the large-<i>ε</i> side, the central-difference error grows with slope 2 and the forward difference with slope 1.</span></li>
+      </ol>
+      <p>From the keyboard, Tab moves to the buttons and sliders, Enter (or Space) presses them, and the arrow keys move a slider. The tabs can be switched with ← and →.</p>
+
+      <h2>Formulas and Algorithm</h2>
+      <p>A network with one hidden layer and one output. Input <i>x</i> ∈ ℝ<sup><i>D</i></sup>, number of hidden units <i>H</i>, <i>W</i><sup>(1)</sup> ∈ ℝ<sup><i>H</i>×<i>D</i></sup>, <i>W</i><sup>(2)</sup> ∈ ℝ<sup>1×<i>H</i></sup>, activation function <i>h</i>(·) (tanh, ReLU, sigmoid).</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.55em"><mtr><mtd><msup><mi mathvariant="bold-italic">a</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mi mathvariant="bold-italic">x</mi><mo>+</mo><msup><mi mathvariant="bold-italic">b</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>,</mo><mspace width="1em"/><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><mi>h</mi><mo stretchy="false">(</mo><msup><mi mathvariant="bold-italic">a</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">)</mo><mo>,</mo><mspace width="1em"/><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>+</mo><msup><mi>b</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup></mtd></mtr><mtr><mtd><mover><mi>y</mi><mo>^</mo></mover><mo>=</mo><mi>σ</mi><mo stretchy="false">(</mo><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">)</mo><mo>=</mo><mfrac><mn>1</mn><mrow><mn>1</mn><mo>+</mo><msup><mi>e</mi><mrow><mo>−</mo><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup></mrow></msup></mrow></mfrac><mspace width="0.6em"/><mtext>(classification)</mtext><mo>,</mo><mspace width="1em"/><mover><mi>y</mi><mo>^</mo></mover><mo>=</mo><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mspace width="0.6em"/><mtext>(regression)</mtext></mtd></mtr></mtable></math></div>
+      <p>The loss for one data point is the cross-entropy for classification (<i>y</i> ∈ {0, 1}) and half the squared error for regression. To avoid ln 0, the classification loss computes ln(1 + <i>e</i><sup><i>a</i></sup>) in a form that does not overflow.</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.55em"><mtr><mtd><mi>ℓ</mi><mo>=</mo><mo>−</mo><mrow><mo>[</mo><mi>y</mi><mi>ln</mi><mover><mi>y</mi><mo>^</mo></mover><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>y</mi><mo stretchy="false">)</mo><mi>ln</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mover><mi>y</mi><mo>^</mo></mover><mo stretchy="false">)</mo><mo>]</mo></mrow><mo>=</mo><mi>ln</mi><mo stretchy="false">(</mo><mn>1</mn><mo>+</mo><msup><mi>e</mi><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup></msup><mo stretchy="false">)</mo><mo>−</mo><mi>y</mi><msup><mi>a</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>,</mo><mspace width="1.2em"/><mi>ℓ</mi><mo>=</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><msup><mrow><mo stretchy="false">(</mo><mover><mi>y</mi><mo>^</mo></mover><mo>−</mo><mi>y</mi><mo stretchy="false">)</mo></mrow><mn>2</mn></msup></mtd></mtr><mtr><mtd><mi>L</mi><mo>=</mo><mfrac><mn>1</mn><mrow><mo stretchy="false">|</mo><mi>ℬ</mi><mo stretchy="false">|</mo></mrow></mfrac><munder><mo>∑</mo><mrow><mi>n</mi><mo>∈</mo><mi>ℬ</mi></mrow></munder><msub><mi>ℓ</mi><mi>n</mi></msub><mo>+</mo><mfrac><mi>λ</mi><mn>2</mn></mfrac><mrow><mo>(</mo><msup><mrow><mo>‖</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>‖</mo></mrow><mn>2</mn></msup><mo>+</mo><msup><mrow><mo>‖</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>‖</mo></mrow><mn>2</mn></msup><mo>)</mo></mrow></mtd></mtr></mtable></math></div>
+      <p>ℬ is the minibatch (a set of data indices) and <i>λ</i> is the weight-decay coefficient (not applied to the biases). Backpropagation finds <i>δ</i> ≡ ∂<i>ℓ</i>/∂<i>a</i> in order from the output side.</p>
+      <div class="eq"><math display="block"><mtable columnalign="left" rowspacing="0.55em"><mtr><mtd><msup><mi>δ</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><mover><mi>y</mi><mo>^</mo></mover><mo>−</mo><mi>y</mi><mo>,</mo><mspace width="1em"/><msup><mi mathvariant="bold-italic">δ</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><msup><mi>h</mi><mo>′</mo></msup><mo stretchy="false">(</mo><msup><mi mathvariant="bold-italic">a</mi><mrow><mo stretchy="false">(</mo><mn>1</mn><mo stretchy="false">)</mo></mrow></msup><mo stretchy="false">)</mo><mo>⊙</mo><mrow><mo>(</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo><mi>T</mi></mrow></msup><msup><mi>δ</mi><mrow><mo stretchy="false">(</mo><mn>2</mn><mo stretchy="false">)</mo></mrow></msup><mo>)</mo></mrow></mtd></mtr><mtr><mtd><mfrac><mrow><mo>∂</mo><mi>ℓ</mi></mrow><mrow><mo>∂</mo><msup><mi mathvariant="bold-italic">W</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup></mrow></mfrac><mo>=</mo><msup><mi mathvariant="bold-italic">δ</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi>T</mi></mrow></msup><mo>,</mo><mspace width="1em"/><mfrac><mrow><mo>∂</mo><mi>ℓ</mi></mrow><mrow><mo>∂</mo><msup><mi mathvariant="bold-italic">b</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup></mrow></mfrac><mo>=</mo><msup><mi mathvariant="bold-italic">δ</mi><mrow><mo stretchy="false">(</mo><mi>l</mi><mo stretchy="false">)</mo></mrow></msup><mo>,</mo><mspace width="1em"/><msup><mi mathvariant="bold-italic">z</mi><mrow><mo stretchy="false">(</mo><mn>0</mn><mo stretchy="false">)</mo></mrow></msup><mo>=</mo><mi mathvariant="bold-italic">x</mi></mtd></mtr><mtr><mtd><msup><mi>h</mi><mo>′</mo></msup><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo>=</mo><mn>1</mn><mo>−</mo><msup><mi>tanh</mi><mn>2</mn></msup><mi>a</mi><mspace width="0.5em"/><mtext>(tanh)</mtext><mo>,</mo><mspace width="0.8em"/><mi>σ</mi><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo stretchy="false">[</mo><mn>1</mn><mo>−</mo><mi>σ</mi><mo stretchy="false">(</mo><mi>a</mi><mo stretchy="false">)</mo><mo stretchy="false">]</mo><mspace width="0.5em"/><mtext>(sigmoid)</mtext><mo>,</mo><mspace width="0.8em"/><mn>1</mn><mspace width="0.3em"/><mo stretchy="false">(</mo><mi>a</mi><mo>&gt;</mo><mn>0</mn><mo stretchy="false">)</mo><mo>,</mo><mspace width="0.3em"/><mn>0</mn><mspace width="0.3em"/><mo stretchy="false">(</mo><mi>a</mi><mo>≤</mo><mn>0</mn><mo stretchy="false">)</mo><mspace width="0.5em"/><mtext>(ReLU)</mtext></mtd></mtr></mtable></math></div>
+      <p>The minibatch gradient is the mean of the per-sample gradients plus <i>λ</i><i>W</i>. The update is gradient descent <i>w</i> ← <i>w</i> − <i>η</i> ∂<i>L</i>/∂<i>w</i> (<i>η</i> is the learning rate). At the start of each epoch the order of the training data is shuffled randomly, and the weights are updated for each minibatch of size <i>B</i> (with “All,” one update per epoch).</p>
+      <p>In the gradient check in ③, from the loss with each parameter <i>w</i> alone moved by ±<i>ε</i></p>
+      <div class="eq"><math display="block"><mrow><mfrac><mrow><mo>∂</mo><mi>L</mi></mrow><mrow><mo>∂</mo><mi>w</mi></mrow></mfrac><mo>≈</mo><mfrac><mrow><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo>+</mo><mi>ε</mi><mo stretchy="false">)</mo><mo>−</mo><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo>−</mo><mi>ε</mi><mo stretchy="false">)</mo></mrow><mrow><mn>2</mn><mi>ε</mi></mrow></mfrac><mspace width="0.5em"/><mtext>(central difference; error </mtext><mi>O</mi><mo stretchy="false">(</mo><msup><mi>ε</mi><mn>2</mn></msup><mo stretchy="false">)</mo><mtext>)</mtext><mo>,</mo><mspace width="1em"/><mfrac><mrow><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo>+</mo><mi>ε</mi><mo stretchy="false">)</mo><mo>−</mo><mi>L</mi><mo stretchy="false">(</mo><mi>w</mi><mo stretchy="false">)</mo></mrow><mi>ε</mi></mfrac><mspace width="0.5em"/><mtext>(forward difference; error </mtext><mi>O</mi><mo stretchy="false">(</mo><mi>ε</mi><mo stretchy="false">)</mo><mtext>)</mtext></mrow></math></div>
+      <p>we form these and compare them with the backpropagation value. The per-component relative error is |<i>g</i><sub>backprop</sub> − <i>g</i><sub>diff</sub>| / max(|<i>g</i><sub>backprop</sub>|, |<i>g</i><sub>diff</sub>|, 10<sup>−8</sup>), and the relative error as a vector is ‖<i>g</i><sub>backprop</sub> − <i>g</i><sub>diff</sub>‖ / max(‖<i>g</i><sub>backprop</sub>‖, ‖<i>g</i><sub>diff</sub>‖).</p>
+
+      <h2>Data and Random-Number Conditions</h2>
+      <ul>
+        <li>① uses one data point (default <i>x</i> = (1.0, 0.5), <i>y</i> = 1) and the same weights as Chapter 15, Section 15.3 of the main text: <i>W</i><sup>(1)</sup> = ((0.5, −0.3), (0.8, 0.2)) (the first row is hidden unit 1), <i>b</i><sup>(1)</sup> = (0.1, −0.1), <i>W</i><sup>(2)</sup> = (1.0, −1.0), <i>b</i><sup>(2)</sup> = 0.2, and learning rate <i>η</i> = 0.5. No random numbers are used.</li>
+        <li>The regression in ② uses <strong>synthetic data for teaching purposes</strong>, “Data A (firing temperature and relative density)”: <i>s</i> ~ U(−1, 1), firing temperature <i>T</i> = 1300 °C + 200 °C × <i>s</i>, relative density <i>y</i> = <i>g</i>(<i>s</i>) + <i>ε</i>, <i>g</i>(<i>s</i>) = 88 + 8<i>s</i> − 5<i>s</i><sup>2</sup> + 2 sin 3<i>s</i> (%), <i>ε</i> ~ 𝒩(0, 1.0<sup>2</sup>) (%). The number of training data points is 5 to 50 (default 20). Training uses the targets standardized by the training mean <i>ȳ</i> and standard deviation <i>s</i><sub><i>y</i></sub>, (<i>y</i> − <i>ȳ</i>)/<i>s</i><sub><i>y</i></sub>, and the figure is drawn after converting back to % (the loss is in standardized units). This is not data of a real material.</li>
+        <li>The classification in ② also uses <strong>synthetic data for teaching purposes</strong> (dimensionless 2D points, with <i>y</i> ∈ {0, 1} in equal halves). Concentric circles: add 𝒩(0, 0.1<sup>2</sup>) to a radius of 1.0 (<i>y</i> = 0) or 0.5 (<i>y</i> = 1), with the angle uniform. Two moons: <i>y</i> = 0 is (cos <i>t</i>, sin <i>t</i>) and <i>y</i> = 1 is (1 − cos <i>t</i>, 0.5 − sin <i>t</i>), <i>t</i> ~ U(0, π); subtract (0.5, 0.25) and add 𝒩(0, 0.1<sup>2</sup>) to each coordinate. XOR: centers (±0.5, ±0.5), the quadrants with <i>x</i><sub>1</sub><i>x</i><sub>2</sub> &gt; 0 are <i>y</i> = 1, and 𝒩(0, 0.2<sup>2</sup>) is added to each coordinate. The number of training data points is 40 to 200 (default 100).</li>
+        <li>The validation data are a separate 200 points from the same distribution as the training data (a separate random-number stream). Changing the number of training data points does not change the validation data.</li>
+        <li>The random numbers come from a seeded generator (mulberry32). The “data seed” (default 20261112) determines the training and validation data, and the “random-number seed” (default 20261112) determines the initial weights and the minibatch order. Starting over with the same seed gives the same training history.</li>
+        <li>Initial values: for tanh and sigmoid, the Xavier (Glorot) normal distribution (variance 2/(fan<sub>in</sub> + fan<sub>out</sub>)); for ReLU, the He normal distribution (variance 2/fan<sub>in</sub>); the output layer uses Xavier; biases are 0. “All 0” can also be selected.</li>
+        <li>Computational limits: 16 hidden units and 5000 epochs. The <i>ε</i> figure in ③ has 34 points from 10<sup>−12</sup> to 10<sup>−1</sup>.</li>
+      </ul>
+
+      <h2>Simplifications</h2>
+      <ul>
+        <li>There is one hidden layer and one output (multiclass softmax is not treated).</li>
+        <li>The only optimizer is plain (stochastic) gradient descent. Momentum, Adam, learning-rate decay, and dropout are not used.</li>
+        <li>The training mean and standard deviation are used to standardize the regression targets (no information from the validation data is used).</li>
+        <li>The numbers in the figure of ① are rounded to 4 significant digits for display (the computation is in double precision; the table has 6 digits).</li>
+      </ul>
+
+      <h2>Conditions Under Which Results Become Unstable</h2>
+      <ul>
+        <li>When the learning rate is large, the loss oscillates and diverges. When the loss becomes NaN or infinite, or exceeds 10<sup>6</sup>, training stops and the reason is displayed. The smaller the minibatch, the larger the scatter of the gradient, and the more easily training becomes unstable even at the same learning rate.</li>
+        <li>When sigmoid is used in the hidden layer and the input weights grow large, <i>h</i>′ ≤ 1/4 becomes small and training slows down (the entrance to vanishing gradients). With ReLU, a unit that stays at <i>a</i> ≤ 0 has gradient 0 and no longer moves.</li>
+        <li>If the training data in classification can be separated perfectly, then without weight decay the weights keep growing and the training loss keeps approaching 0. The validation loss may rise (overfitting).</li>
+        <li>In the gradient check, if <i>ε</i> is made too small, the difference of <i>L</i>(<i>w</i> ± <i>ε</i>) is buried in rounding error (about 10<sup>−16</sup> × <i>L</i>). For components whose gradient is inherently close to 0, the per-component relative error looks large (judge by the relative error as a vector). For an <i>ε</i> that straddles the ReLU kink <i>a</i> = 0, the difference is not the correct derivative.</li>
+        <li>If the initial values are all 0, then with tanh and ReLU, <i>z</i><sup>(1)</sup> = <i>h</i>(0) = 0 gives ∂<i>L</i>/∂<i>W</i><sup>(2)</sup> = 0, and <i>W</i><sup>(2)</sup> = 0 gives <i>δ</i><sup>(1)</sup> = 0, so none of the weights move (only <i>b</i><sup>(2)</sup> moves, and the prediction is a constant). With sigmoid, <i>W</i><sup>(1)</sup> moves, but every hidden unit keeps the same value.</li>
+      </ul>
+
+      <h2>Related Sections of the Main Text</h2>
+      <ul>
+        <li><a href="../ch14_neural_networks.html#sec14-3" target="_top">Chapter 14, Section 14.3 Layers and Matrix Shapes</a></li>
+        <li><a href="../ch14_neural_networks.html#sec14-4" target="_top">Chapter 14, Section 14.4 Why Nonlinearity Is Needed</a> (XOR)</li>
+        <li><a href="../ch14_neural_networks.html#sec14-5" target="_top">Chapter 14, Section 14.5 Models That Learn Basis Functions</a> (the lower figure in ②)</li>
+        <li><a href="../ch14_neural_networks.html#sec14-6" target="_top">Chapter 14, Section 14.6 Output Layer and Loss</a> (<i>δ</i> = <i>ŷ</i> − <i>y</i>)</li>
+        <li><a href="../ch15_backpropagation.html#sec15-2" target="_top">Chapter 15, Section 15.2 Derivation of Backpropagation</a></li>
+        <li><a href="../ch15_backpropagation.html#sec15-3" target="_top">Chapter 15, Section 15.3 Following the Numbers</a> (①)</li>
+        <li><a href="../ch15_backpropagation.html#sec15-4" target="_top">Chapter 15, Section 15.4 Gradient Check</a> (③)</li>
+        <li><a href="../ch15_backpropagation.html#sec15-5" target="_top">Chapter 15, Section 15.5 The Minibatch Learning Procedure</a> (②)</li>
+        <li><a href="../ch15_backpropagation.html#sec15-8" target="_top">Chapter 15, Section 15.8 Overfitting and Regularization</a> (weight decay, early stopping)</li>
+      </ul>
+
+      <h2>Short Questions to Answer After Operating</h2>
+      <ol>
+        <li>With the default values in ①, why are the signs of <i>δ</i><sup>(1)</sup> for hidden units 1 and 2 opposite? Also, why is ∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub>12</sub> exactly half of ∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub>11</sub>?
+          <details class="ans"><summary>Sample answers</summary><p><i>δ</i><sup>(1)</sup><sub><i>j</i></sub> = (1 − <i>z</i><sub><i>j</i></sub><sup>2</sup>) <i>W</i><sup>(2)</sup><sub><i>j</i></sub> <i>δ</i><sup>(2)</sup>, and 1 − <i>z</i><sup>2</sup> &gt; 0 and <i>δ</i><sup>(2)</sup> = −0.510533 are common to both, so the sign is determined by <i>W</i><sup>(2)</sup><sub><i>j</i></sub> = +1.0, −1.0 (−0.419659 and +0.285416). ∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub><i>ji</i></sub> = <i>δ</i><sup>(1)</sup><sub><i>j</i></sub> <i>x</i><sub><i>i</i></sub>, and <i>x</i><sub>2</sub>/<i>x</i><sub>1</sub> = 0.5/1.0 (−0.209829 = 0.5 × (−0.419659)).</p></details></li>
+        <li>In ①, one update changes the loss from 0.714438 to 0.343888. When <i>η</i> is made very small, what determines how much the loss decreases?
+          <details class="ans"><summary>Sample answers</summary><p>By the first-order Taylor expansion, <i>L</i>(<i>w</i> − <i>η</i><i>g</i>) ≈ <i>L</i> − <i>η</i>‖<i>g</i>‖<sup>2</sup>, so the decrease is proportional to the square of the gradient magnitude, ‖<i>g</i>‖<sup>2</sup> = 1.00151 (over all 9 parameters). The actual decrease at <i>η</i> = 0.5, 0.370550, is smaller than 0.5 × 1.00151 ≈ 0.501, so it deviates from the first-order approximation (<i>η</i> = 0.5 cannot be called “small”).</p></details></li>
+        <li>In ② with concentric circles, why does the validation loss rise while the training loss keeps falling? Where is it good to stop training?
+          <details class="ans"><summary>Sample answers</summary><p>Once the training data can be separated perfectly, the training loss keeps falling as the weights are enlarged to raise the confidence even for training points near the boundary, but if a validation point is misclassified with high confidence, the cross-entropy becomes large. Either stop at the epoch of minimum validation loss (◆ in the figure) (early stopping), or use the weight decay <i>λ</i> to keep the weights from growing.</p></details></li>
+        <li>In ③, when <i>ε</i> is made smaller, why does the error decrease up to a point and then increase beyond it?
+          <details class="ans"><summary>Sample answers</summary><p>The truncation error of the central difference is about (<i>ε</i><sup>2</sup>/6)|<i>L</i>‴| and decreases with <i>ε</i>, but <i>L</i>(<i>w</i> + <i>ε</i>) and <i>L</i>(<i>w</i> − <i>ε</i>) each carry a rounding error of about 10<sup>−16</sup> × <i>L</i>, and dividing it by 2<i>ε</i> makes the rounding error grow in proportion to 1/<i>ε</i>. The error is smallest near <i>ε</i> ≈ 10<sup>−5</sup>, where the two balance.</p></details></li>
+      </ol>
+    </details>
+  </section>
+
+  <p class="foot"><a href="../index.html" target="_top">Back to Machine Learning — From Probability to GPT (Contents)</a> | Main text: <a href="../ch14_neural_networks.html#sec14-5" target="_top">Chapter 14, Section 14.5</a>, <a href="../ch15_backpropagation.html#sec15-3" target="_top">Chapter 15, Section 15.3</a> | Equations are typeset in the browser’s native MathML (no external libraries).</p>
+</div>
+
+<script src="lib/mlcore.js"></script>
+<script src="lib/mlui.js"></script>
+<script src="neural-net.model.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.MLCore, U = window.MLUI, M = window.MLModels.NeuralNet;
+  var app = document.getElementById('qsim');
+  var col = U.colors, dash = U.dash, fmt = U.fmt, fx = U.fmtFix;
+  var DEFAULT_SEED = 20261112, DATA_SEED = 20261112;
+  var LIM = M.LIMITS;
+
+  /* ---- MathML の小道具 ---- */
+  function mi(s) { return '<mi>' + s + '</mi>'; }
+  function mo(s) { return '<mo>' + s + '</mo>'; }
+  /* 数：小数 3 桁以内で表せる値（入力・重みの既定値など）はそのまま，それ以外は有効数字 d 桁（既定 4） */
+  function mn(v, d) {
+    if (typeof v !== 'number') return '<mn>' + v + '</mn>';
+    var r = Math.round(v * 1000);
+    return '<mn>' + (Math.abs(v * 1000 - r) < 1e-7 * Math.max(1, Math.abs(r)) && Math.abs(v) < 1e5 ? U.mn(String(r / 1000)) : fmt(v, d || 4)) + '</mn>';
+  }
+  function mt(s) { return '<mtext>' + s + '</mtext>'; }
+  function frac(a, b) { return '<mfrac><mrow>' + a + '</mrow><mrow>' + b + '</mrow></mfrac>'; }
+  function row(s) { return '<mtr><mtd>' + s + '</mtd></mtr>'; }
+  function table(rows) { return '<math display="block"><mtable columnalign="left" rowspacing="0.6em">' + rows.join('') + '</mtable></math>'; }
+  function sp(w) { return '<mspace width="' + (w || '0.6em') + '"/>'; }
+  function lp(l) { return '<mrow><mo stretchy="false">(</mo><mn>' + l + '</mn><mo stretchy="false">)</mo></mrow>'; }
+  function bsym(s, l, sub) { var b = '<mi mathvariant="bold-italic">' + s + '</mi>'; return l == null ? b : (sub ? '<msubsup>' + b + '<mrow>' + sub + '</mrow>' + lp(l) + '</msubsup>' : '<msup>' + b + lp(l) + '</msup>'); }
+  function ssym(s, l, sub) { var b = '<mi>' + s + '</mi>'; return sub ? '<msubsup>' + b + '<mrow>' + sub + '</mrow>' + lp(l) + '</msubsup>' : '<msup>' + b + lp(l) + '</msup>'; }
+  var YHAT = '<mover><mi>y</mi><mo>^</mo></mover>';
+  /* 式の途中で行を改める（幅の狭い画面で読めるように）．BRK は字下げつき，NL は字下げなし */
+  var NL = '</mtd></mtr><mtr><mtd>', BRK = NL + '<mspace width="1.5em"/>';
+  /* 列ベクトル・行列（数値） */
+  function vecM(v, d) { return '<mrow><mo>(</mo><mtable>' + v.map(function (x) { return '<mtr><mtd>' + mn(x, d) + '</mtd></mtr>'; }).join('') + '</mtable><mo>)</mo></mrow>'; }
+  function rowM(v, d) { return '<mrow><mo>(</mo><mtable><mtr>' + v.map(function (x) { return '<mtd>' + mn(x, d) + '</mtd>'; }).join('') + '</mtr></mtable><mo>)</mo></mrow>'; }
+  function matM(A, d) { return '<mrow><mo>(</mo><mtable>' + A.map(function (r) { return '<mtr>' + r.map(function (x) { return '<mtd>' + mn(x, d) + '</mtd>'; }).join('') + '</mtr>'; }).join('') + '</mtable><mo>)</mo></mrow>'; }
+  function paren(x) { return x < 0 ? mo('(') + mn(x) + mo(')') : mn(x); }
+  function kv(rows) { return '<table class="kv">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'; }
+  function f6(v) { return fmt(v, 6); }
+  /* 与えた値（入力・重みの既定値）は短く，計算した値は 6 桁 */
+  function g6(v) { var r = Math.round(v * 1000); return Math.abs(v * 1000 - r) < 1e-7 * Math.max(1, Math.abs(r)) ? U.mn(String(r / 1000)) : f6(v); }
+  function f4(v) { return fmt(v, 4); }
+  function num(v) { return U.mn(String(Math.round(v * 1000) / 1000)); }
+
+  /* ---- タブの間で共有する状態（③の勾配確認が①・②のネットワークを参照する） ---- */
+  var SH = {
+    trace: { net: null, x: M.TRACE_DEFAULT.x.slice(), y: M.TRACE_DEFAULT.y },
+    train: null,
+    listeners: []
+  };
+  SH.trace.net = M.makeNet(M.TRACE_DEFAULT.W1, M.TRACE_DEFAULT.b1, M.TRACE_DEFAULT.W2, M.TRACE_DEFAULT.b2, 'tanh', 'sigmoid');
+
+  /* =================================================================
+     ① trace：2–2–1 の 1 ステップ
+     ================================================================= */
+  function TraceSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var cv = q('cvNet'), ctl = q('ctlTrace');
+    var S = { x: M.TRACE_DEFAULT.x.slice(), y: M.TRACE_DEFAULT.y, eta: M.TRACE_DEFAULT.eta, stage: 0, k: 0, hist: [] };
+    var P0 = M.TRACE_DEFAULT;
+    var cur = { W1: P0.W1.map(function (r) { return r.slice(); }), b1: P0.b1.slice(), W2: P0.W2.slice(), b2: P0.b2 };
+    var T = null;   /* いまの重みでの trace の結果 */
+    var STAGES = ['Initial', 'Forward', 'Backward', 'Update weights'];
+    function recompute() { T = M.trace({ W1: cur.W1, b1: cur.b1, W2: cur.W2, b2: cur.b2, x: S.x, y: S.y, eta: S.eta }); SH.trace.net = T.net; SH.trace.x = S.x.slice(); SH.trace.y = S.y; }
+    recompute();
+    var redraw = function () { self.update(); };
+
+    var bF = U.button('Forward', function () {
+      if (S.stage === 3) { cur = { W1: T.net2.W1, b1: T.net2.b1, W2: T.net2.W2, b2: T.net2.b2 }; recompute(); }
+      S.stage = 1; redraw();
+    }, { title: 'Computes a⁽¹⁾, z⁽¹⁾, a⁽²⁾, ŷ, L' });
+    var bB = U.button('Backward', function () { if (S.stage === 1) { S.stage = 2; redraw(); } }, { title: 'Computes δ⁽²⁾, δ⁽¹⁾ and each gradient' });
+    var bU = U.button('Update weights', function () { if (S.stage === 2) { S.stage = 3; S.k++; S.hist.push([T.L, T.Ln]); redraw(); } }, { title: 'w ← w − η ∂L/∂w. Also computes the loss after the update' });
+    var bR = U.button('Return to the start', function () {
+      cur = { W1: P0.W1.map(function (r) { return r.slice(); }), b1: P0.b1.slice(), W2: P0.W2.slice(), b2: P0.b2 };
+      S.x = P0.x.slice(); S.y = P0.y; S.eta = P0.eta; S.stage = 0; S.k = 0; S.hist = [];
+      rX1.set(S.x[0], true); rX2.set(S.x[1], true); pY.set(String(S.y), true); rEta.set(S.eta, true);
+      recompute(); redraw();
+    }, { title: 'Resets the weights, input, and learning rate to the defaults (same as Section 15.3 of the text)' });
+    var steps = U.el('ol', 'steplist');
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+    function inputChanged() { S.stage = 0; recompute(); U.status(msg, 'The input, target, or learning rate changed, so the stage was reset to “Initial” with the current weights.', ''); redraw(); }
+    var rX1 = U.range({ label: 'Input <i>x</i><sub>1</sub>', min: LIM.traceX[0], max: LIM.traceX[1], step: 0.1, value: S.x[0], fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.x[0] = Math.round(v * 10) / 10; inputChanged(); } });
+    var rX2 = U.range({ label: 'Input <i>x</i><sub>2</sub>', min: LIM.traceX[0], max: LIM.traceX[1], step: 0.1, value: S.x[1], fmt: function (v) { return fx(v, 1); }, onInput: function (v) { S.x[1] = Math.round(v * 10) / 10; inputChanged(); } });
+    var pY = U.pills({ label: 'Target <i>y</i> (class)', options: [{ value: '1', label: '<i>y</i> = 1' }, { value: '0', label: '<i>y</i> = 0' }], value: '1', onChange: function (v) { S.y = +v; inputChanged(); } });
+    var rEta = U.range({ label: 'Learning rate <i>η</i>', min: 0.05, max: 5, step: 0.05, value: S.eta, fmt: function (v) { return fx(v, 2); }, onInput: function (v) { S.eta = Math.round(v * 100) / 100; inputChanged(); } });
+    var stp = q('stepTrace');
+    stp.appendChild(U.el('div', 'ctlhead', 'Advance the computation one stage at a time'));
+    stp.appendChild(U.buttonRow([bF, bB, bU, bR], 'stagebtns'));
+    stp.appendChild(steps);
+    stp.appendChild(msg);
+    ctl.appendChild(U.el('div', 'ctlhead', 'Input, target, learning rate'));
+    [rX1, rX2].forEach(function (r) { ctl.appendChild(r.el); });
+    ctl.appendChild(pY.el); ctl.appendChild(rEta.el);
+    ctl.appendChild(U.el('span', 'hint', 'Changing the input, target, or learning rate returns to the “Initial” stage with the current weights. “Return to the start” resets the weights to the defaults.'));
+
+    U.legendHTML(q('lgNet'), [
+      { label: 'Forward values (<i>a</i>, <i>z</i>, <i>ŷ</i>, <i>L</i>)', color: col.accent, width: 2.4 },
+      { label: 'Backward values (<i>δ</i>, ∂<i>L</i>/∂<i>w</i>)', color: col.orange, dash: dash.dashed, width: 2.4 },
+      { label: 'Values after the update (right of →)', color: col.green, dash: dash.dotted, width: 2.4 },
+      { label: 'Positive weight (solid) / negative weight (dashed); thickness is |<i>w</i>|', color: col.gray, width: 2 }]);
+
+    function drawNet() {
+      var F = U.fitCanvas(cv, { aspect: 0.62, minHeight: (cv.getBoundingClientRect().width || 600) < 480 ? 430 : 340, maxHeight: 440 }), c = F.c, W = F.W, Hc = F.H;
+      var narrow = W < 480, fs = narrow ? 10.5 : 11.5, r = narrow ? 15 : 19, lh = fs + 3;
+      var xin = narrow ? 30 : 60, xhid = W * 0.47, xout = W - (narrow ? 34 : 70);
+      var yA = Hc * (narrow ? 0.3 : 0.35), yB = Hc * (narrow ? 0.76 : 0.72), yO = Hc * 0.535;
+      var pin = [[xin, yA], [xin, yB]], phid = [[xhid, yA], [xhid, yB]], pout = [xout, yO];
+      var st = S.stage, net = T.net, net2 = T.net2;
+      var L = U.labeler(c, [2, 2, W - 2, Hc - 2]);
+      /* 線（重み）：正は実線，負は破線．太さ ∝ |w| */
+      function edge(p0, p1, w) {
+        c.save(); c.strokeStyle = w >= 0 ? 'rgba(31,35,40,.55)' : 'rgba(31,35,40,.55)'; c.lineWidth = 1 + 2.2 * Math.min(1.5, Math.abs(w));
+        c.setLineDash(w >= 0 ? [] : [6, 4]); c.beginPath(); c.moveTo(p0[0], p0[1]); c.lineTo(p1[0], p1[1]); c.stroke(); c.restore();
+      }
+      var j, i;
+      for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) edge(pin[i], phid[j], net.W1[j][i]);
+      for (j = 0; j < 2; j++) edge(phid[j], pout, net.W2[j]);
+      /* ŷ はフォントによって山形がずれるので，y を書いて山形を自分で描く．txt は左寄せで (x0, yc) に置く */
+      function hatText(txt, x0, yc, size, color, bold, halo) {
+        var t = txt.replace(/\u0177/g, 'y');
+        U.label(c, t, x0, yc, { size: size, color: color, align: 'left', bold: bold, halo: halo });
+        for (var k = txt.indexOf('\u0177'); k >= 0; k = txt.indexOf('\u0177', k + 1)) {
+          var xa = x0 + U.textWidth(c, t.slice(0, k), size, bold), wy = U.textWidth(c, 'y', size, bold), xm = xa + wy * 0.55, yt = yc - size * 0.42;
+          c.save(); c.strokeStyle = color; c.lineWidth = bold ? 1.4 : 1.1; c.beginPath(); c.moveTo(xm - size * 0.22, yt); c.lineTo(xm, yt - size * 0.22); c.lineTo(xm + size * 0.22, yt); c.stroke(); c.restore();
+        }
+      }
+      /* 丸 */
+      function node(p, txt, fill) {
+        c.save(); c.beginPath(); c.arc(p[0], p[1], r, 0, 2 * Math.PI); c.fillStyle = fill; c.fill(); c.lineWidth = 1.8; c.strokeStyle = col.ink; c.stroke(); c.restore();
+        hatText(txt, p[0] - U.textWidth(c, txt.replace(/\u0177/g, 'y'), fs + 1, true) / 2, p[1] + 1, fs + 1, col.ink, true, false);
+        L.block(p[0] - r - 2, p[1] - r - 2, p[0] + r + 2, p[1] + r + 2);
+      }
+      node(pin[0], 'x₁', '#f4f6f9'); node(pin[1], 'x₂', '#f4f6f9');
+      node(phid[0], 'h₁', '#e7eff7'); node(phid[1], 'h₂', '#e7eff7');
+      node(pout, st >= 1 ? 'ŷ' : 'out', '#eaf6ef');
+      /* 文字の塊（行の配列 [文字, 色]）を置く．dir：'up'（丸の上に積む）/'down'，align */
+      function block(lines, x, y, dir, align) {
+        var w = 0; lines.forEach(function (ln) { w = Math.max(w, U.textWidth(c, ln[0], fs, ln[2])); });
+        var h = lines.length * lh, x0 = align === 'left' ? x : align === 'right' ? x - w : x - w / 2;
+        x0 = Math.max(3, Math.min(W - 3 - w, x0));
+        var y0 = dir === 'up' ? y - h : y;
+        y0 = Math.max(3, Math.min(Hc - 3 - h, y0));
+        c.save(); c.fillStyle = 'rgba(255,255,255,.95)'; c.fillRect(x0 - 2, y0 - 2, w + 4, h + 3); c.restore();
+        lines.forEach(function (ln, k) { hatText(ln[0], x0, y0 + lh * (k + 0.5), fs, ln[1], !!ln[2]); });
+        L.block(x0 - 2, y0 - 1, x0 + w + 2, y0 + h + 1);
+      }
+      /* 入力 */
+      block([['x₁ = ' + fx(S.x[0], 1), col.ink, true]], pin[0][0] - r, pin[0][1] - r - 4, 'up', 'left');
+      block([['x₂ = ' + fx(S.x[1], 1), col.ink, true]], pin[1][0] - r, pin[1][1] + r + 4, 'down', 'left');
+      /* 隠れユニット */
+      for (j = 0; j < 2; j++) {
+        var lines = [];
+        lines.push([st === 3 ? 'b = ' + f4(net.b1[j]) + ' → ' + f4(net2.b1[j]) : 'b = ' + f4(net.b1[j]), st === 3 ? col.green : col.ink]);
+        if (st >= 1) lines.push(['a = ' + f4(T.a1[j]) + ', z = ' + f4(T.z1[j]), col.accent, true]);
+        if (st >= 2) lines.push(['δ = ' + f4(T.delta1[j]), col.orange, true]);
+        if (j === 0) block(lines,phid[j][0], phid[j][1] - r - 4, 'up', 'center');
+        else block(lines, phid[j][0], phid[j][1] + r + 4, 'down', 'center');
+      }
+      /* 出力 */
+      var up = [['y = ' + S.y, col.ink, true], [st === 3 ? 'b = ' + f4(net.b2) + ' → ' + f4(net2.b2) : 'b = ' + f4(net.b2), st === 3 ? col.green : col.ink]];
+      block(up, pout[0] + r, pout[1] - r - 4, 'up', 'right');
+      var dn = [];
+      if (st >= 1) { dn.push(['a = ' + f4(T.a2), col.accent]); dn.push(['ŷ = ' + f4(T.yhat), col.accent, true]); dn.push(['L = ' + f4(T.L) + (st === 3 ? ' → ' + f4(T.Ln) : ''), st === 3 ? col.green : col.accent, true]); }
+      if (st >= 2) dn.push([(narrow ? 'δ = ' : 'δ = ŷ − y = ') + f4(T.delta2), col.orange, true]);
+      if (dn.length) block(dn, pout[0] + r, pout[1] + r + 9, 'down', 'right');
+      /* 白い下地を敷いて線の上でも読めるようにする（置き場所は labeler が決める） */
+      function addBg(txt, x, y, o) {
+        var b = L.add(txt, x, y, o);
+        c.save(); c.fillStyle = 'rgba(255,255,255,.95)'; c.fillRect(b.r[0], b.r[1] + 1, b.r[2] - b.r[0], b.r[3] - b.r[1] - 2); c.restore();
+        U.label(c, txt, b.L, b.y, Object.assign({}, o, { align: 'left' }));
+        return b;
+      }
+      /* 線の脇の文字：重み（と勾配・更新後） */
+      function edgeLab(p0, p1, t, w, g, w2) {
+        var x = p0[0] + t * (p1[0] - p0[0]), y = p0[1] + t * (p1[1] - p0[1]);
+        var s1 = 'w = ' + f4(w) + (st === 3 ? ' → ' + f4(w2) : '');
+        var o1 = { size: fs - 0.5, color: st === 3 ? col.green : col.ink, bold: st === 3, dy: [0, -10, 10, -20, 20, -30, 30] };
+        var b1 = addBg(s1, x, y - (st >= 2 ? 7 : 0), o1);
+        if (st >= 2) addBg('∂L/∂w = ' + f4(g), b1.L + U.textWidth(c, s1, fs - 0.5, st === 3) / 2, b1.y + lh, { size: fs - 0.5, color: col.orange, dy: [0, 8, -8, 16, 24, -16, 32] });
+      }
+      var tt = narrow ? 0.24 : 0.32;
+      for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) edgeLab(pin[i], phid[j], (i === j) ? 0.5 : tt, net.W1[j][i], T.gW1[j][i], net2.W1[j][i]);
+      for (j = 0; j < 2; j++) edgeLab(phid[j], pout, narrow ? 0.2 : 0.4, net.W2[j], T.gW2[j], net2.W2[j]);
+      var stTxt = 'Stage: ' + STAGES[st] + ' (through update ' + S.k + ')';
+      U.label(c, stTxt, W - 6, 12, { size: fs - 0.5, color: col.sub, align: 'right' });
+      U.setCanvasLabel(cv, '2–2–1 network. Input x = (' + fx(S.x[0], 1) + ', ' + fx(S.x[1], 1) + '), target y = ' + S.y + '. Stage: ' + STAGES[st] + '. ' +
+        (st >= 1 ? 'Hidden-layer output z = (' + f4(T.z1[0]) + ', ' + f4(T.z1[1]) + '), output ŷ = ' + f4(T.yhat) + ', loss L = ' + f4(T.L) + '. ' : '') +
+        (st >= 2 ? 'Output error δ = ' + f4(T.delta2) + ', hidden-layer error δ = (' + f4(T.delta1[0]) + ', ' + f4(T.delta1[1]) + '). ' : '') +
+        (st === 3 ? 'Loss after the update ' + f4(T.Ln) + '.' : ''));
+    }
+
+    function tbl() {
+      var st = S.stage, h = '<p class="hint narrowonly">On narrow screens the “Formula” column is omitted (the formulas are in the box above).</p><table class="grid"><thead><tr><th class="l">Quantity</th><th>Value</th><th class="l eqc">Formula</th></tr></thead><tbody>';
+      function sec(t) { h += '<tr class="sec"><td colspan="3">' + t + '</td></tr>'; }
+      function r3(name, val, eq, hi) { h += '<tr' + (hi ? ' class="hi"' : '') + '><td class="l">' + name + '</td><td>' + val + '</td><td class="eqc">' + eq + '</td></tr>'; }
+      var n = T.net, n2 = T.net2, j, i;
+      sec('Input and weights (current values)');
+      r3('<i>x</i>', '(' + g6(S.x[0]) + ', ' + g6(S.x[1]) + ')', '<i>y</i> = ' + S.y + ', <i>η</i> = ' + num(S.eta));
+      for (j = 0; j < 2; j++) r3('<i>W</i><sup>(1)</sup><sub>' + (j + 1) + '·</sub>, <i>b</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', '(' + g6(n.W1[j][0]) + ', ' + g6(n.W1[j][1]) + '), ' + g6(n.b1[j]), 'Weights and bias into hidden unit ' + (j + 1));
+      r3('<i>W</i><sup>(2)</sup>, <i>b</i><sup>(2)</sup>', '(' + g6(n.W2[0]) + ', ' + g6(n.W2[1]) + '), ' + g6(n.b2), '');
+      if (st >= 1) {
+        sec('Forward');
+        for (j = 0; j < 2; j++) r3('<i>a</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.a1[j]), '<i>W</i><sub>' + (j + 1) + '1</sub><i>x</i><sub>1</sub> + <i>W</i><sub>' + (j + 1) + '2</sub><i>x</i><sub>2</sub> + <i>b</i><sub>' + (j + 1) + '</sub>');
+        for (j = 0; j < 2; j++) r3('<i>z</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.z1[j]), 'tanh <i>a</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>');
+        r3('<i>a</i><sup>(2)</sup>', f6(T.a2), '<i>W</i><sup>(2)</sup><i>z</i><sup>(1)</sup> + <i>b</i><sup>(2)</sup>');
+        r3('<i>ŷ</i>', f6(T.yhat), 'σ(<i>a</i><sup>(2)</sup>)');
+        r3('<i>L</i>', f6(T.L), S.y === 1 ? '−ln <i>ŷ</i>' : '−ln(1 − <i>ŷ</i>)', true);
+      }
+      if (st >= 2) {
+        sec('Backward');
+        r3('<i>δ</i><sup>(2)</sup>', f6(T.delta2), '<i>ŷ</i> − <i>y</i>');
+        for (j = 0; j < 2; j++) r3('<i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub><i>δ</i><sup>(2)</sup>', f6(T.backW2d[j]), 'Amount passed back from the output to hidden ' + (j + 1));
+        for (j = 0; j < 2; j++) r3('<i>h</i>′(<i>a</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>)', f6(T.dh[j]), '1 − <i>z</i><sub>' + (j + 1) + '</sub><sup>2</sup>');
+        for (j = 0; j < 2; j++) r3('<i>δ</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.delta1[j]), '<i>h</i>′ × <i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub><i>δ</i><sup>(2)</sup>');
+        for (j = 0; j < 2; j++) r3('∂<i>L</i>/∂<i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub>', f6(T.gW2[j]), '<i>δ</i><sup>(2)</sup><i>z</i><sub>' + (j + 1) + '</sub>');
+        r3('∂<i>L</i>/∂<i>b</i><sup>(2)</sup>', f6(T.gb2), '<i>δ</i><sup>(2)</sup>');
+        for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) r3('∂<i>L</i>/∂<i>W</i><sup>(1)</sup><sub>' + (j + 1) + (i + 1) + '</sub>', f6(T.gW1[j][i]), '<i>δ</i><sup>(1)</sup><sub>' + (j + 1) + '</sub><i>x</i><sub>' + (i + 1) + '</sub>');
+        for (j = 0; j < 2; j++) r3('∂<i>L</i>/∂<i>b</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(T.gb1[j]), '<i>δ</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>');
+      }
+      if (st >= 3) {
+        sec('Update (<i>w</i> ← <i>w</i> − <i>η</i> ∂<i>L</i>/∂<i>w</i>, <i>η</i> = ' + num(S.eta) + ') and forward pass after the update');
+        for (j = 0; j < 2; j++) for (i = 0; i < 2; i++) r3('<i>W</i><sup>(1)</sup><sub>' + (j + 1) + (i + 1) + '</sub>', f6(n2.W1[j][i]), g6(n.W1[j][i]) + ' → ');
+        for (j = 0; j < 2; j++) r3('<i>b</i><sup>(1)</sup><sub>' + (j + 1) + '</sub>', f6(n2.b1[j]), g6(n.b1[j]) + ' → ');
+        for (j = 0; j < 2; j++) r3('<i>W</i><sup>(2)</sup><sub>' + (j + 1) + '</sub>', f6(n2.W2[j]), g6(n.W2[j]) + ' → ');
+        r3('<i>b</i><sup>(2)</sup>', f6(n2.b2), g6(n.b2) + ' → ');
+        r3('<i>a</i><sup>(1)</sup> after the update', '(' + f6(T.a1n[0]) + ', ' + f6(T.a1n[1]) + ')', '');
+        r3('<i>z</i><sup>(1)</sup> after the update', '(' + f6(T.z1n[0]) + ', ' + f6(T.z1n[1]) + ')', '');
+        r3('<i>a</i><sup>(2)</sup>, <i>ŷ</i> after the update', f6(T.a2n) + ', ' + f6(T.yhatn), '');
+        r3('<i>L</i> after the update', f6(T.Ln), 'Before the update ' + f6(T.L) + ' (difference ' + f6(T.Ln - T.L) + ')', true);
+      }
+      h += '</tbody></table>';
+      q('tblTrace').innerHTML = h;
+    }
+
+    function eq() {
+      var st = S.stage, n = T.net, rows = [], X = S.x;
+      var a1 = bsym('a', 1), z1 = bsym('z', 1), W1 = bsym('W', 1), b1 = bsym('b', 1), x = bsym('x');
+      if (st === 0) {
+        rows.push(row(a1 + mo('=') + W1 + x + mo('+') + b1 + BRK + mo('=') + matM(n.W1) + vecM(X) + mo('+') + vecM(n.b1)));
+      }
+      if (st >= 1 && st < 3) {
+        rows.push(row(a1 + mo('=') + '<mrow><mo>(</mo><mtable>' + [0, 1].map(function (j) { return '<mtr><mtd>' + mn(n.W1[j][0]) + mo('×') + paren(X[0]) + mo('+') + paren(n.W1[j][1]) + mo('×') + paren(X[1]) + mo('+') + paren(n.b1[j]) + '</mtd></mtr>'; }).join('') + '</mtable><mo>)</mo></mrow>' + BRK + mo('=') + vecM(T.a1)));
+        rows.push(row(z1 + mo('=') + mi('tanh') + sp('0.2em') + a1 + mo('=') + vecM(T.z1)));
+        rows.push(row(ssym('a', 2) + mo('=') + paren(n.W2[0]) + mo('×') + mn(T.z1[0]) + mo('+') + paren(n.W2[1]) + mo('×') + mn(T.z1[1]) + mo('+') + paren(n.b2) + mo('=') + mn(T.a2)));
+        rows.push(row(YHAT + mo('=') + mi('σ') + mo('(') + mn(T.a2) + mo(')') + mo('=') + mn(T.yhat)));
+        rows.push(row(mi('L') + mo('=') + (S.y === 1 ? mo('−') + mi('ln') + sp('0.15em') + mn(T.yhat) : mo('−') + mi('ln') + mo('(') + mn(1) + mo('−') + mn(T.yhat) + mo(')')) + mo('=') + mn(T.L)));
+      }
+      if (st === 2) {
+        rows.push(row(ssym('δ', 2) + mo('=') + YHAT + mo('−') + mi('y') + mo('=') + mn(T.yhat) + mo('−') + mn(S.y) + mo('=') + mn(T.delta2)));
+        rows.push(row(frac(mo('∂') + mi('L'), mo('∂') + bsym('W', 2)) + mo('=') + ssym('δ', 2) + bsym('z', 1, null) + '<msup><mrow/><mi>T</mi></msup>' + BRK + mo('=') + paren(T.delta2) + mo('×') + rowM(T.z1) + mo('=') + rowM(T.gW2)));
+        rows.push(row(bsym('δ', 1) + mo('=') + '<msup><mi>h</mi><mo>′</mo></msup>' + mo('(') + a1 + mo(')') + mo('⊙') + bsym('W', 2) + '<msup><mrow/><mi>T</mi></msup>' + ssym('δ', 2) + BRK + mo('=') + vecM(T.dh) + mo('⊙') + vecM(T.backW2d) + mo('=') + vecM(T.delta1)));
+        rows.push(row(frac(mo('∂') + mi('L'), mo('∂') + W1) + mo('=') + bsym('δ', 1) + x + '<msup><mrow/><mi>T</mi></msup>' + BRK + mo('=') + vecM(T.delta1) + rowM(X) + mo('=') + matM(T.gW1)));
+      }
+      if (st === 3) {
+        var n2 = T.net2;
+        rows.push(row(W1 + mo('←') + matM(n.W1) + BRK + mo('−') + mn(S.eta) + mo('×') + matM(T.gW1) + BRK + mo('=') + matM(n2.W1)));
+        rows.push(row(b1 + mo('←') + vecM(n.b1) + mo('−') + mn(S.eta) + mo('×') + vecM(T.gb1) + BRK + mo('=') + vecM(n2.b1)));
+        rows.push(row(bsym('W', 2) + mo('←') + rowM(n.W2) + BRK + mo('−') + mn(S.eta) + mo('×') + rowM(T.gW2) + BRK + mo('=') + rowM(n2.W2) + NL + ssym('b', 2) + mo('←') + mn(n.b2) + mo('−') + mn(S.eta) + mo('×') + paren(T.gb2) + mo('=') + mn(n2.b2)));
+        rows.push(row(mt('After the update: ') + YHAT + mo('=') + mn(T.yhatn) + mo(',') + sp('0.5em') + mi('L') + mo('=') + mn(T.Ln) + sp('0.5em') + mt('(before the update') + sp('0.3em') + mn(T.L) + mt(')')));
+      }
+      q('eqTrace').innerHTML = table(rows) + (st === 0 ? '<p class="hint">Press “Forward” to compute the values of this formula and of tanh, sigmoid, and the loss.</p>' : '');
+    }
+
+    function readout() {
+      var r = [['Stage', STAGES[S.stage]], ['Number of updates', String(S.k)]];
+      if (S.stage >= 1) { r.push(['Output <i>ŷ</i>', f6(T.yhat)]); r.push(['Loss <i>L</i>', f6(T.L)]); }
+      if (S.stage >= 2) r.push(['Gradient magnitude ‖<i>g</i>‖ (9 parameters)', f6(Math.sqrt(T.gradNorm2))]);
+      if (S.stage === 3) { r.push(['Loss after the update', f6(T.Ln)]); r.push(['Change in loss', f6(T.Ln - T.L)]); r.push(['First-order approximation −<i>η</i>‖<i>g</i>‖<sup>2</sup>', f6(-S.eta * T.gradNorm2)]); }
+      var h = kv(r);
+      if (S.hist.length) h += '<p class="hint">Loss history (before → after the update): ' + S.hist.slice(-8).map(function (p, k) { return 'update ' + (S.hist.length - Math.min(8, S.hist.length) + k + 1) + ': ' + f4(p[0]) + ' → ' + f4(p[1]); }).join(', ') + '</p>';
+      q('readTrace').innerHTML = h;
+      steps.innerHTML = STAGES.map(function (s, k) { return '<li class="' + (k === S.stage ? 'now' : k < S.stage ? 'done' : '') + '">' + s + (k === S.stage ? ' (current)' : '') + '</li>'; }).join('');
+      bF.disabled = !(S.stage === 0 || S.stage === 3); bB.disabled = S.stage !== 1; bU.disabled = S.stage !== 2;
+      bF.textContent = S.stage === 3 ? 'Forward (with the updated weights)' : 'Forward';
+    }
+
+    var self = {
+      update: function () {
+        if (!U.guardFinite([T.a1, T.z1, T.a2, T.L, T.Ln, M.flatten(T.net2)], msg, 'computation')) return;
+        drawNet(); tbl(); eq(); readout();
+        U.postHeightLater();
+      }
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ② train：学習を見る
+     ================================================================= */
+  var WD_LIST = [0, 1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1];
+  var TASKS = [{ value: 'regression', label: 'Regression (Data A)' }, { value: 'circles', label: 'Concentric circles' }, { value: 'moons', label: 'Two moons' }, { value: 'xor', label: 'XOR' }];
+  var RANGES = { circles: [[-1.5, 1.5], [-1.5, 1.5]], moons: [[-1.8, 1.8], [-1.3, 1.3]], xor: [[-1.3, 1.3], [-1.3, 1.3]] };
+  var BR = U.cmap('blueRed');
+  /* 濃淡は白と 45 % 混ぜた不透明の色（半透明のセルを重ねると継ぎ目が見えるため） */
+  function soft(t) { var m = /rgb\((\d+),(\d+),(\d+)\)/.exec(BR(t)); return 'rgb(' + [1, 2, 3].map(function (i) { return Math.round(0.55 * (+m[i]) + 0.45 * 255); }).join(',') + ')'; }
+  var ACTNAME = { tanh: 'tanh', relu: 'ReLU', sigmoid: 'sigmoid' };
+  /* 学習の状態（③からも参照するので，パネルの外に置く） */
+  function newTrainState(o) {
+    var st = Object.assign({ kind: 'regression', H: 3, act: 'tanh', eta: 0.1, batch: 8, wdIdx: 0, init: 'random', Nreg: 20, Ncls: 100, seed: DEFAULT_SEED, dataSeed: DATA_SEED, speed: 1 }, o || {});
+    st.task = M.makeTask(st.kind, st.dataSeed, st.kind === 'regression' ? st.Nreg : st.Ncls);
+    st.reset = function () {
+      st.rng = C.rng(st.seed);
+      st.net = M.initNet(st.rng, st.task.D, st.H, st.act, st.task.out, st.init === 'zero' ? 'zero' : null);
+      st.epoch = 0; st.updates = 0; st.hist = { e: [], tr: [], va: [] }; st.diverged = '';
+      st.record();
+    };
+    st.wd = function () { return WD_LIST[st.wdIdx]; };
+    st.record = function () {
+      var tr = M.lossOnly(st.net, st.task.train.X, st.task.train.Y, null, 0).L, va = M.lossOnly(st.net, st.task.val.X, st.task.val.Y, null, 0).L;
+      st.hist.e.push(st.epoch); st.hist.tr.push(tr); st.hist.va.push(va);
+    };
+    st.epochStep = function () {
+      var o = M.trainEpoch(st.net, st.task.train.X, st.task.train.Y, { eta: st.eta, batch: st.batch, wd: st.wd() }, st.rng);
+      st.updates += o.steps;
+      if (!o.ok) { st.diverged = o.reason; st.divEpoch = st.epoch + 1; return false; }
+      st.net = o.net; st.epoch++; st.record();
+      var last = st.hist.tr[st.hist.tr.length - 1];
+      if (!isFinite(last) || last > LIM.divergeLoss) { st.divEpoch = st.epoch; st.diverged = 'the training loss ' + (isFinite(last) ? 'became ' + U.fmt(last, 3) + ' and exceeded 10⁶' : 'became NaN or infinite'); return false; }
+      return true;
+    };
+    st.reset();
+    return st;
+  }
+  function trainState() { if (!SH.train) SH.train = newTrainState(); return SH.train; }
+
+  function TrainSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var cvFit = q('cvFit'), cvLoss = q('cvLoss'), cvBasis = q('cvBasis'), ctl = q('ctlTrain');
+    var S = trainState();
+    var view = { basis: 'z' };
+    var redraw = function () { self.update(); };
+    function rebuild() { S.task = M.makeTask(S.kind, S.dataSeed, S.kind === 'regression' ? S.Nreg : S.Ncls); run.reset(); }
+    var msg = U.el('p', 'msg empty'); msg.setAttribute('aria-live', 'polite');
+
+    var pTask = U.pills({ label: 'Task', options: TASKS, value: S.kind, onChange: function (v) { S.kind = v; syncN(); rebuild(); } });
+    var rH = U.range({ label: 'Number of hidden units <i>H</i>', min: LIM.H[0], max: LIM.H[1], step: 1, value: S.H, fmt: function (v) { return String(Math.round(v)); }, onInput: function (v) { S.H = Math.round(v); run.reset(); } });
+    var pAct = U.pills({ label: 'Hidden-layer activation function <i>h</i>', options: [{ value: 'tanh', label: 'tanh' }, { value: 'relu', label: 'ReLU' }, { value: 'sigmoid', label: 'sigmoid' }], value: S.act, onChange: function (v) { S.act = v; run.reset(); } });
+    var rEta = U.range({ label: 'Learning rate <i>η</i> (log)', min: LIM.eta[0], max: LIM.eta[1], step: 0.1, log: true, value: S.eta, fmt: function (v) { return fmt(v, 2); }, onInput: function (v) { S.eta = v; redraw(); } });
+    var pB = U.pills({ label: 'Minibatch size <i>B</i>', options: [{ value: '0', label: 'All' }, { value: '8', label: '8' }, { value: '1', label: '1' }], value: String(S.batch), onChange: function (v) { S.batch = +v; redraw(); } });
+    var rWd = U.range({ label: 'Weight decay <i>λ</i>', min: 0, max: WD_LIST.length - 1, step: 1, value: S.wdIdx, fmt: function (v) { var w = WD_LIST[Math.round(v)]; return w === 0 ? '0 (none)' : fmt(w, 1); }, onInput: function (v) { S.wdIdx = Math.round(v); redraw(); } });
+    var pInit = U.pills({ label: 'Initial value', options: [{ value: 'random', label: 'Random (Xavier/He)' }, { value: 'zero', label: 'All 0' }], value: S.init, onChange: function (v) { S.init = v; run.reset(); } });
+    var rN = U.range({ label: 'Number of training data points <i>N</i>', min: 5, max: 50, step: 1, value: S.Nreg, fmt: function (v) { return String(Math.round(v)); }, onInput: function (v) { if (S.kind === 'regression') S.Nreg = Math.round(v); else S.Ncls = Math.round(v); rebuild(); } });
+    function syncN() {
+      var reg = S.kind === 'regression', inp = rN.input;
+      inp.min = reg ? LIM.NregTrain[0] : LIM.NclsTrain[0]; inp.max = reg ? LIM.NregTrain[1] : LIM.NclsTrain[1]; inp.step = reg ? 1 : 10;
+      rN.set(reg ? S.Nreg : S.Ncls, true);
+      rN.input.setAttribute('aria-valuemin', inp.min);
+      rN.out.textContent = String(reg ? S.Nreg : S.Ncls);
+    }
+    /* U.range は min/max を作成時の値で clamp するので，get を差し替える（範囲は課題で変わる） */
+    rN.get = function () { return Math.max(+rN.input.min, Math.min(+rN.input.max, Math.round(parseFloat(rN.input.value)))); };
+    rN.set = function (v) { rN.input.value = v; rN.out.textContent = String(v); rN.input.setAttribute('aria-valuetext', String(v)); };
+    rN.input.addEventListener('input', function () { rN.out.textContent = String(rN.get()); });
+    var pSpeed = U.pills({ label: 'Speed', options: [{ value: '1', label: '1 epoch per frame' }, { value: '10', label: '10 epochs per frame' }], value: String(S.speed), onChange: function (v) { S.speed = +v; } });
+    var run = U.runner({
+      maxSteps: LIM.maxEpochs,
+      stepsPerFrame: 1,
+      labels: { step: '1 epoch' },
+      isVisible: function () { return !panel.hidden; },
+      step: function () {
+        if (S.diverged) return false;
+        var k = 0, ok = true;
+        while (k < S.speed && ok && S.epoch < LIM.maxEpochs) { ok = S.epochStep(); k++; }
+        if (S.speed > 1 && k > 1) run.setSteps(run.steps() + k - 1);
+        return ok && S.epoch < LIM.maxEpochs;
+      },
+      reset: function () { S.reset(); },
+      draw: function () { self.update(); }
+    });
+    var seed = U.seedBox({ value: S.seed, defaultSeed: DEFAULT_SEED, onChange: function (s) { S.seed = s; run.reset(); } });
+    seed.el.querySelector('label').textContent = 'Random-number seed (initial values and minibatch order)';
+    var nData = U.number({ label: 'Data seed (training and validation data)', min: 0, max: 4294967295, step: 1, int: true, value: S.dataSeed, onChange: function (v) { S.dataSeed = v; rebuild(); } });
+    var pBasis = U.pills({ label: 'Shown in the lower figure (regression only)', options: [{ value: 'z', label: '<i>z</i><sub><i>j</i></sub>(<i>s</i>)' }, { value: 'c', label: 'Contribution <i>s</i><sub><i>y</i></sub><i>W</i><sup>(2)</sup><sub><i>j</i></sub><i>z</i><sub><i>j</i></sub>(<i>s</i>)' }], value: view.basis, onChange: function (v) { view.basis = v; redraw(); } });
+
+    ctl.appendChild(pTask.el); ctl.appendChild(rH.el); ctl.appendChild(pAct.el);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(run.el); ctl.appendChild(pSpeed.el); ctl.appendChild(msg);
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(rEta.el); ctl.appendChild(pB.el); ctl.appendChild(rWd.el);
+    ctl.appendChild(U.el('span', 'hint', 'The learning rate, minibatch, and weight decay can be changed during training (the weights are kept). Changing the task, <i>H</i>, the activation function, the initial value, the number of data points, or a seed starts over from the beginning.'));
+    ctl.appendChild(U.el('hr', 'sep'));
+    ctl.appendChild(pInit.el); ctl.appendChild(rN.el); ctl.appendChild(seed.el); ctl.appendChild(nData.el); ctl.appendChild(pBasis.el);
+    syncN();
+
+    function lgFit() {
+      if (S.kind === 'regression') U.legendHTML(q('lgFit'), [
+        { label: 'True function <i>g</i>(<i>s</i>)', color: col.gray, dash: dash.dashed, width: 2 },
+        { label: 'Network prediction <i>ŷ</i>(<i>s</i>)', color: col.accent, width: 2.6 },
+        { label: 'Training data (synthetic data for teaching purposes)', color: col.orange, shape: 'circle' }]);
+      else U.legendHTML(q('lgFit'), [
+        { label: 'Training data with <i>y</i> = 1', color: col.red, shape: 'circle' },
+        { label: 'Training data with <i>y</i> = 0', color: col.accent, shape: 'triangle' },
+        { label: 'Decision boundary <i>ŷ</i> = 0.5', color: col.ink, width: 2.4 },
+        { label: 'Shading: <i>ŷ</i> (blue 0 → white 0.5 → red 1)', color: '#f4a582', kind: 'band', alpha: 0.8 }]);
+    }
+    U.legendHTML(q('lgLoss'), [
+      { label: 'Training loss', color: col.accent, width: 2.4 },
+      { label: 'Validation loss', color: col.orange, dash: dash.dashed, width: 2.4 },
+      { label: 'Minimum validation loss', color: col.green, shape: 'diamond' }]);
+
+    function drawFit() {
+      var F = U.fitCanvas(cvFit, { aspect: 0.62, minHeight: 260, maxHeight: 430 }), c = F.c, box;
+      var net = S.net, T = S.task;
+      if (S.kind === 'regression') {
+        box = U.plotBox(F.W, F.H, { l: 46, r: 12, t: 14, b: 40 });
+        var ax = U.axes(c, box, [-1, 1], [70, 100], { xl: 's = (T − 1300 °C)/(200 °C)', yl: 'Relative density (%)' });
+        var xs = C.linspace(-1, 1, 241);
+        U.line(c, ax, xs, xs.map(M.trueA), { color: col.gray, dash: dash.dashed, width: 2 });
+        U.line(c, ax, xs, xs.map(function (s) { return T.ymean + T.ystd * M.forward(net, [s]).yhat; }), { color: col.accent, width: 2.6 });
+        U.points(c, ax, T.train.X.map(function (x) { return x[0]; }), T.train.raw, { shape: 'circle', color: col.orange, size: 7 });
+        var L = U.labeler(c, box);
+        L.add('True function', ax.X(-0.62), ax.Y(M.trueA(-0.62)) + 14, { color: col.gray, size: 10.5 });
+        L.add('Prediction', ax.X(0.82), ax.Y(T.ymean + T.ystd * M.forward(net, [0.82]).yhat) - 14, { color: col.accent, size: 11, bold: true });
+        U.setCanvasLabel(cvFit, 'Regression: ' + T.train.X.length + ' training points of Data A and the prediction curve of the network with ' + S.H + ' hidden units. Epoch ' + S.epoch + '.');
+      } else {
+        var R = RANGES[S.kind];
+        box = U.plotBox(F.W, F.H, { l: 40, r: 12, t: 12, b: 38 });
+        var ax2 = U.axes(c, box, R[0], R[1], { xl: 'x₁ (dimensionless)', yl: 'x₂ (dimensionless)' });
+        var n = F.W < 480 ? 41 : 61, Z = M.gridPredict(net, R[0], R[1], n);
+        var dx = (R[0][1] - R[0][0]) / (n - 1), dy = (R[1][1] - R[1][0]) / (n - 1);
+        U.heatmap(c, ax2, Z, { xr: [R[0][0] - dx / 2, R[0][1] + dx / 2], yr: [R[1][0] - dy / 2, R[1][1] + dy / 2], vmin: 0, vmax: 1, cmap: soft });
+        U.contour(c, ax2, Z, 0.5, { color: col.ink, width: 2.4 });
+        var X1 = [], Y1 = [], X0 = [], Y0 = [];
+        T.train.X.forEach(function (x, k) { if (T.train.Y[k]) { X1.push(x[0]); Y1.push(x[1]); } else { X0.push(x[0]); Y0.push(x[1]); } });
+        U.points(c, ax2, X1, Y1, { shape: 'circle', color: col.red, size: 7 });
+        U.points(c, ax2, X0, Y0, { shape: 'triangle', color: col.accent, size: 8 });
+        c.save(); c.strokeStyle = U.colors.frame; c.strokeRect(box[0] + 0.5, box[1] + 0.5, box[2] - box[0] - 1, box[3] - box[1] - 1); c.restore();
+        U.setCanvasLabel(cvFit, 'Classification (' + TASKS.filter(function (t) { return t.value === S.kind; })[0].label + '): ' + T.train.X.length + ' training points, shading of ŷ and decision boundary ŷ = 0.5. Epoch ' + S.epoch + ', training accuracy ' + U.fmtPct(M.accuracy(net, T.train.X, T.train.Y)) + '.');
+      }
+    }
+    function drawLoss() {
+      var F = U.fitCanvas(cvLoss, { aspect: 0.4, minHeight: 200, maxHeight: 300 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 52, r: 12, t: 12, b: 40 });
+      var h = S.hist, all = h.tr.concat(h.va).filter(function (v) { return isFinite(v) && v > 0; });
+      var lo = Math.min.apply(null, all.concat([1])), hi = Math.max.apply(null, all.concat([1e-3]));
+      lo = Math.pow(10, Math.floor(Math.log10(Math.max(lo, 1e-6)) - 0.05)); hi = Math.pow(10, Math.ceil(Math.log10(hi) + 0.05));
+      if (hi / lo < 100) lo = hi / 100;
+      var xmax = Math.max(20, S.epoch);
+      var ax = U.axes(c, box, [0, xmax], [lo, hi], { xl: 'Epoch', yl: S.kind === 'regression' ? 'Loss (standardized units)' : 'Loss (nat)', ylog: true });
+      U.line(c, ax, h.e, h.tr, { color: col.accent, width: 2.2 });
+      U.line(c, ax, h.e, h.va, { color: col.orange, dash: dash.dashed, width: 2.2 });
+      var L = U.labeler(c, box);
+      var kmin = 0; for (var k = 1; k < h.va.length; k++) if (h.va[k] < h.va[kmin]) kmin = k;
+      if (h.e.length > 1) {
+        U.marker(c, ax.X(h.e[kmin]), ax.Y(h.va[kmin]), 'diamond', 11, col.green, true);
+        var last = h.e.length - 1;
+        L.add('Training', Math.min(box[2] - 20, ax.X(h.e[last]) - 4), ax.Y(h.tr[last]) + 12, { color: col.accent, size: 10.5, bold: true, align: 'right' });
+        L.add('Validation', Math.min(box[2] - 20, ax.X(h.e[last]) - 4), ax.Y(h.va[last]) - 12, { color: col.orange, size: 10.5, bold: true, align: 'right' });
+        L.add('Min ' + fmt(h.va[kmin], 3) + ' (' + h.e[kmin] + ')', ax.X(h.e[kmin]) + 6, ax.Y(h.va[kmin]) + 14, { color: col.green, size: 10, align: 'left' });
+      } else U.text(c, ax, xmax / 2, Math.sqrt(lo * hi), 'Press “Run” or “1 epoch” to advance training', { color: col.sub, size: 11 });
+      U.setCanvasLabel(cvLoss, 'Training loss and validation loss against the epoch (vertical axis logarithmic). Epoch ' + S.epoch + ', training loss ' + fmt(h.tr[h.tr.length - 1], 3) + ', validation loss ' + fmt(h.va[h.va.length - 1], 3) + ', minimum validation loss at epoch ' + h.e[kmin] + '.');
+      q('capLoss').innerHTML = 'The horizontal axis is the epoch (maximum ' + U.fmtInt(LIM.maxEpochs) + ') and the vertical axis is the loss (logarithmic scale). The training loss is computed on the ' + S.task.train.X.length + ' training data points, and the validation loss is the mean loss, without the weight-decay term, computed on a separate set of 200. ' + (S.kind === 'regression' ? 'The regression loss is the mean of ½(<i>ŷ</i> − <i>y</i>)<sup>2</sup> for the standardized targets.' : 'The classification loss is the mean cross-entropy (in nat).');
+    }
+    function drawBasis() {
+      var stg = q('basisStage');
+      if (S.kind !== 'regression') { stg.hidden = true; return; }
+      stg.hidden = false;
+      var F = U.fitCanvas(cvBasis, { aspect: 0.45, minHeight: 210, maxHeight: 320 }), c = F.c, net = S.net, T = S.task;
+      var box = U.plotBox(F.W, F.H, { l: 52, r: 30, t: 12, b: 40 });
+      var xs = C.linspace(-1, 1, 161), ys = [], lo = Infinity, hi = -Infinity, j;
+      for (j = 0; j < net.H; j++) {
+        ys.push(xs.map(function (s) { var z = M.forward(net, [s]).z1[j]; return view.basis === 'z' ? z : T.ystd * net.W2[j] * z; }));
+        ys[j].forEach(function (v) { if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } });
+      }
+      if (!(hi > lo)) { lo -= 1; hi += 1; }
+      var pad = 0.08 * (hi - lo); lo -= pad; hi += pad;
+      var ax = U.axes(c, box, [-1, 1], [lo, hi], { xl: 's = (T − 1300 °C)/(200 °C)', yl: view.basis === 'z' ? 'Hidden-unit output' : 'Contribution (%)' });
+      var L = U.labeler(c, box);
+      var dl = [dash.solid, dash.dashed, dash.dotted, dash.dashdot, dash.long];
+      for (j = 0; j < net.H; j++) {
+        var cc = U.series[j % 8];
+        U.line(c, ax, xs, ys[j], { color: cc, width: 2, dash: dl[j % 5] });
+      }
+      for (j = 0; j < net.H; j++) L.add(String(j + 1), box[2] + 4, ax.Y(ys[j][xs.length - 1]), { color: U.series[j % 8], size: 10, bold: true, align: 'left', dy: [0, -10, 10, -20, 20, -30, 30] });
+      U.setCanvasLabel(cvBasis, 'The ' + (view.basis === 'z' ? 'output z_j(s)' : 'contribution') + ' of each of the ' + net.H + ' hidden units drawn as a function of s. Epoch ' + S.epoch + '.');
+      q('capBasis').innerHTML = (view.basis === 'z' ? 'Output of each hidden unit <i>z</i><sub><i>j</i></sub>(<i>s</i>) = <i>h</i>(<i>W</i><sup>(1)</sup><sub><i>j</i></sub><i>s</i> + <i>b</i><sup>(1)</sup><sub><i>j</i></sub>). Unlike the fixed basis functions of Chapter 8, their positions and slopes move during training.' : 'Contribution <i>s</i><sub><i>y</i></sub><i>W</i><sup>(2)</sup><sub><i>j</i></sub><i>z</i><sub><i>j</i></sub>(<i>s</i>) (%). Adding <i>ȳ</i> + <i>s</i><sub><i>y</i></sub><i>b</i><sup>(2)</sup> to their sum gives the prediction curve above.') + ' The number at the right end is the unit index <i>j</i> (also distinguished by color and line style).';
+    }
+    function capFit() {
+      var T = S.task, cond = S.H + ' hidden units (' + ACTNAME[S.act] + '), <i>η</i> = ' + fmt(S.eta, 2) + ', <i>B</i> = ' + (S.batch ? S.batch : 'All') + ', <i>λ</i> = ' + (S.wd() ? fmt(S.wd(), 1) : '0') + ', initial value ' + (S.init === 'zero' ? 'all 0' : 'random') + ', random-number seed ' + S.seed + ', data seed ' + S.dataSeed + '.';
+      if (S.kind === 'regression') {
+        q('titleFit').textContent = 'Prediction curve and training data (Data A: firing temperature and relative density)';
+        q('capFit').innerHTML = '<strong>Synthetic data for teaching purposes</strong>: <i>y</i> = <i>g</i>(<i>s</i>) + 𝒩(0, 1.0<sup>2</sup>) %, <i>g</i>(<i>s</i>) = 88 + 8<i>s</i> − 5<i>s</i><sup>2</sup> + 2 sin 3<i>s</i>, ' + T.train.X.length + ' training points (the 200 validation points are not drawn in the figure). Training uses the targets standardized with <i>ȳ</i> = ' + fx(T.ymean, 2) + ' % and <i>s</i><sub><i>y</i></sub> = ' + fx(T.ystd, 2) + ' %. ' + cond;
+      } else {
+        var nm = TASKS.filter(function (t) { return t.value === S.kind; })[0].label;
+        q('titleFit').textContent = 'Decision boundary and training data (' + nm + ')';
+        q('capFit').innerHTML = '<strong>Synthetic data for teaching purposes</strong> (' + nm + '; noise standard deviation ' + M.CLS_NOISE[S.kind] + '; the generating formulas are in the explanation below). ' + T.train.X.length + ' training points (<i>y</i> = 1 is ●, <i>y</i> = 0 is ▲); the 200 validation points are not drawn in the figure. ' + cond;
+      }
+    }
+    function readout() {
+      var T = S.task, net = S.net, h = S.hist, k, kmin = 0;
+      for (k = 1; k < h.va.length; k++) if (h.va[k] < h.va[kmin]) kmin = k;
+      var w2 = M.flatten(net).filter(function (_, i) { var nm = M.paramNames(net)[i].kind; return nm === 'W1' || nm === 'W2'; }).reduce(function (s, v) { return s + v * v; }, 0);
+      var r = [['Epoch (number of updates)', S.epoch + ' (' + U.fmtInt(S.updates) + ')'],
+        ['Updates per epoch', String(Math.ceil(T.train.X.length / (S.batch && S.batch < T.train.X.length ? S.batch : T.train.X.length)))],
+        ['Training loss', fmt(h.tr[h.tr.length - 1], 4)], ['Validation loss', fmt(h.va[h.va.length - 1], 4)],
+        ['Minimum validation loss (epoch)', fmt(h.va[kmin], 4) + ' (' + h.e[kmin] + ')']];
+      /* 発散の直後は RMSE が 10²⁴ 程度になる．toFixed の長い桁の列で表が崩れないよう，大きい値は有効数字で書く */
+      var fr = function (v) { return Math.abs(v) < 1e4 ? fx(v, 3) : fmt(v, 3); };
+      if (S.kind === 'regression') { r.push(['RMSE training / validation', fr(M.rmse(net, T, 'train')) + ' / ' + fr(M.rmse(net, T, 'val')) + ' %']); r.push(['(noise standard deviation)', '1.000 %']); }
+      else r.push(['Accuracy training / validation', U.fmtPct(M.accuracy(net, T.train.X, T.train.Y)) + ' / ' + U.fmtPct(M.accuracy(net, T.val.X, T.val.Y))]);
+      r.push(['Number of parameters', String(M.nParams(net)) + ' (' + S.H + '×' + T.D + ' + ' + S.H + ' + ' + S.H + ' + 1)']);
+      r.push(['‖<i>W</i><sup>(1)</sup>‖<sup>2</sup> + ‖<i>W</i><sup>(2)</sup>‖<sup>2</sup>', fmt(w2, 4)]);
+      q('readTrain').innerHTML = kv(r);
+      return { w2: w2 };
+    }
+    function eq(info) {
+      var T = S.task, net = S.net, rows = [], h = S.hist, wd = S.wd();
+      var L = M.lossOnly(net, T.train.X, T.train.Y, null, wd);
+      rows.push(row(mi('L') + mo('=') + frac(mn(1), mi('N')) + '<munder><mo>∑</mo><mi>n</mi></munder><msub><mi>ℓ</mi><mi>n</mi></msub>' + mo('+') + frac(mi('λ'), mn(2)) + mo('‖') + bsym('W') + mo('‖') + '<msup><mrow/><mn>2</mn></msup>' + BRK + mo('=') + mn(L.Ldata) + mo('+') + frac(wd ? mn(wd, 1) : mn(0), mn(2)) + mo('×') + mn(info.w2) + mo('=') + mn(L.L) + sp('0.5em') + mt('(entire training data)')));
+      var Nt = T.train.X.length, B = S.batch && S.batch < Nt ? S.batch : Nt;
+      rows.push(row(mt('Updates per epoch') + sp('0.3em') + mo('⌈') + mi('N') + mo('/') + mi('B') + mo('⌉') + mo('=') + mo('⌈') + mn(Nt) + mo('/') + mn(B) + mo('⌉') + mo('=') + mn(Math.ceil(Nt / B)) + NL + mi('w') + mo('←') + mi('w') + mo('−') + mn(S.eta, 2) + frac(mo('∂') + mi('L'), mo('∂') + mi('w'))));
+      /* 予測の中身：基底関数の重ね合わせ */
+      var xP = S.kind === 'regression' ? [0.5] : [0.5, 0.5], fw = M.forward(net, xP), show = Math.min(net.H, 3), terms = '';
+      for (var j = 0; j < show; j++) terms += (j ? mo('+') : '') + paren(net.W2[j]) + mo('×') + paren(fw.z1[j]);
+      if (net.H > show) terms += mo('+') + mo('⋯');
+      var head = S.kind === 'regression' ? ssym('a', 2) + mo('(') + mi('s') + mo('=') + mn(0.5) + mo(')') : ssym('a', 2) + mo('(') + bsym('x') + mo('=') + mo('(') + mn(0.5) + mo(',') + mn(0.5) + mo(')') + mo(')');
+      rows.push(row(head + mo('=') + '<munderover><mo>∑</mo><mrow><mi>j</mi><mo>=</mo><mn>1</mn></mrow><mi>H</mi></munderover>' + ssym('W', 2, mi('j')) + '<msub><mi>z</mi><mi>j</mi></msub>' + mo('+') + ssym('b', 2)));
+      rows.push(row(sp('1.5em') + mo('=') + terms + mo('+') + paren(net.b2) + mo('=') + mn(fw.a2) + (net.H > show ? sp('0.5em') + mt('(showing the first ' + show + ' of ' + net.H + ' terms)') : '')));
+      if (S.kind === 'regression') rows.push(row(YHAT + mo('=') + mover('y') + mo('+') + msub('s', 'y') + ssym('a', 2) + mo('=') + mn(T.ymean) + mo('+') + mn(T.ystd) + mo('×') + paren(fw.a2) + mo('=') + mn(T.ymean + T.ystd * fw.a2) + sp('0.25em') + mt('%') + NL + mt('(value at T = 1400 °C; true value') + sp('0.25em') + mn(M.trueA(0.5)) + sp('0.25em') + mt('%)')));
+      else rows.push(row(YHAT + mo('=') + mi('σ') + mo('(') + mn(fw.a2) + mo(')') + mo('=') + mn(fw.yhat) + sp('0.5em') + mt(fw.yhat >= 0.5 ? '→ classified as y = 1' : '→ classified as y = 0')));
+      q('eqTrain').innerHTML = table(rows);
+    }
+    function mover(s) { return '<mover><mi>' + s + '</mi><mo>¯</mo></mover>'; }
+    function msub(a, b) { return '<msub><mi>' + a + '</mi><mi>' + b + '</mi></msub>'; }
+
+    lgFit();
+    var lastKind = S.kind;
+    var self = {
+      update: function () {
+        if (lastKind !== S.kind) { lgFit(); lastKind = S.kind; }
+        if (S.diverged) U.status(msg, 'Training stopped: ' + S.diverged + ' (epoch ' + S.divEpoch + '). Reduce the learning rate or enlarge the minibatch and press “Reset.”', 'warn');
+        else if (S.init === 'zero' && S.act !== 'sigmoid') U.status(msg, 'The initial values are all 0. With ' + ACTNAME[S.act] + ', z⁽¹⁾ = h(0) = 0 gives ∂L/∂W⁽²⁾ = δ⁽²⁾z⁽¹⁾ = 0, and W⁽²⁾ = 0 gives δ⁽¹⁾ = 0, so none of the weights move from 0. Only the output bias b⁽²⁾ is learned, and the prediction is a constant.', 'warn');
+        else if (S.init === 'zero') U.status(msg, 'The initial values are all 0. With sigmoid the hidden-layer weights also move, but every hidden unit keeps the same value.', 'warn');
+        else U.status(msg, '');
+        if (!M.netFinite(S.net)) { U.status(msg, 'Computation stopped: the weights became NaN or infinite. Reduce the learning rate and press “Reset.”', 'warn'); return; }
+        drawFit(); drawLoss(); drawBasis(); capFit();
+        var info = readout(); eq(info);
+        if (S.diverged) U.status(run.status, 'Stopped because it diverged.', 'warn');
+      },
+      hide: function () { run.stop(); }
+    };
+    return self;
+  }
+
+  /* =================================================================
+     ③ gradcheck：勾配確認
+     ================================================================= */
+  function GradSim(panel) {
+    var q = function (r) { return panel.querySelector('[data-role="' + r + '"]'); };
+    var cv = q('cvV'), ctl = q('ctlGC');
+    var S = { src: 'trace', logEps: -5, pick: 0 }, sweep = null, sweepKey = '', G = null;
+    var redraw = function () { self.update(); };
+    function target() {
+      if (S.src === 'trace') return { net: SH.trace.net, X: [SH.trace.x.slice()], Y: [SH.trace.y], wd: 0, label: 'The 2–2–1 of ① (current weights, one data point)' };
+      var t = trainState();
+      return { net: t.net, X: t.task.train.X, Y: t.task.train.Y, wd: t.wd(), label: 'The network of ② (' + TASKS.filter(function (k) { return k.value === t.kind; })[0].label + ', <i>H</i> = ' + t.H + ', ' + ACTNAME[t.act] + ', epoch ' + t.epoch + ', ' + t.task.train.X.length + ' training data points, <i>λ</i> = ' + (t.wd() ? fmt(t.wd(), 1) : '0') + ')' };
+    }
+    var pSrc = U.pills({ label: 'Network to check', options: [{ value: 'trace', label: 'The 2–2–1 of ①' }, { value: 'train', label: 'The network of ②' }], value: S.src, onChange: function (v) { S.src = v; S.pick = 0; sweepKey = ''; redraw(); } });
+    var rEps = U.range({ label: 'Finite-difference step <i>ε</i> (log)', min: 1e-12, max: 1e-1, step: 0.25, log: true, value: 1e-5, fmt: function (v) { return fmt(v, 2); }, onInput: function (v) { S.logEps = Math.log10(v); redraw(); } });
+    var sel = U.select({ label: 'Parameter to put into the formulas', options: [{ value: 0, label: '—' }], value: 0, onChange: function (v) { S.pick = +v; redraw(); } });
+    var bRe = U.button('Recheck with the current weights', function () { sweepKey = ''; redraw(); }, { primary: true, title: 'Press this after the weights have changed in ① or ②' });
+    ctl.appendChild(pSrc.el); ctl.appendChild(rEps.el); ctl.appendChild(sel.el); ctl.appendChild(U.buttonRow([bRe]));
+    ctl.appendChild(U.el('span', 'hint', 'After changing the weights in ① or ②, reopen this tab or press “Recheck” to recompute with the weights at that moment.'));
+    U.legendHTML(q('lgV'), [
+      { label: 'Maximum absolute error vs. central difference', color: col.accent, width: 2.4, shape: 'circle', kind: 'linemarker' },
+      { label: 'Maximum absolute error vs. forward difference', color: col.orange, dash: dash.dashed, width: 2.2, shape: 'square', kind: 'linemarker' },
+      { label: 'Current <i>ε</i>', color: col.purple, dash: dash.dashdot, width: 1.6 }]);
+    function pname(p) {
+      if (p.kind === 'W1') return '<i>W</i><sup>(1)</sup><sub>' + p.j + p.i + '</sub>';
+      if (p.kind === 'b1') return '<i>b</i><sup>(1)</sup><sub>' + p.j + '</sub>';
+      if (p.kind === 'W2') return '<i>W</i><sup>(2)</sup><sub>' + p.j + '</sub>';
+      return '<i>b</i><sup>(2)</sup>';
+    }
+    function ptext(p) { return p.kind === 'W1' ? 'W(1) ' + p.j + p.i : p.kind === 'b1' ? 'b(1) ' + p.j : p.kind === 'W2' ? 'W(2) ' + p.j : 'b(2)'; }
+    function pmath(p) {
+      if (p.kind === 'W1') return ssym('W', 1, '<mn>' + p.j + p.i + '</mn>');
+      if (p.kind === 'b1') return ssym('b', 1, '<mn>' + p.j + '</mn>');
+      if (p.kind === 'W2') return ssym('W', 2, '<mn>' + p.j + '</mn>');
+      return ssym('b', 2);
+    }
+    function compute() {
+      var t = target(), key = S.src + JSON.stringify(M.flatten(t.net)) + t.wd + t.X.length;
+      if (key !== sweepKey) {
+        sweep = M.epsSweep(t.net, t.X, t.Y, t.wd, M.epsGrid(34)); sweepKey = key;
+        var names = M.paramNames(t.net);
+        sel.input.innerHTML = names.map(function (p, k) { return '<option value="' + k + '">' + ptext(p) + '</option>'; }).join('');
+        if (S.pick >= names.length) S.pick = 0;
+        sel.input.value = String(S.pick);
+      }
+      G = M.gradCheck(t.net, t.X, t.Y, t.wd, Math.pow(10, S.logEps));
+      return t;
+    }
+    function drawV() {
+      var F = U.fitCanvas(cv, { aspect: 0.55, minHeight: 250, maxHeight: 400 }), c = F.c;
+      var box = U.plotBox(F.W, F.H, { l: 54, r: 12, t: 14, b: 40 });
+      var ys = []; sweep.forEach(function (r) { ys.push(r.central, r.forward); });
+      var pos = ys.filter(function (v) { return v > 0 && isFinite(v); });
+      var lo = Math.pow(10, Math.floor(Math.log10(Math.min.apply(null, pos)) - 0.3)), hi = Math.pow(10, Math.ceil(Math.log10(Math.max.apply(null, pos)) + 0.6));
+      lo = Math.max(lo, 1e-17);
+      var ax = U.axes(c, box, [1e-12, 1e-1], [lo, hi], { xlog: true, ylog: true, xl: 'Finite-difference step ε', yl: 'Maximum absolute error' });
+      var es = sweep.map(function (r) { return r.eps; }), clip = function (v) { return v > 0 ? v : lo; };
+      U.line(c, ax, es, sweep.map(function (r) { return clip(r.forward); }), { color: col.orange, dash: dash.dashed, width: 2 });
+      U.line(c, ax, es, sweep.map(function (r) { return clip(r.central); }), { color: col.accent, width: 2.4 });
+      sweep.forEach(function (r, k) { if (k % 3) return; U.marker(c, ax.X(r.eps), ax.Y(clip(r.forward)), 'square', 6, col.orange, true); U.marker(c, ax.X(r.eps), ax.Y(clip(r.central)), 'circle', 6, col.accent, true); });
+      var e = Math.pow(10, S.logEps);
+      U.vline(c, ax, e, { color: col.purple, dash: dash.dashdot, width: 1.6 });
+      U.marker(c, ax.X(e), ax.Y(clip(G.maxAbs)), 'diamond', 11, col.purple, true);
+      var L = U.labeler(c, box);
+      var km = 0; sweep.forEach(function (r, k) { if (r.central < sweep[km].central) km = k; });
+      L.add('Current ε: ' + fmt(G.maxAbs, 2), ax.X(e) + 8, ax.Y(clip(G.maxAbs)) - 14, { color: col.purple, size: 10.5, bold: true, align: 'left' });
+      L.add('Rounding error ∝ 1/ε', ax.X(3e-12), ax.Y(clip(sweep[1].central)) + 16, { color: col.sub, size: 10, align: 'left' });
+      L.add('Central difference ∝ ε²', ax.X(sweep[sweep.length - 4].eps) - 4, ax.Y(clip(sweep[sweep.length - 4].central)) + 14, { color: col.accent, size: 10, align: 'right', bold: true });
+      L.add('Forward difference ∝ ε', ax.X(sweep[sweep.length - 7].eps) - 4, ax.Y(clip(sweep[sweep.length - 7].forward)) - 14, { color: col.orange, size: 10, align: 'right', bold: true });
+      U.setCanvasLabel(cv, 'Maximum absolute error between the backpropagation gradient and the finite difference against the step ε (10⁻¹² to 10⁻¹, logarithmic). The central-difference error is smallest, ' + fmt(sweep[km].central, 2) + ', at ε = ' + fmt(sweep[km].eps, 2) + '. At the current ε = ' + fmt(e, 2) + ' it is ' + fmt(G.maxAbs, 2) + '.');
+      q('capV').innerHTML = 'Both axes are logarithmic. For each <i>ε</i>, the maximum over all ' + G.n + ' parameters of the difference |<i>g</i><sub>backprop</sub> − <i>g</i><sub>diff</sub>| is drawn (' + sweep.length + ' points; ● and ■ are shown every third point). The minimum of the central-difference error is ' + fmt(sweep[km].central, 2) + ' at <i>ε</i> = ' + fmt(sweep[km].eps, 2) + '. Target: ' + target().label + '.';
+    }
+    function tbl() {
+      var h = '<table class="grid"><thead><tr><th class="l">Parameter</th><th>Backprop</th><th>Central diff.</th><th class="absc">Abs. error</th><th>Rel. error</th></tr></thead><tbody>';
+      G.rows.forEach(function (r, k) { h += '<tr' + (k === S.pick ? ' class="hi"' : '') + '><td class="l">' + pname(r.name) + '</td><td>' + f6(r.bp) + '</td><td>' + f6(r.fd) + '</td><td class="absc">' + fmt(r.abs, 2) + '</td><td>' + fmt(r.rel, 2) + '</td></tr>'; });
+      q('tblGC').innerHTML = h + '</tbody></table>';
+    }
+    function eq() {
+      var r = G.rows[S.pick] || G.rows[0], e = Math.pow(10, S.logEps), p = r.name;
+      var t = target(), w = M.flatten(t.net), wp = w.slice(), wm = w.slice(); wp[S.pick] += e; wm[S.pick] -= e;
+      var Lp = M.lossOnly(M.unflatten(t.net, wp), t.X, t.Y, null, t.wd).L, Lm = M.lossOnly(M.unflatten(t.net, wm), t.X, t.Y, null, t.wd).L;
+      var rows = [];
+      rows.push(row(frac(mi('L') + mo('(') + pmath(p) + mo('+') + mi('ε') + mo(')') + mo('−') + mi('L') + mo('(') + pmath(p) + mo('−') + mi('ε') + mo(')'), mn(2) + mi('ε')) + BRK + mo('=') + frac(mn(fmt(Lp, 12)) + mo('−') + mn(fmt(Lm, 12)), mn(2) + mo('×') + mn(fmt(e, 2))) + BRK + mo('=') + mn(f6(r.fd))));
+      rows.push(row(mt('Backprop') + sp('0.3em') + frac(mo('∂') + mi('L'), mo('∂') + pmath(p)) + mo('=') + mn(f6(r.bp)) + NL + mt('Diff.') + sp('0.3em') + mn(fmt(r.abs, 2)) + mo(',') + sp('0.4em') + mt('Rel. error') + sp('0.3em') + mn(fmt(r.rel, 2))));
+      rows.push(row(mt('Numerator difference') + sp('0.3em') + mn(fmt(Lp - Lm, 3)) + sp('0.3em') + mt('; the rounding error of') + sp('0.2em') + mi('L') + sp('0.2em') + mt('is about') + sp('0.3em') + mn(fmt(2.2e-16 * Math.abs(G.L), 2)) + NL + sp('0.2em') + mt('.')));
+      q('eqGC').innerHTML = table(rows);
+    }
+    function readout() {
+      var ok = G.vecRel <= 1e-6;
+      q('readGC').innerHTML = kv([
+        ['Number of parameters', String(G.n)], ['Loss <i>L</i>', f6(G.L)], ['Current <i>ε</i>', fmt(Math.pow(10, S.logEps), 2)],
+        ['Maximum absolute error', fmt(G.maxAbs, 2)], ['Maximum per-component relative error', fmt(G.maxRel, 2)], ['Relative error as a vector', fmt(G.vecRel, 2)]]) +
+        '<p class="msg ' + (ok ? 'ok' : 'warn') + '">' + (ok ? 'The relative error as a vector is at most 10⁻⁶. The backpropagation gradient agrees with the finite-difference approximation.' : 'The relative error as a vector exceeds 10⁻⁶. ε may be too small (rounding error) or too large (truncation error). Check with ε ≈ 10⁻⁵.') + '</p>';
+    }
+    var self = {
+      update: function () {
+        var t = compute();
+        if (!M.netFinite(t.net)) { q('readGC').innerHTML = '<p class="msg warn">The weights contain NaN or infinity, so the computation cannot be done. Press “Reset” in ②.</p>'; return; }
+        drawV(); tbl(); eq(); readout(); U.postHeightLater();
+      },
+      show: function () { sweepKey = ''; }
+    };
+    return self;
+  }
+
+  U.boot(app, { panels: { trace: TraceSim, train: TrainSim, gradcheck: GradSim }, initial: 'trace' });
+})();
+</script>
+</body>
+</html>

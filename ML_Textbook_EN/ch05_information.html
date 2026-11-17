@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="../photo/logo.png">
+<link rel="apple-touch-icon" href="../photo/logo.png">
+<title>Chapter 5 Information, Entropy, and the KL Divergence — Measuring the Difference Between Distributions — Machine Learning</title>
+<link rel="stylesheet" href="assets/style.css">
+<script>
+MathJax = {
+  loader: { load: ['[tex]/tagformat'] },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    tags: 'ams',
+    tagformat: { number: (n) => '5.' + n },
+    packages: { '[+]': ['tagformat'] },
+    macros: {
+      bm: ["\\boldsymbol{#1}", 1],
+      dd: "\\mathrm{d}",
+      R: "\\mathbb{R}",
+      abs: ["\\left|#1\\right|", 1],
+      norm: ["\\left\\|#1\\right\\|", 1],
+      diff: ["\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}", 2],
+      pdiff: ["\\frac{\\partial #1}{\\partial #2}", 2],
+      tr: "\\operatorname{tr}",
+      rank: "\\operatorname{rank}",
+      sgn: "\\operatorname{sgn}",
+      tp: "\\mathsf{T}",
+      Ex: "\\mathbb{E}",
+      Var: "\\operatorname{Var}",
+      Cov: "\\operatorname{Cov}",
+      KL: "\\operatorname{KL}",
+      ELBO: "\\operatorname{ELBO}",
+      Normal: "\\mathcal{N}",
+      GP: "\\mathcal{GP}",
+      data: "\\mathcal{D}",
+      argmin: "\\operatorname*{arg\\,min}",
+      argmax: "\\operatorname*{arg\\,max}",
+      softmax: "\\operatorname{softmax}",
+      diag: "\\operatorname{diag}",
+      relu: "\\operatorname{ReLU}"
+    }
+  },
+  chtml: { scale: 1.02 }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<script src="assets/mathwrap.js" defer></script>
+<script src="assets/simembed.js" defer></script>
+</head>
+<body>
+<header class="site">
+  <a href="index.html">Machine Learning — Contents</a>
+  <span class="series">Part II Foundations That Make Learning Work / Chapter 5</span>
+</header>
+<main>
+<h1><span class="chapter-no">Chapter 5</span>Information, Entropy, and the KL Divergence — Measuring the Difference Between Distributions</h1>
+
+<div class="lead">
+<div class="question">
+<strong>The question this chapter answers</strong>
+<ul>
+  <li>When we train a classifier that identifies the crystal phase from an XRD pattern, why do we use as the loss function not the squared error but “the negative of the logarithm of the probability assigned to the correct phase” (the cross-entropy)?</li>
+  <li>Can we express with a single number how far the model's predictive distribution deviates from the true distribution? May that number be called the “distance” between the two distributions?</li>
+  <li>Is the “entropy” of machine learning the same thing as the entropy of statistical mechanics (the “entropy” of high-entropy alloys)?</li>
+</ul>
+</div>
+<p>Before measuring the XRD of a powder sample, suppose there are eight candidate crystal phases and all of them seem about equally likely. By asking three yes-or-no questions, such as “Is it one of phases 1–4?”, “Is it one of phases 1–2?”, and “Is it phase 1?”, we can always find out which phase it is ($2^{3}=8$). Conversely, if we already know from the start that “it is almost certainly phase 1,” the measurement gains us almost nothing. The magnitude of the “surprise” we feel on learning the outcome is larger the smaller the probability of that outcome. We call this quantity of surprise the <strong>information content</strong>, and we call its average the <strong>entropy</strong>.</p>
+<p>In this chapter we begin with why the <strong>self-information</strong> $-\ln p(x)$ takes the form of a logarithm, and then define the <strong>entropy</strong> $H[p]$, the <strong>differential entropy</strong> of a continuous variable, and the <strong>cross-entropy</strong> and the <strong>KL divergence</strong> (Kullback–Leibler divergence, the magnitude of the deviation between distributions), which measure the difference between two distributions. We then show that “minimizing the KL divergence between the data distribution and the model distribution” is the same as the <strong>maximum likelihood estimation</strong> of Chapter 4. This is what the cross-entropy loss for classification (Chapter 9) and the loss for GPT's next-token prediction (Chapter 26) really are. In the latter half we treat how the <strong>direction</strong> of the KL changes the approximation, the <strong>mutual information</strong> that measures the strength of dependence between variables, the <strong>correspondence and differences</strong> with the Gibbs entropy of statistical mechanics, and the <strong>configurational entropy</strong> of alloys.</p>
+<div class="goals">
+  <strong>What you will learn in this chapter</strong>
+  <ul>
+    <li>Derive the self-information $-\ln p$ from the requirement that “the information content of independent events adds,” and convert between nats and bits.</li>
+    <li>Compute the entropy of a discrete distribution by hand and prove that it is maximal for the uniform distribution.</li>
+    <li>Derive the differential entropy $\tfrac12\ln(2\pi e\sigma^{2})$ of the Gaussian distribution, and explain that it can be negative and that its value changes with the choice of units.</li>
+    <li>Derive $H[p,q]=H[p]+\KL(p\,\|\,q)$ and $\KL(p\,\|\,q)\ge0$ one line at a time, and show numerically that the KL is asymmetric.</li>
+    <li>Derive that minimizing the KL with respect to the empirical distribution is the same as maximum likelihood estimation, and explain the cross-entropy loss for classification from this standpoint.</li>
+    <li>Compute the mutual information from a table of the joint distribution, and show that it is 0 when the variables are independent.</li>
+    <li>Derive that maximizing the entropy with the mean energy fixed yields the canonical distribution, and state the difference between Shannon's entropy and the entropy of thermodynamics.</li>
+    <li>Derive the configurational entropy of ideal mixing $-R\sum_i x_i\ln x_i$ from the number of states, and compute that it equals $R\ln 5$ for an equimolar five-component system.</li>
+  </ul>
+</div>
+<div class="prereq"><strong>Prerequisites:</strong> in this book, <a href="ch02_probability.html#sec2-2">Chapter 2, Section 2.2</a> (joint distributions, marginalization, conditional distributions), <a href="ch02_probability.html#sec2-3">Section 2.3</a> (independence), <a href="ch02_probability.html#sec2-5">Section 2.5</a> (expectation, or expected value), <a href="ch02_probability.html#sec2-6">Section 2.6</a> (change of variables; used in Section 5.3), <a href="ch04_bayesian_inference.html#sec4-2">Chapter 4, Section 4.2</a> (maximum likelihood estimation), and <a href="ch03_distributions.html#sec3-5">Chapter 3, Section 3.5</a> (Gaussian distribution). Derivatives of logarithms and exponentials, and Taylor expansion (<a href="../UnivMath_Textbook_EN/ch04_taylor_expansion.html#sec4-2">University Mathematics, Chapter 4, Section 4.2</a>). In Section 5.8 we use the method of Lagrange multipliers (<a href="../UnivMath_Textbook_EN/ch06_partial_derivatives.html#sec6-7">University Mathematics, Chapter 6, Section 6.7</a>; we explain only as much as needed in a box in this chapter), and in Sections 5.8–5.9 we refer to Boltzmann's principle (<a href="../UnivPhys_Textbook_EN/ch49_boltzmann_entropy.html#sec49-2">Introductory University Physics, Chapter 49, Section 49.2</a>) and Stirling's formula (<a href="../UnivPhys_Textbook_EN/ch47_math_for_stat.html#sec47-3">Introductory University Physics, Chapter 47, Section 47.3</a>). No prior knowledge of statistical mechanics is assumed.</div>
+<p class="route"><strong>Sections for the introductory route:</strong> <a href="#sec5-1">5.1</a>, <a href="#sec5-2">5.2</a>, <a href="#sec5-4">5.4</a>, <a href="#sec5-5">5.5</a>, <a href="#sec5-11">5.11</a>. Sections marked “Detailed Route” may be skipped on a first reading.</p>
+</div>
+
+<nav class="chapter-toc">
+  <strong>Contents of this chapter</strong>
+  <ol>
+    <li><a href="#sec5-1">5.1 Self-Information — Measuring the Size of a Surprise</a></li>
+    <li><a href="#sec5-2">5.2 Entropy — The Average Surprise</a></li>
+    <li><a href="#sec5-3">5.3 Differential Entropy of Continuous Variables</a></li>
+    <li><a href="#sec5-4">5.4 Cross-Entropy and the KL Divergence</a></li>
+    <li><a href="#sec5-5">5.5 KL Minimization and Maximum Likelihood — What the Cross-Entropy Loss Really Is</a></li>
+    <li><a href="#sec5-6">5.6 The Direction of the KL — Covering and Mode-Seeking Approximations</a></li>
+    <li><a href="#sec5-7">5.7 Mutual Information — Measuring the Strength of Dependence</a></li>
+    <li><a href="#sec5-8">5.8 Correspondence and Differences with Statistical Mechanics</a></li>
+    <li><a href="#sec5-9">5.9 Connections to Materials Engineering and Condensed Matter Physics — Configurational Entropy and Phase Classification</a></li>
+    <li><a href="#sec5-10">5.10 Common Misconceptions and Limits of Applicability</a></li>
+    <li><a href="#sec5-11">5.11 Summary, Link to the Next Chapter, Exercises, and References</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="sec5-1">5.1 Self-Information — Measuring the Size of a Surprise</h2>
+
+<h3>5.1.1 What we want to do</h3>
+
+<p>Suppose there are four candidate phases (A, B, C, D), and that, from past synthesis experience, their probabilities are $1/2$, $1/4$, $1/8$, and $1/8$, respectively. Let us try to determine the result of a measurement by asking yes/no questions. If we ask “Is it A?”, “Is it B?”, “Is it C?” in order, starting from the most likely phase A, then we know the answer after one question for A, after two questions for B, and after three questions for C or D (<a href="#fig5-1">Figure 5.1</a>).</p>
+
+<p>Lining these numbers up with the probabilities, A (probability $1/2=2^{-1}$) takes one question, B ($1/4=2^{-2}$) takes two, and C and D ($1/8=2^{-3}$) take three; in every case</p>
+$$
+\text{number of questions needed}=\log_{2}\frac{1}{p}
+$$
+<p>holds. The smaller the probability of an outcome, the more questions learning it saves us. In other words, the smaller the probability of an outcome, the greater the “surprise” and the more information it brings. We want to define this quantity for general probabilities.</p>
+
+<figure id="fig5-1">
+<svg role="img" aria-label="A tree for identifying one of four phases with yes/no questions. First ask “Is it phase A?”; if yes, the answer is A (probability 1/2, one question). If no, ask “Is it phase B?”; if yes, the answer is B (probability 1/4, two questions). If no, ask “Is it phase C?”; if yes, the answer is C, and if no, it is D (both with probability 1/8, three questions). The number of questions equals the base-2 logarithm of 1 divided by the probability, and the mean is 1.75 questions." viewBox="0 0 640 330" style="max-width:640px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>Figure 5.1: Identifying the phase with yes/no questions</title>
+<defs>
+<marker id="arr-fig5-1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"></path></marker>
+</defs>
+<!-- questions -->
+<rect x="30" y="30" width="120" height="40" rx="8" fill="#fff" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="6 4"></rect>
+<text x="90" y="56" font-size="15" text-anchor="middle" fill="#1a1a1a">Phase A?</text>
+<rect x="200" y="110" width="120" height="40" rx="8" fill="#fff" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="6 4"></rect>
+<text x="260" y="136" font-size="15" text-anchor="middle" fill="#1a1a1a">Phase B?</text>
+<rect x="370" y="190" width="120" height="40" rx="8" fill="#fff" stroke="#1a1a1a" stroke-width="1.5" stroke-dasharray="6 4"></rect>
+<text x="430" y="216" font-size="15" text-anchor="middle" fill="#1a1a1a">Phase C?</text>
+<!-- arrows -->
+<line x1="90" y1="70" x2="90" y2="112" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig5-1)"></line>
+<text x="98" y="96" font-size="14" fill="#1a1a1a">Yes</text>
+<line x1="150" y1="50" x2="255" y2="50" stroke="#1a1a1a" stroke-width="1.5"></line>
+<line x1="255" y1="50" x2="255" y2="106" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig5-1)"></line>
+<text x="170" y="42" font-size="14" fill="#1a1a1a">No</text>
+<line x1="260" y1="150" x2="260" y2="192" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig5-1)"></line>
+<text x="268" y="176" font-size="14" fill="#1a1a1a">Yes</text>
+<line x1="320" y1="130" x2="425" y2="130" stroke="#1a1a1a" stroke-width="1.5"></line>
+<line x1="425" y1="130" x2="425" y2="186" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig5-1)"></line>
+<text x="340" y="122" font-size="14" fill="#1a1a1a">No</text>
+<line x1="430" y1="230" x2="430" y2="262" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig5-1)"></line>
+<text x="438" y="252" font-size="14" fill="#1a1a1a">Yes</text>
+<line x1="490" y1="210" x2="560" y2="210" stroke="#1a1a1a" stroke-width="1.5"></line>
+<line x1="560" y1="210" x2="560" y2="262" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#arr-fig5-1)"></line>
+<text x="500" y="202" font-size="14" fill="#1a1a1a">No</text>
+<!-- leaves -->
+<rect x="45" y="116" width="90" height="56" rx="8" fill="#5b2a5e"></rect>
+<text x="90" y="139" font-size="15" text-anchor="middle" fill="#fff">A 1/2</text>
+<text x="90" y="161" font-size="12" text-anchor="middle" fill="#fff">1 question</text>
+<rect x="215" y="196" width="90" height="56" rx="8" fill="#5b2a5e"></rect>
+<text x="260" y="219" font-size="15" text-anchor="middle" fill="#fff">B 1/4</text>
+<text x="260" y="241" font-size="12" text-anchor="middle" fill="#fff">2 questions</text>
+<rect x="385" y="266" width="90" height="56" rx="8" fill="#5b2a5e"></rect>
+<text x="430" y="289" font-size="15" text-anchor="middle" fill="#fff">C 1/8</text>
+<text x="430" y="311" font-size="12" text-anchor="middle" fill="#fff">3 questions</text>
+<rect x="515" y="266" width="90" height="56" rx="8" fill="#5b2a5e"></rect>
+<text x="560" y="289" font-size="15" text-anchor="middle" fill="#fff">D 1/8</text>
+<text x="560" y="311" font-size="12" text-anchor="middle" fill="#fff">3 questions</text>
+<!-- note -->
+<text x="40" y="240" font-size="14" fill="#1a1a1a">Questions = log<tspan baseline-shift="sub" font-size="11">2</tspan>(1/<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">p</tspan>)</text>
+<text x="40" y="264" font-size="14" fill="#1a1a1a">Mean = 1.75 questions</text>
+<text x="40" y="288" font-size="14" fill="#1a1a1a">(= entropy, in bits)</text>
+</svg>
+<figcaption>Figure 5.1: A tree for identifying one of four phases with yes/no questions (numerical example). The dashed boxes are the questions and the filled boxes are the answers; the number beside each phase name is its prior probability, and the number below is the number of questions needed to reach that answer. The number of questions equals $\log_{2}(1/p)$. The mean number of questions, $\tfrac12\cdot1$ $+\tfrac14\cdot2$ $+\tfrac18\cdot3$ $+\tfrac18\cdot3$ $=1.75$, is the entropy of Section 5.2 measured in bits.</figcaption>
+</figure>
+
+<h3>5.1.2 Where the form of the logarithm comes from</h3>
+
+<p>Suppose an event of probability $p$ has occurred. We require the “information content” $h$ gained on learning this to have the following three properties.</p>
+<ol>
+  <li>$h$ is a function $h(p)$ determined by the probability $p$ ($0\lt p\le1$) alone, and it is larger the smaller $p$ is (monotone decreasing).</li>
+  <li>Learning that an event that is certain to occur ($p=1$) has occurred gives no information: $h(1)=0$.</li>
+  <li><strong>The information content of two independent events is additive</strong>: if an event of probability $p$ and an event of probability $q$ are independent, then the probability that both occur is $pq$ (<a href="ch02_probability.html#sec2-3">Chapter 2, Section 2.3</a>), and $h(pq)=h(p)+h(q)$.</li>
+</ol>
+<p>The third property is the natural demand that the information gained on learning the phases of two independent samples be the sum of the two separate pieces of information. These three properties force the form of $h$ to be a logarithm.</p>
+
+<div class="box derive">
+<p class="box-title">Derivation: The only functions satisfying the requirements are $-c\ln p$</p>
+<p>Change variables to $p=e^{-u}$ ($u=-\ln p\ge0$) and let $g(u)\equiv h(e^{-u})$. The smaller $p$ is, the larger $u$ is, so Requirement 1 says that $g$ is monotone increasing, and Requirement 2 says that $g(0)=h(1)=0$. Putting $p=e^{-u}$ and $q=e^{-v}$ in Requirement 3, we have $pq=e^{-(u+v)}$, so</p>
+$$
+g(u+v)=g(u)+g(v)\qquad(u,v\ge0).
+$$
+<p>(i) <strong>Integer multiples</strong>: Putting $v=u$ gives $g(2u)=2g(u)$. Repeating this, for every positive integer $n$ we get $g(nu)=n\,g(u)$.</p>
+<p>(ii) <strong>Rational multiples</strong>: For a positive integer $m$, writing $u=m\cdot(u/m)$ and applying (i), we get $g(u)=m\,g(u/m)$, that is, $g(u/m)=g(u)/m$. Combining this with (i), for every positive rational number $r=n/m$ we obtain $g(ru)=r\,g(u)$.</p>
+<p>(iii) <strong>Extension to real numbers</strong>: Let $c\equiv g(1)$. By (ii), $g(r)=cr$ for every positive rational number $r$. For any real number $u\gt0$, take rational numbers $r_1\lt u\lt r_2$ approaching $u$ from the left and from the right. Since $g$ is monotone increasing, $cr_1=g(r_1)\le g(u)\le g(r_2)=cr_2$. Letting $r_1,r_2\to u$ gives $g(u)=cu$.</p>
+<p>Thus $g(u)=cu$, and returning to the original variable gives $h(p)=g(-\ln p)=-c\ln p$. Since $g$ is an increasing function, $c\gt0$.</p>
+<p style="text-align:right">∎</p>
+</div>
+
+<p>The constant $c$ corresponds to the choice of the base of the logarithm (that is, the unit of information). Taking $c=1$ gives the natural logarithm, and taking $c=1/\ln 2$ gives $-\ln p/\ln 2=-\log_{2}p$.</p>
+
+<div class="box def">
+<p class="box-title">Definition 5.1: Self-information</p>
+<p>When a discrete random variable that follows a probability mass function $p(x)$ takes the value $x$, we define its <strong>self-information</strong> as follows:</p>
+\begin{equation}
+h(x)=-\ln p(x)=\ln\frac{1}{p(x)} \label{eq:5-selfinfo}
+\end{equation}
+<p>The unit measured with the natural logarithm is called the <strong>nat</strong>, and the unit measured by $-\log_{2}p(x)$ is called the <strong>bit</strong>. Since $\log_{2}p=\ln p/\ln 2$,</p>
+$$
+\begin{aligned}
+1\ \mathrm{bit}&=\ln 2\ \mathrm{nat}\approx0.693\ \mathrm{nat},\\
+1\ \mathrm{nat}&=\frac{1}{\ln 2}\ \mathrm{bit}\approx1.443\ \mathrm{bit}.
+\end{aligned}
+$$
+</div>
+
+<p>This book uses the <strong>natural logarithm (nat) as the default</strong>. Differentiation is simple with it, and it connects directly to the log-likelihood $\ln p(\data\mid\theta)$ of maximum likelihood estimation (<a href="ch04_bayesian_inference.html#sec4-2">Chapter 4, Section 4.2</a>). We use bits only when base 2 is the natural choice, as with “the number of yes/no questions” or memory capacity. <a href="#fig5-2">Figure 5.2</a>(a) plots $h=-\ln p$ and $\log_{2}(1/p)$. As $p\to0$ the information content grows without bound, and at $p=1$ it is 0.</p>
+
+<div class="box ex">
+<p class="box-title">Example 5.1: Information content upon learning the phase</p>
+<p>(1) Suppose there are eight candidate phases, each with probability $1/8$. Find the self-information, in nats and in bits, when the measurement reveals the phase. (2) Find the self-information for phase A, which has probability $1/2$, and for a rare phase with probability $1/32$. (3) Using the result of (1), find the self-information when the phases of two mutually independent samples (each with eight equally likely candidates) are both learned, and compare it with the value computed directly.</p>
+<p><strong>Solution.</strong> (1) By Eq. \eqref{eq:5-selfinfo}, $h$ $=-\ln(1/8)$ $=\ln 8$ $=3\ln 2$ $\approx2.079\ \mathrm{nat}$. In bits, $\log_{2}8=3\ \mathrm{bit}$. This corresponds to three yes/no questions.<br>
+(2) For phase A, $\ln 2$ $\approx0.693\ \mathrm{nat}$ $=1\ \mathrm{bit}$. For the rare phase, $\ln 32$ $=5\ln2$ $\approx3.466\ \mathrm{nat}$ $=5\ \mathrm{bit}$. When the probability is multiplied by $1/16$, the information content increases by $\ln 16=4\ \mathrm{bit}$.<br>
+(3) Because the samples are independent, the probability of the pair of phases is $(1/8)\times(1/8)=1/64$. Computing directly, $-\ln(1/64)$ $=\ln 64$ $=6\ln2$ $\approx4.159\ \mathrm{nat}$ $=6\ \mathrm{bit}$. On the other hand, the sum of the values from (1) is $2\times3=6\ \mathrm{bit}$, which agrees. This is exactly Requirement 3.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec5-2">5.2 Entropy — The Average Surprise</h2>
+
+<h3>5.2.1 Definition</h3>
+
+<p>Before a measurement, we do not know which result will occur. We therefore estimate the information content obtained by the measurement through its <strong>average</strong>. Entropy is the expectation (expected value) of the self-information $h(x)$ (<a href="ch02_probability.html#sec2-5">Chapter 2, Section 2.5</a>).</p>
+
+<div class="box def">
+<p class="box-title">Definition 5.2: Entropy</p>
+<p>Let a discrete random variable $x$ take $K$ values, with probability mass function $p(x)$. Then</p>
+\begin{equation}
+\begin{aligned}
+H[p]&=\Ex_{p}\bigl[-\ln p(x)\bigr]\\
+&=-\sum_{x}p(x)\ln p(x)
+\end{aligned} \label{eq:5-entropy}
+\end{equation}
+<p>is called the <strong>entropy</strong> of the distribution $p$. Its unit is the nat (the bit if we use $\log_{2}$). When we want to emphasize the name of the random variable, we also write $H[x]$. A term for a value with $p(x)=0$ is set to 0 by the following convention.</p>
+$$
+0\ln 0\equiv0 .
+$$
+</div>
+
+<p>The convention $0\ln0=0$ comes from a limit. The limit of $t\ln t$ as $t\to+0$ is the indeterminate form “$0\times(-\infty)$”, so we rewrite it as $t\ln t=\dfrac{\ln t}{1/t}$ and use l'Hôpital's rule:</p>
+$$
+\lim_{t\to+0}\frac{\ln t}{1/t}=\lim_{t\to+0}\frac{1/t}{-1/t^{2}}=\lim_{t\to+0}(-t)=0 .
+$$
+<p>A value that cannot occur does not contribute to the average surprise.</p>
+
+<h3>5.2.2 Properties</h3>
+
+<ul>
+  <li><strong>Nonnegative</strong>: Since $0\le p(x)\le1$, we have $\ln p(x)\le0$, so each term satisfies $-p(x)\ln p(x)\ge0$. Hence $H[p]\ge0$.</li>
+  <li><strong>It is 0 only when the outcome is certain</strong>: If $H[p]=0$, then every term is 0, so for each $x$ either $p(x)=0$ or $p(x)=1$. Since the probabilities sum to 1, exactly one value has probability 1 and all the others have probability 0.</li>
+  <li><strong>The maximum is attained by the uniform distribution</strong>: For a distribution taking $K$ values, $H[p]\le\ln K$, with equality if and only if $p(x)=1/K$ (the uniform distribution). The value for the uniform distribution, $H=-\sum_{x}\frac1K\ln\frac1K=\ln K$, can be computed directly. The proof that this is the maximum is given in two lines in Section 5.4 using the KL divergence (Theorem 5.2 in Section 5.4).</li>
+</ul>
+
+<p>The simplest example is the Bernoulli distribution taking two values, $p(x=1)=\mu$ and $p(x=0)=1-\mu$. Its entropy is called the <strong>binary entropy function</strong>.</p>
+\begin{equation}
+\begin{aligned}
+H(\mu)&=-\mu\ln\mu\\
+&\quad-(1-\mu)\ln(1-\mu)
+\end{aligned} \label{eq:5-binary}
+\end{equation}
+<p>Here $0\le\mu\le1$. We locate the maximum by differentiation. Using $\diff{}{\mu}(\mu\ln\mu)=\ln\mu+1$, we get</p>
+$$
+\begin{aligned}
+\diff{H}{\mu}&=-(\ln\mu+1)+\bigl(\ln(1-\mu)+1\bigr)\\
+&=\ln\frac{1-\mu}{\mu},\\
+\frac{\dd^{2}H}{\dd\mu^{2}}&=-\frac{1}{\mu}-\frac{1}{1-\mu}=-\frac{1}{\mu(1-\mu)}\lt0 .
+\end{aligned}
+$$
+<p>The first derivative is 0 when $(1-\mu)/\mu=1$, that is, when $\mu=1/2$, and since the second derivative is negative, this is a maximum. The maximum value is $H(1/2)$ $=\ln2$ $\approx0.693\ \mathrm{nat}$ $=1\ \mathrm{bit}$ (<a href="#fig5-2">Figure 5.2</a>(b)). For a process with success rate 0.9, $H(0.9)\approx0.325\ \mathrm{nat}$ only, and the outcome is already largely known before we look.</p>
+
+<figure id="fig5-2">
+<img src="figs/ch05_fig5-2.svg" alt="The left panel plots the probability p on the horizontal axis and the self-information on the vertical axis, showing minus ln p (nat, solid line) and log2(1/p) (bit, dashed line). It grows large as p approaches 0 and is 0 at p=1. Points are marked at 3 bit for p=1/8 and 1 bit for p=1/2. The right panel shows the binary entropy function, which takes its maximum value ln 2 (about 0.693 nat, 1 bit) at mu=0.5 and is 0.325 nat at mu=0.9." style="max-width:640px;width:100%">
+<figcaption>Figure 5.2: (a) Self-information. The solid line is $-\ln p$ (nat) and the dashed line is $\log_{2}(1/p)$ (bit); the square and the circle mark the values at $p=1/8$ and $p=1/2$. (b) The binary entropy function \eqref{eq:5-binary} (nat). It takes its maximum value $\ln 2$ at $\mu=1/2$. The open circle is the value at $\mu=0.9$. Both are curves computed from the formulas.</figcaption>
+</figure>
+
+<h3>5.2.3 How to read entropy — the average number of questions and the “effective number of choices”</h3>
+
+<p>In the example of <a href="#fig5-1">Figure 5.1</a>, the average number of questions was 1.75. This coincides with the entropy measured in bits (Example 5.2). In general, when we communicate an outcome one at a time by yes/no questions (or by a code of 0s and 1s), it is known that the average length of the best method is at least the entropy measured in bits and can be made shorter than the entropy plus 1 bit (Shannon's source coding theorem; in this book we only state the result and leave the proof to the textbook by Cover &amp; Thomas in the references). Entropy is the quantity that expresses “how much, on average, we are in doubt until we learn the outcome.”</p>
+
+<p>As another way of reading it, consider $\exp(H[p])$. For a uniform distribution on $K$ values, $\exp(\ln K)=K$, so $\exp(H)$ tells us “how many choices a uniform distribution with the same entropy would have.” We call this the <strong>effective number of choices</strong>. Perplexity, used in evaluating language models (<a href="ch26_gpt.html#sec26-4">Chapter 26, Section 26.4</a>), applies this idea to “how many choices, on average, the model is torn between for the next token.”</p>
+
+<h3>5.2.4 The entropy of independent variables is additive</h3>
+
+<p>For two discrete random variables $x,y$, the entropy of the joint distribution $p(x,y)$ is called the <strong>joint entropy</strong> $H[x,y]=-\sum_{x}\sum_{y}p(x,y)\ln p(x,y)$. If $x$ and $y$ are independent, then $p(x,y)=p(x)p(y)$, so</p>
+$$
+\begin{aligned}
+H[x,y]&=-\sum_{x}\sum_{y}p(x)p(y)\\
+&\qquad\times\bigl\{\ln p(x)+\ln p(y)\bigr\}\\
+&=-\sum_{x}p(x)\ln p(x)\underbrace{\sum_{y}p(y)}_{=1}\\
+&\quad-\sum_{y}p(y)\ln p(y)\underbrace{\sum_{x}p(x)}_{=1}\\
+&=H[x]+H[y].
+\end{aligned}
+$$
+<p>Requirement 3 on self-information (additivity for independent events) is preserved after taking the average. What changes when the variables are not independent is treated in Section 5.7.</p>
+
+<div class="box ex">
+<p class="box-title">Example 5.2: The entropy of four phases</p>
+<p>For the distribution $p=(1/2,\,1/4,\,1/8,\,1/8)$ of <a href="#fig5-1">Figure 5.1</a>: (1) Find the entropy in bits and in nats, and compare it with the average number of questions. (2) Compare it with the entropy when the four phases are equally probable. (3) Find the effective number of choices $\exp(H)$.</p>
+<p><strong>Solution.</strong> (1) Computing in bits, $-\log_{2}(1/2)=1$, $-\log_{2}(1/4)=2$, and $-\log_{2}(1/8)=3$, so</p>
+$$
+\begin{aligned}
+H&=\tfrac12\cdot1+\tfrac14\cdot2+\tfrac18\cdot3+\tfrac18\cdot3\\
+&=0.5+0.5+0.375+0.375=1.75\ \mathrm{bit}.
+\end{aligned}
+$$
+<p>Converting to nats gives $1.75\times\ln2$ $\approx1.75\times0.6931$ $\approx1.213\ \mathrm{nat}$. This agrees with the average number of questions, 1.75.<br>
+(2) For equal probabilities, $H$ $=\log_{2}4$ $=2\ \mathrm{bit}$ $=\ln4$ $\approx1.386\ \mathrm{nat}$. The skewed distribution has 0.25 bit less entropy. To the extent that we already know in advance that “it is probably A,” the measurement gives us less information.<br>
+(3) $\exp(1.213)\approx3.36$. Even though there are four candidates, because of the skew we are effectively in doubt among about 3.4 choices.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec5-3">5.3 Differential Entropy of Continuous Variables<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>5.3.1 Definition and the value for the Gaussian distribution</h3>
+
+<p>For a continuous random variable, we define a quantity of the same form by replacing the sum with an integral.</p>
+
+<div class="box def">
+<p class="box-title">Definition 5.3: Differential entropy</p>
+<p>For a continuous random variable $x$ with probability density function $p(x)$,</p>
+\begin{equation}
+h[p]=-\int p(x)\ln p(x)\,\dd x \label{eq:5-diffent}
+\end{equation}
+<p>is called the <strong>differential entropy</strong>. The integral is taken over the range where $p(x)\gt0$.</p>
+</div>
+
+<p>We compute the differential entropy of the Gaussian distribution $p(x)=\Normal(x\mid\mu,\sigma^{2})=\dfrac{1}{\sqrt{2\pi\sigma^{2}}}\exp\!\left(-\dfrac{(x-\mu)^{2}}{2\sigma^{2}}\right)$ (<a href="ch03_distributions.html#sec3-5">Chapter 3, Section 3.5</a>). First, taking the logarithm gives</p>
+$$
+\ln p(x)=-\frac12\ln(2\pi\sigma^{2})-\frac{(x-\mu)^{2}}{2\sigma^{2}} .
+$$
+<p>Eq. \eqref{eq:5-diffent} is the expectation of $-\ln p(x)$, so using the linearity of expectation and $\Ex[(x-\mu)^{2}]=\sigma^{2}$ (the definition of variance), we obtain</p>
+$$
+\begin{aligned}
+h[p]&=\Ex\!\left[\frac12\ln(2\pi\sigma^{2})+\frac{(x-\mu)^{2}}{2\sigma^{2}}\right]\\
+&=\frac12\ln(2\pi\sigma^{2})+\frac{\sigma^{2}}{2\sigma^{2}}=\frac12\ln(2\pi\sigma^{2})+\frac12 .
+\end{aligned}
+$$
+<p>Combining the terms with $\tfrac12=\tfrac12\ln e$, we obtain the following result.</p>
+\begin{equation}
+h\bigl[\Normal(\mu,\sigma^{2})\bigr]=\frac12\ln\bigl(2\pi e\,\sigma^{2}\bigr) \label{eq:5-gauss-ent}
+\end{equation}
+<p>It does not depend on the mean $\mu$; it is determined by the spread $\sigma$ alone. As another simple example, for the uniform distribution on the interval $[a,b]$ we have $p(x)=1/(b-a)$, so $h$ $=-\int_{a}^{b}\frac{1}{b-a}\ln\frac{1}{b-a}\,\dd x$ $=\ln(b-a)$.</p>
+
+<h3>5.3.2 It can be negative, and its value changes with the scale</h3>
+
+<p>Eq. \eqref{eq:5-gauss-ent} is negative when $2\pi e\sigma^{2}\lt1$, that is, when $\sigma\lt1/\sqrt{2\pi e}\approx0.242$ (<a href="#fig5-3">Figure 5.3</a>). For the uniform distribution too, if the width satisfies $b-a\lt1$, then $\ln(b-a)\lt0$. The entropy of a discrete variable was always at least 0, but the differential entropy can be negative. This is because a density can exceed 1 (<a href="ch02_probability.html#sec2-1">Chapter 2, Section 2.1</a>), so $-\ln p(x)$ is negative in some places.</p>
+
+<p>Moreover, <strong>the value changes when we change the scale (unit) of the variable</strong>. Let $y=cx$ ($c\ne0$ is a constant; for example, $c=1000$ in going from μm to nm). By the change-of-variables formula (<a href="ch02_probability.html#sec2-6">Chapter 2, Section 2.6</a>), $p_y(y)=p_x(y/c)/\abs{c}$. Substituting this and returning the integration variable to $x$ through $\dd y=\abs{c}\,\dd x$, we get</p>
+$$
+\begin{aligned}
+h[p_y]&=-\int p_y(y)\ln p_y(y)\,\dd y\\
+&=-\int\frac{p_x(x)}{\abs{c}}\Bigl\{\ln p_x(x)-\ln\abs{c}\Bigr\}\abs{c}\,\dd x\\
+&=h[p_x]+\ln\abs{c}\int p_x(x)\,\dd x\\
+&=h[p_x]+\ln\abs{c}.
+\end{aligned}
+$$
+<p>In other words, the value of the differential entropy itself depends on the unit in which the variable is measured. Values can be compared in size only between the same variable in the same unit. The KL divergence and the mutual information, which we see later, are determined only by the ratio of two densities, so they have no such dependence on units (Section 5.4).</p>
+
+<figure id="fig5-3">
+<img src="figs/ch05_fig5-3.svg" alt="The left panel shows the probability densities of Gaussian distributions with mean 0 and standard deviations 0.2, 0.5, and 1; the density for sigma=0.2 has a maximum of about 2, exceeding 1. The right panel plots the differential entropy h=(1/2)ln(2 pi e sigma^2) against the standard deviation; it is negative when sigma is smaller than about 0.242. Markers show the points corresponding to the three distributions on the left." style="max-width:640px;width:100%">
+<figcaption>Figure 5.3: (a) Probability densities of Gaussian distributions with mean 0 (solid line $\sigma=0.2$, dashed line $\sigma=0.5$, dash-dotted line $\sigma=1$). (b) The relation between the differential entropy \eqref{eq:5-gauss-ent} and the standard deviation. The circle, square, and triangle are the values for the three distributions in (a); it is negative for $\sigma\lt1/\sqrt{2\pi e}\approx0.242$. These are curves computed from the formulas.</figcaption>
+</figure>
+
+<h3>5.3.3 Relation to discrete entropy</h3>
+
+<p>If we divide a continuous variable into intervals of width $\Delta$ and discretize it, the probability of falling in interval $i$ is $P_i\approx p(x_i)\Delta$. The entropy of this discrete distribution is</p>
+$$
+\begin{aligned}
+H_{\Delta}&=-\sum_{i}P_i\ln P_i\\
+&\approx-\sum_{i}p(x_i)\Delta\bigl\{\ln p(x_i)+\ln\Delta\bigr\}\\
+&\approx-\int p(x)\ln p(x)\,\dd x-\ln\Delta\underbrace{\int p(x)\,\dd x}_{=1}\\
+&=h[p]-\ln\Delta
+\end{aligned}
+$$
+<p>(we approximated the sum by an integral). As $\Delta\to0$ we have $-\ln\Delta\to+\infty$, so <strong>the discrete entropy diverges, and the differential entropy is not its limit</strong>. The differential entropy is what remains after subtracting the divergent part $-\ln\Delta$. For example, if we divide the standard Gaussian distribution ($h\approx1.419$) into intervals of width $0.1$, then $H_{\Delta}$ $\approx1.419+2.303$ $=3.722\ \mathrm{nat}$, and with width $0.01$ it becomes $6.024\ \mathrm{nat}$. This expresses the obvious fact that the finer we measure a continuous value, the more information is needed to communicate it.</p>
+
+<div class="box ex">
+<p class="box-title">Example 5.3: Differential entropy and units for a grain-size distribution</p>
+<p>Suppose the grain size of a sintered body follows a Gaussian distribution with mean $1.5\ \mu\mathrm{m}$ and standard deviation $0.2\ \mu\mathrm{m}$ (a numerical example for teaching purposes). (1) Find the differential entropy when the grain size is measured in μm. (2) Find the value when it is measured in nm, and verify that the difference is $\ln1000$. (3) By how much does the differential entropy increase when the standard deviation is widened from $0.2\ \mu\mathrm{m}$ to $0.4\ \mu\mathrm{m}$? Does it depend on the unit?</p>
+<p><strong>Solution.</strong> (1) Split Eq. \eqref{eq:5-gauss-ent} as $\tfrac12\ln(2\pi e)+\ln\sigma$. We have $\tfrac12\ln(2\pi e)$ $=\tfrac12(\ln2\pi+1)$ $=\tfrac12(1.8379+1)$ $\approx1.4189$. Since $\sigma=0.2$, $\ln0.2\approx-1.6094$. Hence $h$ $\approx1.4189-1.6094$ $=-0.1905\ \mathrm{nat}$ (negative).<br>
+(2) In nm, $\sigma=200$ and $\ln200\approx5.2983$, so $h\approx1.4189+5.2983=6.7172\ \mathrm{nat}$. The difference is $6.7172-(-0.1905)$ $=6.9077$ $\approx\ln1000$ $=6.9078$, which agrees with $h[p_y]=h[p_x]+\ln\abs{c}$ ($c=1000$) in Section 5.3.2 (the discrepancy in the last digit is rounding).<br>
+(3) When $\sigma$ doubles, $\ln\sigma$ increases by $\ln2\approx0.693$. This is the same in any unit. Changing the unit adds the same $\ln\abs{c}$ to both values, so the <strong>difference</strong> does not depend on the unit.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec5-4">5.4 Cross-Entropy and the KL Divergence</h2>
+
+<h3>5.4.1 What we want to do — the loss from believing the wrong distribution</h3>
+
+<p>Suppose the true distribution is $p$, but we believe the distribution $q$. When the outcome $x$ occurs, the surprise we feel, measured with the distribution we believe, is $-\ln q(x)$. The outcomes, however, come out according to the true distribution $p$, so the average surprise is $\Ex_{p}[-\ln q(x)]$. Had we believed the correct distribution $p$, the average surprise would have been only $\Ex_{p}[-\ln p(x)]=H[p]$. The difference is “the loss from believing the wrong distribution,” and it expresses how large the difference between $p$ and $q$ is.</p>
+
+<p>In the language of <a href="#fig5-1">Figure 5.1</a>: if we design the order of the questions (the code) to suit $q$ and then guess outcomes that actually follow $p$, the average number of questions is larger than the best possible value. Setting aside the effect of rounding the number of questions to an integer, that excess is the KL divergence defined next (the number of questions, if measured in bits).</p>
+
+<h3>5.4.2 Definition</h3>
+
+<div class="box def">
+<p class="box-title">Definition 5.4: Cross-entropy and the KL divergence</p>
+<p>For two probability mass functions $p(x)$ and $q(x)$ on the same set of values,</p>
+\begin{equation}
+\begin{aligned}
+H[p,q]&=\Ex_{p}\bigl[-\ln q(x)\bigr]\\
+&=-\sum_{x}p(x)\ln q(x)
+\end{aligned} \label{eq:5-ce}
+\end{equation}
+<p>is called the <strong>cross-entropy</strong> of $q$ with respect to $p$, and</p>
+\begin{equation}
+\begin{aligned}
+\KL(p\,\|\,q)&=\Ex_{p}\!\left[\ln\frac{p(x)}{q(x)}\right]\\
+&=\sum_{x}p(x)\ln\frac{p(x)}{q(x)}
+\end{aligned} \label{eq:5-kl}
+\end{equation}
+<p>is called the <strong>KL divergence</strong> (Kullback–Leibler divergence, also called relative entropy) from $p$ to $q$. Its unit is the nat. By convention, a term with $p(x)=0$ is taken to be 0 ($0\ln(0/q)=0$), and if there is an $x$ with $p(x)\gt0$ but $q(x)=0$, we set $\KL(p\,\|\,q)=+\infty$. For continuous variables, replace the sum by an integral and let $p,q$ be probability density functions.</p>
+</div>
+
+<p>The relation between the two quantities follows just by splitting $\ln q=\ln p-\ln(p/q)$.</p>
+$$
+\begin{aligned}
+H[p,q]&=-\sum_{x}p(x)\ln q(x)\\
+&=-\sum_{x}p(x)\left\{\ln p(x)-\ln\frac{p(x)}{q(x)}\right\}\\
+&=-\sum_{x}p(x)\ln p(x)+\sum_{x}p(x)\ln\frac{p(x)}{q(x)} .
+\end{aligned}
+$$
+<p>The first term is $H[p]$ and the second term is $\KL(p\,\|\,q)$, so</p>
+<div class="keyeq">
+\begin{equation}
+H[p,q]=H[p]+\KL(p\,\|\,q) \label{eq:5-ce-decomp}
+\end{equation}
+</div>
+<p>The cross-entropy is the sum of “the uncertainty of the true distribution itself, $H[p]$” and “the loss from mistaking the distribution, $\KL(p\,\|\,q)$.” The term $H[p]$ cannot be changed however we choose $q$.</p>
+
+<p>Unlike the differential entropy, the KL divergence of continuous variables does not depend on the scale of the variable. If $y=cx$, then $p_y(y)=p_x(x)/\abs{c}$ and $q_y(y)=q_x(x)/\abs{c}$, and in the ratio $p_y/q_y=p_x/q_x$ the factors $\abs{c}$ cancel (for a general one-to-one change of variables as well, the absolute value of the same Jacobian determinant multiplies both numerator and denominator, so they cancel).</p>
+
+<h3>5.4.3 The KL divergence is nonnegative — Gibbs's inequality</h3>
+
+<p>The proof uses just one inequality.</p>
+
+<div class="box note">
+<p class="box-title">Math Tool: $\ln t\le t-1$</p>
+<p>For $t\gt0$ we have $\ln t\le t-1$, with equality only when $t=1$.<br>
+Proof: Let $f(t)=t-1-\ln t$. Then $f'(t)=1-1/t$, and $f'\lt0$ (decreasing) for $0\lt t\lt1$, while $f'\gt0$ (increasing) for $t\gt1$. Hence $f$ attains its minimum $f(1)=0$ at $t=1$, and $f(t)\gt0$ for $t\ne1$. In terms of the graph, $\ln t$ lies below its tangent line $t-1$ at the point $(1,0)$.</p>
+</div>
+
+<div class="box thm">
+<p class="box-title">Theorem 5.1: Gibbs's inequality</p>
+<p>For any probability mass functions $p,q$ we have $\KL(p\,\|\,q)\ge0$, with equality only when $p(x)=q(x)$ for all $x$.</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">Proof</p>
+<p>If there is an $x$ with $q(x)=0$ and $p(x)\gt0$, then $\KL=+\infty\gt0$, so below we assume there is no such $x$. The sum is taken only over the $x$ with $p(x)\gt0$ (because terms with $p(x)=0$ are 0). Write this set as $S$. We apply $\ln t\le t-1$ with $t=q(x)/p(x)$ to the quantity with its sign reversed.</p>
+$$
+\begin{aligned}
+-\KL(p\,\|\,q)&=\sum_{x\in S}p(x)\ln\frac{q(x)}{p(x)}\\
+&\le\sum_{x\in S}p(x)\left(\frac{q(x)}{p(x)}-1\right)\\
+&=\sum_{x\in S}q(x)-\sum_{x\in S}p(x)\\
+&=\sum_{x\in S}q(x)-1\ \le\ 1-1=0 .
+\end{aligned}
+$$
+<p>The last inequality holds because the probabilities of $q$ sum to 1 over everything, so the sum over $S$ alone is at most 1. Therefore $\KL(p\,\|\,q)\ge0$.</p>
+<p>Condition for equality: both of the two inequalities must be equalities. The first requires $q(x)/p(x)=1$ for every $x$ in $S$, and the second requires $\sum_{x\in S}q(x)=1$ ($q=0$ outside $S$). Both hold together only when $p(x)=q(x)$ for all $x$.</p>
+<p style="text-align:right">∎</p>
+</div>
+
+<p>Combined with Eq. \eqref{eq:5-ce-decomp}, this gives $H[p,q]\ge H[p]$: <strong>the cross-entropy attains its minimum $H[p]$ when $q=p$</strong>. The KL divergence of continuous variables is also nonnegative, by the same proof with sums replaced by integrals.</p>
+
+<h3>5.4.4 The distributions that maximize entropy</h3>
+
+<p>From Gibbs's inequality, the properties announced in Section 5.2 follow immediately.</p>
+
+<div class="box thm">
+<p class="box-title">Theorem 5.2: Distributions that maximize entropy</p>
+<p>(a) For a discrete distribution taking $K$ values, $H[p]\le\ln K$, with equality only for the uniform distribution $p(x)=1/K$.<br>
+(b) For a continuous distribution with variance $\sigma^{2}$, $h[p]\le\tfrac12\ln(2\pi e\sigma^{2})$, with equality only for the Gaussian distribution.</p>
+</div>
+
+<div class="box derive">
+<p class="box-title">Proof</p>
+<p>(a) Let $u(x)=1/K$ be the uniform distribution, and compute the KL divergence.</p>
+$$
+\begin{aligned}
+\KL(p\,\|\,u)&=\sum_{x}p(x)\ln\frac{p(x)}{1/K}\\
+&=\sum_{x}p(x)\ln p(x)+\ln K\sum_{x}p(x)\\
+&=-H[p]+\ln K .
+\end{aligned}
+$$
+<p>By Theorem 5.1 the left-hand side is nonnegative, so $H[p]\le\ln K$. Equality holds only when $p=u$.</p>
+<p>(b) (For readers of the detailed route) Let $\mu$ be the mean of $p$, and compute the KL divergence with the Gaussian distribution $g(x)=\Normal(x\mid\mu,\sigma^{2})$ having the same mean and variance. The expectation with respect to $p$ of $-\ln g(x)$ $=\tfrac12\ln(2\pi\sigma^{2})$ $+(x-\mu)^{2}/(2\sigma^{2})$ is, since $\Ex_{p}[(x-\mu)^{2}]=\sigma^{2}$, equal to $\tfrac12\ln(2\pi\sigma^{2})+\tfrac12$ $=\tfrac12\ln(2\pi e\sigma^{2})$. Hence</p>
+$$
+\begin{aligned}
+\KL(p\,\|\,g)&=\int p\ln p\,\dd x-\int p\ln g\,\dd x\\
+&=-h[p]+\frac12\ln(2\pi e\sigma^{2})\ \ge\ 0 .
+\end{aligned}
+$$
+<p>Equality holds only when $p=g$.</p>
+<p style="text-align:right">∎</p>
+</div>
+
+<p>Part (a) says that “if we know nothing, the uniform distribution has the greatest uncertainty,” and (b) says that “if we know only the mean and variance, the Gaussian distribution has the greatest uncertainty.” The latter is cited as one of the reasons for using the Gaussian distribution as a model of measurement error (“a distribution that assumes nothing beyond what we know”; this is the maximum-entropy idea of Section 5.8).</p>
+
+<h3>5.4.5 A numerical look — the KL divergence is asymmetric</h3>
+
+<figure id="fig5-4">
+<img src="figs/ch05_fig5-4.svg" alt="The left panel shows, for three phases A, B, and C, the true distribution p=(0.6,0.3,0.1) as filled bars and the model q=(0.4,0.4,0.2) as hatched bars, side by side. The right panel shows the cross-entropy H[p,q]=0.986 nat as a stacked bar: the lower filled part is H[p]=0.898 and the upper hatched part is KL(p||q)=0.088." style="max-width:640px;width:100%">
+<figcaption>Figure 5.4: Numerical example of Example 5.4. (a) The true distribution $p$ (filled) and the model $q$ (hatched). (b) Decomposition \eqref{eq:5-ce-decomp} of the cross-entropy $H[p,q]$: the filled part is $H[p]$ and the hatched part is $\KL(p\,\|\,q)$.</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">Example 5.4: Computing the cross-entropy and the KL divergence for a distribution over three phases</p>
+<p>Under a certain synthesis condition, the true distribution of the phases obtained is $p=(0.6,\,0.3,\,0.1)$ (phases A, B, C), and the model's prediction is $q=(0.4,\,0.4,\,0.2)$ (a numerical example for teaching purposes). Find (1) $H[p]$, (2) $H[p,q]$, and (3) $\KL(p\,\|\,q)$, and verify Eq. \eqref{eq:5-ce-decomp}. (4) Find $\KL(q\,\|\,p)$ and compare it with (3).</p>
+<p><strong>Solution.</strong> The logarithms we need are $\ln0.6=-0.5108$, $\ln0.3=-1.2040$, $\ln0.1=-2.3026$, $\ln0.4=-0.9163$, and $\ln0.2=-1.6094$.<br>
+(1) $H[p]$ $=0.6\times0.5108$ $+0.3\times1.2040$ $+0.1\times2.3026$ $=0.3065+0.3612+0.2303$ $=0.8979\ \mathrm{nat}$.<br>
+(2) $H[p,q]$ $=0.6\times0.9163$ $+0.3\times0.9163$ $+0.1\times1.6094$ $=0.5498+0.2749+0.1609$ $=0.9856\ \mathrm{nat}$.<br>
+(3) Compute $p\ln(p/q)$ term by term: $0.6\ln1.5=0.6\times0.4055=0.2433$, $0.3\ln0.75=0.3\times(-0.2877)=-0.0863$, $0.1\ln0.5=0.1\times(-0.6931)=-0.0693$. The sum is $\KL(p\,\|\,q)=0.0877\ \mathrm{nat}$. Even though some terms are negative, the sum is nonnegative (Theorem 5.1). We have $H[p]+\KL=0.8979+0.0877=0.9856$, which agrees with (2).<br>
+(4) $\KL(q\,\|\,p)$ $=0.4\ln\frac{0.4}{0.6}$ $+0.4\ln\frac{0.4}{0.3}$ $+0.2\ln\frac{0.2}{0.1}$ $=0.4\times(-0.4055)$ $+0.4\times0.2877$ $+0.2\times0.6931$ $=-0.1622+0.1151+0.1386$ $=0.0915\ \mathrm{nat}$. This differs from the $0.0877$ in (3).</p>
+</div>
+
+<p>In Example 5.4 the difference was small, but when the distributions are strongly skewed the asymmetry becomes clear.</p>
+
+<div class="box ex">
+<p class="box-title">Illustration 5.1: KL divergence between a skewed distribution and the uniform distribution</p>
+<p>Let $p=(0.9,\,0.1)$ and $q=(0.5,\,0.5)$. Then</p>
+$$
+\begin{aligned}
+\KL(p\,\|\,q)&=0.9\ln\frac{0.9}{0.5}+0.1\ln\frac{0.1}{0.5}\\
+&=0.5290-0.1609\\
+&=0.3681\ \mathrm{nat},\\
+\KL(q\,\|\,p)&=0.5\ln\frac{0.5}{0.9}+0.5\ln\frac{0.5}{0.1}\\
+&=-0.2939+0.8047\\
+&=0.5108\ \mathrm{nat}.
+\end{aligned}
+$$
+<p>$\KL(q\,\|\,p)$ is the larger because $q$ places as much as 0.5 probability on a value that $p$ regards as almost never occurring (probability 0.1). The weights of $\ln(q/p)$ are given by $q$, so it is severe on “$q$ placing probability where $p$ is small.” This property becomes important in Section 5.6.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec5-5">5.5 KL Minimization and Maximum Likelihood — What the Cross-Entropy Loss Really Is</h2>
+
+<h3>5.5.1 The empirical distribution</h3>
+
+<p>Suppose the data $\data=\{x_n\}_{n=1}^{N}$ take discrete values, and write $N_x$ for the number of times the value $x$ appears ($\sum_{x}N_x=N$). The relative frequency within the data,</p>
+\begin{equation}
+\hat{p}(x)=\frac{N_x}{N} \label{eq:5-empirical}
+\end{equation}
+<p>is called the <strong>empirical distribution</strong>. It is the data viewed as a “stand-in for the true distribution.” The model distribution is denoted $q_{\bm{\theta}}(x)$, with parameter $\bm{\theta}$.</p>
+
+<h3>5.5.2 Minimizing the KL divergence from the empirical distribution = maximum likelihood estimation</h3>
+
+<p>Split the KL divergence from the empirical distribution to the model using Eq. \eqref{eq:5-ce-decomp}.</p>
+$$
+\KL(\hat{p}\,\|\,q_{\bm{\theta}})=H[\hat{p},q_{\bm{\theta}}]-H[\hat{p}] .
+$$
+<p>$H[\hat{p}]$ is determined by the data alone and does not depend on $\bm{\theta}$. Let us rewrite the cross-entropy as a sum over the data. Substitute $\hat{p}(x)=N_x/N$, and use the fact that “the value $x$ appears $N_x$ times” to turn the sum over values into a sum over data points.</p>
+$$
+\begin{aligned}
+H[\hat{p},q_{\bm{\theta}}]&=-\sum_{x}\frac{N_x}{N}\ln q_{\bm{\theta}}(x)\\
+&=-\frac1N\sum_{x}\underbrace{N_x\ln q_{\bm{\theta}}(x)}_{\text{value }x\text{: }N_x\text{ points}}\\
+&=-\frac1N\sum_{n=1}^{N}\ln q_{\bm{\theta}}(x_n) .
+\end{aligned}
+$$
+<p>The last expression is the log-likelihood $\ln p(\data\mid\bm{\theta})$ $=\sum_{n}\ln q_{\bm{\theta}}(x_n)$ for independent data (<a href="ch02_probability.html#sec2-7">Chapter 2, Section 2.7</a>, <a href="ch04_bayesian_inference.html#sec4-2">Chapter 4, Section 4.2</a>) multiplied by $-1/N$; that is, it is the <strong>average negative log-likelihood</strong>. Putting this together gives the following equation.</p>
+
+<div class="keyeq">
+\begin{equation}
+\begin{aligned}
+&\KL(\hat{p}\,\|\,q_{\bm{\theta}})\\
+&=-\frac1N\sum_{n=1}^{N}\ln q_{\bm{\theta}}(x_n)\\
+&\quad-H[\hat{p}]
+\end{aligned} \label{eq:5-kl-ml}
+\end{equation}
+</div>
+
+<p>The first term on the right-hand side is the average negative log-likelihood ($=H[\hat{p},q_{\bm{\theta}}]$), and the second term is a constant independent of $\bm{\theta}$. Therefore the following three procedures <strong>give the same $\bm{\theta}$</strong>.</p>
+<ul>
+  <li>Minimize the KL divergence $\KL(\hat{p}\,\|\,q_{\bm{\theta}})$ from the empirical distribution.</li>
+  <li>Minimize the cross-entropy $H[\hat{p},q_{\bm{\theta}}]$ (= the average negative log-likelihood).</li>
+  <li>Maximize the likelihood $p(\data\mid\bm{\theta})$ (maximum likelihood estimation).</li>
+</ul>
+<p>In Chapter 4 we described maximum likelihood estimation as “choosing the value that best explains the data.” In the language of this section, it means “choosing the model distribution closest to the distribution of the data, as measured by the KL divergence.”</p>
+
+<figure id="fig5-5">
+<img src="figs/ch05_fig5-5.svg" alt="A graph with the model's success probability theta on the horizontal axis and nat on the vertical axis, showing the average negative log-likelihood (solid line) and the KL divergence (dashed line) for the empirical distribution of 7 successes in 10 trials. Both are minimized at theta=0.7, and the difference between the two curves is the constant H[p hat]=0.611 everywhere." style="max-width:640px;width:100%">
+<figcaption>Figure 5.5: The average negative log-likelihood $H[\hat{p},q_{\theta}]$ (solid line) and $\KL(\hat{p}\,\|\,q_{\theta})$ (dashed line) when a Bernoulli distribution $q_{\theta}=(\theta,\,1-\theta)$ is fitted to the empirical distribution $\hat{p}=(0.7,\,0.3)$ of data with 7 successes in 10 trials. The two curves are merely shifted vertically by $H[\hat{p}]\approx0.611$, so both are minimized at the same $\theta=0.7$. The curves were computed from the equations.</figcaption>
+</figure>
+
+<p><a href="#fig5-5">Figure 5.5</a> shows the Bernoulli example with 7 successes in 10 trials ($\mu_{\mathrm{ML}}=m/N$ in Chapter 4). Differentiating $H[\hat{p},q_{\theta}]$ $=-(0.7\ln\theta+0.3\ln(1-\theta))$ with respect to $\theta$ and setting the derivative to 0 gives $-0.7/\theta+0.3/(1-\theta)=0$, that is, $\theta=0.7$, which agrees with the result of Chapter 4.</p>
+
+<p>For a categorical distribution (with $K$ possible values), the maximum likelihood estimate can be found without differentiation. If $q$ may be any distribution, then by Theorem 5.1 $\KL(\hat{p}\,\|\,q)$ attains its minimum value 0 at $q=\hat{p}$, so <strong>the maximum likelihood estimate is the relative frequency $q(x)=N_x/N$ itself</strong>.</p>
+
+<div class="box why">
+<p class="box-title">Advanced Topic: With more data, we are minimizing the KL divergence from the true distribution</p>
+<p>Suppose the data are drawn independently from the true distribution $p$. By the law of large numbers (<a href="ch02_probability.html#sec2-8">Chapter 2, Section 2.8</a>), as $N\to\infty$ the average negative log-likelihood approaches the expectation:</p>
+$$
+\begin{aligned}
+&-\frac1N\sum_{n=1}^{N}\ln q_{\bm{\theta}}(x_n)\\
+&\longrightarrow\ \Ex_{p}\bigl[-\ln q_{\bm{\theta}}(x)\bigr]\\
+&\quad=H[p]+\KL(p\,\|\,q_{\bm{\theta}}).
+\end{aligned}
+$$
+<p>Therefore, with plenty of data, maximum likelihood estimation approaches the $\bm{\theta}$ that minimizes <strong>the KL divergence from the true distribution $p$ to the model</strong>. Even if the true distribution is not contained in the family of models (that is, even if the model is wrong), maximum likelihood estimation is looking for “the member of the family that is closest in the sense of the KL divergence.” The same conclusion can be stated for continuous variables, too, in this form, without writing the empirical distribution explicitly.</p>
+</div>
+
+<h3>5.5.3 The cross-entropy loss for classification</h3>
+
+<p>In classification, we train a model that outputs, for an input $\bm{x}_n\in\R^{D}$, a <strong>conditional</strong> distribution $q_{\bm{\theta}}(k\mid\bm{x}_n)$ over $K$ classes. We represent the correct label by a one-hot vector (a vector whose component for the correct class alone is 1 and whose other components are 0) $\bm{y}_n$ $=(y_{n1},\dots,y_{nK})^{\tp}\in\{0,1\}^{K}$, and regard it as “the empirical distribution at the input $\bm{x}_n$.” Its cross-entropy is</p>
+\begin{equation}
+\begin{aligned}
+L_n(\bm{\theta})&=H\bigl[\bm{y}_n,q_{\bm{\theta}}(\cdot\mid\bm{x}_n)\bigr]\\
+&=-\sum_{k=1}^{K}y_{nk}\ln q_{\bm{\theta}}(k\mid\bm{x}_n)\\
+&=-\ln q_{\bm{\theta}}(\text{correct}\mid\bm{x}_n)
+\end{aligned} \label{eq:5-ce-loss}
+\end{equation}
+<p>(because the vector is one-hot, only the term for the correct class survives in the sum). The average of this over the data, $\frac1N\sum_{n}L_n$, is the <strong>cross-entropy loss</strong>, and for the same reason as in Section 5.5.2 it is exactly “maximum likelihood estimation of a conditional distribution.” For binary classification ($y_n\in\{0,1\}$, with predicted probability $\hat{y}_n=q_{\bm{\theta}}(1\mid\bm{x}_n)$), it can be written as</p>
+$$
+L_n=-\bigl\{y_n\ln\hat{y}_n+(1-y_n)\ln(1-\hat{y}_n)\bigr\}
+$$
+<p>The gradient of this loss is derived for logistic regression and softmax regression in <a href="ch09_linear_classification.html#sec9-3">Chapter 9, Section 9.3</a> and <a href="ch09_linear_classification.html#sec9-5">Section 9.5</a>, and its use in the output layer of a neural network is covered in <a href="ch14_neural_networks.html#sec14-6">Chapter 14, Section 14.6</a>.</p>
+
+<p>Why not the squared error? One reason is that the cross-entropy is severe on <strong>confidently wrong predictions</strong>. For each probability $q$ assigned to the correct class, compare the cross-entropy $-\ln q$ with the correct-class component $(1-q)^{2}$ of the squared error against the one-hot vector (<a href="#tab5-1">Table 5.1</a>).</p>
+
+<div class="tablewrap">
+<table id="tab5-1">
+<caption>Table 5.1: The probability $q$ assigned to the correct class and the magnitude of the loss</caption>
+<thead><tr><th>$q$</th><th>$-\ln q$ (cross-entropy)</th><th>$(1-q)^{2}$ (correct-class component of the squared error)</th></tr></thead>
+<tbody>
+<tr><td>0.9</td><td>0.105</td><td>0.010</td></tr>
+<tr><td>0.5</td><td>0.693</td><td>0.250</td></tr>
+<tr><td>0.1</td><td>2.303</td><td>0.810</td></tr>
+<tr><td>0.01</td><td>4.605</td><td>0.980</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The squared error levels off at 1, but the cross-entropy grows without bound as $q\to0$. A prediction that assigned only 1% to the correct answer is penalized about twice as heavily as one that assigned 10%. The other reason (combined with the sigmoid or softmax, the gradient takes the simple form $\hat{y}-y$, so learning is less likely to stall) will be derived in Chapter 9.</p>
+
+<h3>5.5.4 The loss for next-token prediction</h3>
+
+<p>A language model such as GPT (<a href="ch26_gpt.html#sec26-4">Chapter 26, Section 26.4</a>) regards a text as a sequence of integer IDs $x_1,\dots,x_{T+1}$ (a token sequence; $x_1$ is a start-of-text symbol), and from the sequence so far $x_{\le t}$ outputs the distribution of the next token $x_{t+1}$. The training loss is</p>
+$$
+L=-\frac1T\sum_{t=1}^{T}\ln p_{\bm{\theta}}(x_{t+1}\mid x_{\le t})
+$$
+<p>which is nothing other than Eq. \eqref{eq:5-ce-loss} with “class” replaced by “token in the vocabulary” and “input” replaced by “the sequence so far.” In other words, <strong>it reduces the KL divergence between the distribution of the text data and the model distribution</strong>. Combining the autoregressive decomposition (<a href="ch02_probability.html#sec2-2">Chapter 2, Section 2.2</a>) with the result of this section, “predicting the next token” amounts to “maximum likelihood estimation of a probability model of the whole text.”</p>
+
+<div class="box ex">
+<p class="box-title">Example 5.5: Comparing phase-classification models by cross-entropy</p>
+<p>We examined the phases of 20 samples made under a certain synthesis condition and found 12 of phase A, 6 of phase B, and 2 of phase C (synthetic data for teaching purposes; no random numbers were used, and the numbers were chosen by hand for explanation). As models that output a fixed distribution regardless of the input, consider $q_1=(0.5,\,0.3,\,0.2)$ and $q_2=(0.6,\,0.3,\,0.1)$. (1) Find the empirical distribution $\hat{p}$ and its entropy. (2) Find the average negative log-likelihood (cross-entropy) of each model. (3) Find $\KL(\hat{p}\,\|\,q)$ for each model, and answer which one is the maximum likelihood estimate. (4) Compare the loss \eqref{eq:5-ce-loss} for one sample of phase C under the two models.</p>
+<p><strong>Solution.</strong> (1) $\hat{p}$ $=(12/20,\,6/20,\,2/20)$ $=(0.6,\,0.3,\,0.1)$. $H[\hat{p}]=0.8979\ \mathrm{nat}$ (the same distribution as in Example 5.4 (1)).<br>
+(2) $q_1$: $-(0.6\ln0.5+0.3\ln0.3+0.1\ln0.2)$ $=0.6\times0.6931$ $+0.3\times1.2040$ $+0.1\times1.6094$ $=0.4159+0.3612+0.1609$ $=0.9380\ \mathrm{nat}$. Adding data point by data point gives the same value: the 12 samples of A contribute $0.6931$ each, the 6 of B contribute $1.2040$ each, and the 2 of C contribute $1.6094$ each, and dividing the sum $18.76$ by 20 gives the same result. $q_2$: since $q_2=\hat{p}$, $H[\hat{p},\hat{p}]$ $=H[\hat{p}]$ $=0.8979\ \mathrm{nat}$.<br>
+(3) By Eq. \eqref{eq:5-kl-ml}, $\KL(\hat{p}\,\|\,q_1)$ $=0.9380-0.8979$ $=0.0401\ \mathrm{nat}$, and $\KL(\hat{p}\,\|\,q_2)=0$. $q_2$ is the maximum likelihood estimate (the relative frequency).<br>
+(4) The loss for one sample of phase C is $-\ln0.2=1.609$ under $q_1$ and $-\ln0.1=2.303$ under $q_2$. For individual samples, there are samples for which $q_1$ gives the smaller loss. The maximum likelihood estimate is the one that minimizes the <strong>average</strong> loss.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec5-6">5.6 The Direction of the KL — Covering and Mode-Seeking Approximations<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>5.6.1 The KL between two Gaussian distributions</h3>
+
+<p>Let us compute one continuous KL by hand.</p>
+
+<div class="box derive">
+<p class="box-title">Derivation: The KL between two one-variable Gaussian distributions</p>
+<p>Let $p=\Normal(x\mid\mu_1,\sigma_1^{2})$ and $q=\Normal(x\mid\mu_2,\sigma_2^{2})$. The difference of the logarithms is</p>
+$$
+\ln\frac{p(x)}{q(x)}=\ln\frac{\sigma_2}{\sigma_1}-\frac{(x-\mu_1)^{2}}{2\sigma_1^{2}}+\frac{(x-\mu_2)^{2}}{2\sigma_2^{2}} .
+$$
+<p>Take the expectation with respect to $p$. We have $\Ex_{p}[(x-\mu_1)^{2}]=\sigma_1^{2}$, and splitting $x-\mu_2=(x-\mu_1)+(\mu_1-\mu_2)$, the expectation of the cross term $2(\mu_1-\mu_2)\Ex_{p}[x-\mu_1]$ is 0, so</p>
+$$
+\Ex_{p}\bigl[(x-\mu_2)^{2}\bigr]=\sigma_1^{2}+(\mu_1-\mu_2)^{2} .
+$$
+<p>Substituting these gives</p>
+$$
+\begin{aligned}
+\KL(p\,\|\,q)&=\ln\frac{\sigma_2}{\sigma_1}-\frac{\sigma_1^{2}}{2\sigma_1^{2}}\\
+&\quad+\frac{\sigma_1^{2}+(\mu_1-\mu_2)^{2}}{2\sigma_2^{2}} .
+\end{aligned}
+$$
+<p style="text-align:right">∎</p>
+</div>
+
+\begin{equation}
+\begin{aligned}
+\KL(p\,\|\,q)&=\ln\frac{\sigma_2}{\sigma_1}-\frac12\\
+&\quad+\frac{\sigma_1^{2}}{2\sigma_2^{2}}\\
+&\quad+\frac{(\mu_1-\mu_2)^{2}}{2\sigma_2^{2}}
+\end{aligned} \label{eq:5-kl-gauss}
+\end{equation}
+
+<p>If $\mu_1=\mu_2$ and $\sigma_1=\sigma_2$, then $\ln1+\tfrac12-\tfrac12=0$. The difference of the means enters in the form $(\mu_1-\mu_2)^{2}/(2\sigma_2^{2})$, which is the square of “the shift of the mean measured in units of the width of $q$.”</p>
+
+<div class="box ex">
+<p class="box-title">Example 5.6: The direction of the KL between Gaussian distributions</p>
+<p>Let $p=\Normal(0,1)$ and $q=\Normal(1,4)$ (the second argument is the variance). Use Eq. \eqref{eq:5-kl-gauss} to find (1) $\KL(p\,\|\,q)$ and (2) $\KL(q\,\|\,p)$. (3) Explain which is larger in terms of “which distribution's width is used for measuring.”</p>
+<p><strong>Solution.</strong> (1) Here $\mu_1=0,\sigma_1=1,\mu_2=1,\sigma_2=2$, so $\KL(p\,\|\,q)$ $=\ln2+\dfrac{1+1}{2\times4}-\dfrac12$ $=0.6931+0.25-0.5$ $=0.4431\ \mathrm{nat}$.<br>
+(2) Swapping the roles, $\mu_1=1,\sigma_1=2,\mu_2=0,\sigma_2=1$: $\KL(q\,\|\,p)$ $=\ln\dfrac12+\dfrac{4+1}{2\times1}-\dfrac12$ $=-0.6931+2.5-0.5$ $=1.3069\ \mathrm{nat}$.<br>
+(3) The value in (2) is about three times larger. $\KL(q\,\|\,p)$ averages $\ln(q/p)$ over $x$ drawn from $q$, the wide $q$ is heavily penalized for placing probability even where the narrow $p$ places almost none (for example $\abs{x}\gt3$). Conversely, in $\KL(p\,\|\,q)$ the range of the narrow $p$ is completely covered by the wide $q$, so the loss is small.</p>
+</div>
+
+<h3>5.6.2 Approximating a bimodal distribution by a unimodal one</h3>
+
+<p>There are many situations in which the true distribution $p$ is complicated and we want to approximate it by a simple distribution $q$ (for example, a Gaussian distribution); see approximate inference in Chapter 20. In that case, the character of the resulting approximation changes greatly depending on <strong>which direction of the KL we minimize</strong>.</p>
+
+<p>As an example, consider the distribution with two peaks</p>
+$$
+p(x)=\tfrac12\Normal(x\mid-2,\,0.6^{2})+\tfrac12\Normal(x\mid2,\,0.6^{2})
+$$
+<p>and approximate it by a single Gaussian distribution $q(x)=\Normal(x\mid m,s^{2})$ (a numerical example).</p>
+
+<p><strong>(i) Minimizing $\KL(p\,\|\,q)$.</strong> By Eq. \eqref{eq:5-ce-decomp}, $\KL(p\,\|\,q)=H[p,q]-h[p]$, and $h[p]$ does not depend on $m,s$, so it suffices to minimize the cross-entropy $\Ex_{p}[-\ln q]$ $=\tfrac12\ln(2\pi s^{2})$ $+\Ex_{p}[(x-m)^{2}]/(2s^{2})$. Take the partial derivatives with respect to $m$ and $s$ and set them to 0.</p>
+$$
+\begin{aligned}
+m\ \text{-derivative}&:\ -\frac{\Ex_{p}[x-m]}{s^{2}}=0\\
+&\Longrightarrow\ m=\Ex_{p}[x],\\
+s\ \text{-derivative}&:\ \frac1s-\frac{\Ex_{p}[(x-m)^{2}]}{s^{3}}=0\\
+&\Longrightarrow\ s^{2}=\Ex_{p}[(x-m)^{2}] .
+\end{aligned}
+$$
+<p>It suffices to match the mean and variance of $q$ to those of $p$ (<strong>moment matching</strong>). For this $p$, the mean is 0, and the variance is “the variance within a peak, $0.36$” plus “the spread of the peak locations, $2^{2}=4$,” and the total $=4.36$, so $m=0$ and $s=\sqrt{4.36}\approx2.09$. This is a wide distribution that <strong>covers both peaks together</strong>, and the maximum of $q$ falls at the valley $x=0$, where $p$ is almost 0.</p>
+
+<p><strong>(ii) Minimizing $\KL(q\,\|\,p)$.</strong> This time we minimize $\Ex_{q}[\ln q-\ln p]$. If $q$ places probability where $p(x)\approx0$, then $-\ln p$ becomes very large, so $q$ tries to <strong>avoid</strong> the places where $p$ is small. This cannot be solved analytically; optimizing $m,s$ by numerical integration gives two solutions, $m\approx\pm2.00$ and $s\approx0.60$ ($\KL(q\,\|\,p)\approx0.692$). This is an approximation that <strong>settles on one of the peaks</strong>. The reason that $\KL(q\,\|\,p)\approx0.692\approx\ln2$ is that $q$ nearly coincides with one peak, which carries half of the total probability, so that $\ln(q/p)\approx\ln\frac{1}{1/2}$. Note also that there is a local minimum at $m=0$, $s\approx1.79$ ($\KL(q\,\|\,p)\approx1.138$), and depending on the starting point of the optimization one may stay there.</p>
+
+<figure id="fig5-6">
+<img src="figs/ch05_fig5-6.svg" alt="The result of approximating a bimodal distribution p (gray filled area, with peaks at x=-2 and x=2) by unimodal Gaussian distributions. The distribution that minimizes KL(p||q) (dashed line) has mean 0 and standard deviation about 2.09 and covers both peaks. The distribution that minimizes KL(q||p) (dash-dotted line) overlaps the peak at x=2 and has standard deviation about 0.60." style="max-width:640px;width:100%">
+<figcaption>Figure 5.6: The result of approximating the bimodal distribution $p$ $=\tfrac12\Normal(-2,0.6^{2})$ $+\tfrac12\Normal(2,0.6^{2})$ (gray filled area and solid line) by a single Gaussian distribution $q$. The dashed line is the $q$ that minimizes $\KL(p\,\|\,q)$ ($m=0$, $s\approx2.09$; moment matching), and the dash-dotted line is one of the two $q$ that minimize $\KL(q\,\|\,p)$ ($m\approx2.00$, $s\approx0.60$; the other has $m\approx-2.00$). They were obtained by numerical integration on a grid of 4001 points over $x\in[-8,8]$ and optimization with a quasi-Newton method.</figcaption>
+</figure>
+
+<p>To summarize:</p>
+<ul>
+  <li>The $q$ that makes $\KL(p\,\|\,q)$ small tries to <strong>cover every place where $p$ has probability</strong> (because $\ln(p/q)$ becomes large if $q\approx0$ where $p\gt0$). Its width tends to be wide.</li>
+  <li>The $q$ that makes $\KL(q\,\|\,p)$ small <strong>avoids the places where $p$ is small</strong> and settles on a single peak. Its width tends to be narrow, and it overlooks the other peaks.</li>
+</ul>
+<p>Neither is “correct”; we choose according to the purpose. The maximum likelihood estimation of Section 5.5 corresponds to $\KL(p\,\|\,q)$ (the data side is on the left), whereas the variational inference of Chapter 20 uses $\KL(q\,\|\,p)$ (the approximation side is on the left) for computational convenience. It is because of this property that variational approximations tend to underestimate the spread of the posterior distribution (<a href="ch20_approximate_inference.html#sec20-7">Chapter 20, Section 20.7</a>). The same form of KL also appears in the EM algorithm (<a href="ch17_clustering_em.html#sec17-7">Chapter 17, Section 17.7</a>).</p>
+
+<!-- ============================================================ -->
+<h2 id="sec5-7">5.7 Mutual Information — Measuring the Strength of Dependence<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>5.7.1 Conditional entropy and the chain rule</h3>
+
+<p>For two discrete random variables $x,y$, consider “the uncertainty that remains about $y$ after we know $x$.” If we fix one value of $x$, the distribution of $y$ is the conditional distribution $p(y\mid x)$, and its entropy is $H\bigl[p(\cdot\mid x)\bigr]$ $=-\sum_{y}p(y\mid x)\ln p(y\mid x)$ (a function of $x$). The average of this over $x$ is called the <strong>conditional entropy</strong>.</p>
+\begin{equation}
+\begin{aligned}
+H[y\mid x]&=\sum_{x}p(x)\,H\bigl[p(\cdot\mid x)\bigr]\\
+&=-\sum_{x}\sum_{y}p(x,y)\\
+&\qquad\times\ln p(y\mid x)
+\end{aligned} \label{eq:5-condent}
+\end{equation}
+<p>(The second equality follows from $p(x)p(y\mid x)=p(x,y)$.) Taking the logarithm of the product rule $p(x,y)=p(x)\,p(y\mid x)$, multiplying by $-p(x,y)$, and summing, we get</p>
+$$
+\begin{aligned}
+H[x,y]&=-\sum_{x,y}p(x,y)\bigl\{\ln p(x)+\ln p(y\mid x)\bigr\}\\
+&=-\sum_{x}\Bigl(\sum_{y}p(x,y)\Bigr)\ln p(x)+H[y\mid x]\\
+&=H[x]+H[y\mid x]
+\end{aligned}
+$$
+<p>(we used the sum rule $\sum_{y}p(x,y)=p(x)$). This is called the <strong>chain rule for entropy</strong>: “the uncertainty of knowing both” = “the uncertainty of knowing $x$ first” + “the uncertainty of $y$ after knowing $x$.”</p>
+
+<h3>5.7.2 Mutual information</h3>
+
+<div class="box def">
+<p class="box-title">Definition 5.5: Mutual information</p>
+<p>The <strong>mutual information</strong> of discrete random variables $x,y$ is defined as the KL divergence between the joint distribution and the product of the marginal distributions.</p>
+\begin{equation}
+\begin{aligned}
+I[x;y]&=\KL\bigl(p(x,y)\\
+&\qquad\quad\|\,p(x)p(y)\bigr)\\
+&=\sum_{x}\sum_{y}p(x,y)\\
+&\qquad\times\ln\frac{p(x,y)}{p(x)\,p(y)}
+\end{aligned} \label{eq:5-mi}
+\end{equation}
+</div>
+
+<p>Rewriting the argument of the logarithm as $\dfrac{p(x,y)}{p(x)p(y)}$ $=\dfrac{p(y\mid x)}{p(y)}$, we get</p>
+$$
+\begin{aligned}
+I[x;y]&=\sum_{x,y}p(x,y)\ln p(y\mid x)\\
+&\quad-\sum_{x,y}p(x,y)\ln p(y)\\
+&=-H[y\mid x]-\sum_{y}p(y)\ln p(y)\\
+&=H[y]-H[y\mid x] .
+\end{aligned}
+$$
+<p>Exchanging the roles of $x$ and $y$ gives $I[x;y]=H[x]-H[x\mid y]$, and using the chain rule we can also write $I[x;y]=H[x]+H[y]-H[x,y]$. <strong>Mutual information is how much the uncertainty about $y$ decreases when we know $x$.</strong> Its properties are as follows.</p>
+<ul>
+  <li>$I[x;y]\ge0$ (because it is a KL; Theorem 5.1).</li>
+  <li>$I[x;y]=0$ is equivalent to $x,y$ being independent (the KL is 0 only when $p(x,y)=p(x)p(y)$).</li>
+  <li>Symmetry: $I[x;y]=I[y;x]$ (the defining expression is symmetric in $x,y$).</li>
+  <li>$H[y\mid x]=H[y]-I[x;y]\le H[y]$: even if we condition, the average uncertainty does not increase.</li>
+</ul>
+
+<figure id="fig5-7">
+<svg role="img" aria-label="A figure of two slightly overlapping circles. The left circle is the entropy of the temperature x, H[x]=0.673, and the right circle is the entropy of the secondary phase y, H[y]=0.471. The overlap is the mutual information I[x;y]=0.032, the non-overlapping part of the left circle is H[x|y]=0.641, and the non-overlapping part of the right circle is H[y|x]=0.439. The union of the two circles is the joint entropy H[x,y]=1.112. The unit is nat. This is a schematic diagram in which areas are not proportional to the values." viewBox="0 0 640 300" style="max-width:640px;width:100%" font-family="Hiragino Kaku Gothic ProN, Yu Gothic, Noto Sans JP, sans-serif">
+<title>Figure 5.7: Relations among entropy, conditional entropy, and mutual information</title>
+<circle cx="245" cy="150" r="115" fill="#f5eef5" stroke="#5b2a5e" stroke-width="2"></circle>
+<circle cx="395" cy="150" r="115" fill="none" stroke="#0072b2" stroke-width="2" stroke-dasharray="8 5"></circle>
+<path d="M320,63 A115,115 0 0,1 320,237 A115,115 0 0,1 320,63 Z" fill="#5b2a5e" fill-opacity="0.35"></path>
+<text x="190" y="140" font-size="15" text-anchor="middle" fill="#1a1a1a"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">H</tspan>[<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan> | <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">y</tspan>]</text>
+<text x="190" y="164" font-size="15" text-anchor="middle" fill="#1a1a1a">0.641</text>
+<text x="450" y="140" font-size="15" text-anchor="middle" fill="#1a1a1a"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">H</tspan>[<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">y</tspan> | <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan>]</text>
+<text x="450" y="164" font-size="15" text-anchor="middle" fill="#1a1a1a">0.439</text>
+<text x="320" y="140" font-size="15" text-anchor="middle" fill="#1a1a1a"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">I</tspan>[<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan>; <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">y</tspan>]</text>
+<text x="320" y="164" font-size="15" text-anchor="middle" fill="#1a1a1a">0.032</text>
+<text x="150" y="26" font-size="15" text-anchor="middle" fill="#5b2a5e"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">H</tspan>[<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan>] = 0.673 (temperature)</text>
+<text x="500" y="26" font-size="15" text-anchor="middle" fill="#00507e"><tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">H</tspan>[<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">y</tspan>] = 0.471 (secondary phase)</text>
+<text x="320" y="292" font-size="14" text-anchor="middle" fill="#1a1a1a">Whole of both circles = <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">H</tspan>[<tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">x</tspan>, <tspan font-family="Times New Roman, STIXGeneral, serif" font-style="italic">y</tspan>] = 1.112 (unit: nat)</text>
+</svg>
+<figcaption>Figure 5.7: Relations among entropy, conditional entropy, and mutual information (schematic diagram; areas are not proportional to the values). The solid circle is $H[x]$, the dashed circle is $H[y]$, and the darkly filled overlap is $I[x;y]$. The numbers are the values of Example 5.7 (Table 2.1 of <a href="ch02_probability.html#sec2-2">Chapter 2</a>, synthetic data for teaching purposes).</figcaption>
+</figure>
+
+<div class="box ex">
+<p class="box-title">Example 5.7: Mutual information between firing temperature and secondary phase</p>
+<p>The joint distribution in Table 2.1 of Chapter 2 (firing temperature low/high and secondary phase present/absent; 200 samples; synthetic data for teaching purposes, no random numbers were used; the numbers were chosen by hand for explanation) is $p(\text{low},\text{present})=0.12$, $p(\text{low},\text{absent})=0.28$, $p(\text{high},\text{present})=0.06$, and $p(\text{high},\text{absent})=0.54$. Let $x$ be the temperature and $y$ the secondary phase. (1) Find $H[x]$ and $H[y]$. (2) Find $H[y\mid x]$ as the average, over temperatures, of the entropies of the conditional distributions. (3) Find $I[x;y]$ in two ways: as $H[y]-H[y\mid x]$ and from Definition \eqref{eq:5-mi}.</p>
+<p><strong>Solution.</strong> (1) The marginal distributions are $p(x)=(0.40,\,0.60)$ and $p(y)=(0.18,\,0.82)$. $H[x]$ $=-(0.4\ln0.4+0.6\ln0.6)$ $=0.3665+0.3065$ $=0.6730$, and $H[y]$ $=-(0.18\ln0.18+0.82\ln0.82)$ $=0.3087+0.1627$ $=0.4714\ \mathrm{nat}$.<br>
+(2) The conditional distributions are $p(y\mid\text{low})=(0.30,\,0.70)$ and $p(y\mid\text{high})=(0.10,\,0.90)$. Their entropies are $H(0.3)=0.6109$ and $H(0.1)=0.3251$ (Eq. \eqref{eq:5-binary}). Averaging over $x$, $H[y\mid x]$ $=0.4\times0.6109+0.6\times0.3251$ $=0.2444+0.1951$ $=0.4394\ \mathrm{nat}$.<br>
+(3) $I$ $=H[y]-H[y\mid x]$ $=0.4714-0.4394$ $=0.0320\ \mathrm{nat}$. From the definition, the values of $p\ln\frac{p}{p(x)p(y)}$ for the four cells are $0.12\ln\frac{0.12}{0.072}=0.0613$, $0.28\ln\frac{0.28}{0.328}=-0.0443$, $0.06\ln\frac{0.06}{0.108}=-0.0353$, and $0.54\ln\frac{0.54}{0.492}=0.0503$, and their sum is $0.0320\ \mathrm{nat}$. The two agree. Knowing the temperature reduces the uncertainty about the secondary phase by only $0.032/0.471\approx7\%$.</p>
+</div>
+
+<h3>5.7.3 Using mutual information to choose features</h3>
+
+<p>When we choose, from among many descriptors (features computed from composition, structure, and process) in materials data, those strongly related to a target property, one method is to compute the mutual information between each descriptor and the target variable and rank them. The correlation coefficient (<a href="ch02_probability.html#sec2-5">Chapter 2, Section 2.5</a>) measures only linear relations, and variables can be dependent even when they are uncorrelated (Example 2.6 in <a href="ch02_probability.html#sec2-5">Chapter 2, Section 2.5</a>). The advantage of mutual information is that it does not depend on the form of the dependence and is always positive unless the variables are independent.</p>
+
+<p>However, estimating the mutual information of continuous variables from data requires approximations such as dividing the range into intervals or estimating a density, and when the data are few the estimate tends to be biased upward (even for independent data, a value computed from a finite-sample frequency table is in most cases greater than 0). Also, a large mutual information does not imply a causal relationship (<a href="ch06_generalization.html#sec6-11">Chapter 6, Section 6.11</a>). Note also that if descriptors are selected using the whole data set and cross-validation is performed afterward, this causes data leakage (<a href="ch06_generalization.html#sec6-7">Chapter 6, Section 6.7</a>).</p>
+
+<!-- ============================================================ -->
+<h2 id="sec5-8">5.8 Correspondence and Differences with Statistical Mechanics<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>5.8.1 Gibbs entropy and Boltzmann's principle</h3>
+
+<p>In statistical mechanics, we number the microscopic states a physical system can take (atomic configurations or quantum states) by $i$, and let $p_i$ be the probability that the system is in state $i$ at equilibrium. The thermodynamic entropy can then be written as</p>
+\begin{equation}
+S=-k_{\mathrm B}\sum_{i}p_i\ln p_i \label{eq:5-gibbs}
+\end{equation}
+<p>(the <strong>Gibbs entropy</strong>; see <a href="../UnivPhys_Textbook_EN/ch50_canonical_ensemble.html#sec50-3">Introductory University Physics, Chapter 50, Section 50.3</a>). Here $k_{\mathrm B}$ $=1.380649\times10^{-23}\ \mathrm{J\,K^{-1}}$ is the Boltzmann constant. The form of this expression is exactly the same as that of the Shannon entropy \eqref{eq:5-entropy}, and the two are related by</p>
+$$
+S=k_{\mathrm B}\,H[p]\qquad(H\text{ is measured in nats})
+$$
+<p>Here $H$ is dimensionless (nats), whereas the unit of $S$ is $\mathrm{J\,K^{-1}}$, so $k_{\mathrm B}$ can be regarded as the coefficient that converts nats into thermodynamic units. When we consider one mole, the gas constant $R$ $=N_{\mathrm A}k_{\mathrm B}$ $\approx8.314\ \mathrm{J\,mol^{-1}\,K^{-1}}$ appears in place of $k_{\mathrm B}$.</p>
+
+<p>In particular, for an isolated system in which all $W$ microscopic states are equally probable ($p_i=1/W$), the entropy of the uniform distribution in Section 5.2, $H=\ln W$, gives</p>
+$$
+S=k_{\mathrm B}\ln W
+$$
+<p>This is Boltzmann's principle (<a href="../UnivPhys_Textbook_EN/ch49_boltzmann_entropy.html#sec49-2">Introductory University Physics, Chapter 49, Section 49.2</a>).</p>
+
+<h3>5.8.2 Maximizing the entropy with the mean energy fixed</h3>
+
+<p>In Theorem 5.2, when the only constraint was that the probabilities sum to 1, the distribution with maximum entropy was the uniform distribution. Now suppose that the energy $E_i$ of each state is known, and that we also know that the <strong>mean</strong> energy takes the value $\bar{E}$. What is the distribution that assumes nothing else (that is, the one with maximum entropy)? This is a constrained maximization, and it can be solved with the method of Lagrange multipliers.</p>
+
+<div class="box note">
+<p class="box-title">Math Tool: The method of Lagrange multipliers (only what we need)</p>
+<p>Suppose we want to maximize a function $f$ of the variables $p_1,\dots,p_M$ under the equality constraints $g_1=0,\ g_2=0$. At a point where $f$ takes an extremum within the range satisfying the constraints, the gradient of $f$ is a linear combination of the gradients of the constraints (because $f$ does not change to first order when we move in a direction that does not violate the constraints). So we introduce undetermined constants $\lambda_1,\lambda_2$ (Lagrange multipliers) and form</p>
+$$
+\mathcal{L}=f-\lambda_1 g_1-\lambda_2 g_2
+$$
+<p>and solve $\partial\mathcal{L}/\partial p_i=0$ (for all $i$) simultaneously with the constraint equations. The values of $\lambda$ are fixed at the end by the constraint equations. For a geometric explanation of equality constraints and examples, see <a href="../UnivMath_Textbook_EN/ch06_partial_derivatives.html#sec6-7">University Mathematics, Chapter 6, Section 6.7</a>; the general case including inequality constraints (the KKT conditions) is treated in <a href="ch07_optimization.html#sec7-7">Chapter 7, Section 7.7</a>.</p>
+</div>
+
+<p>The function to maximize is $H=-\sum_i p_i\ln p_i$, and the constraints are $g_1=\sum_i p_i-1=0$ and $g_2=\sum_i p_iE_i-\bar{E}=0$. Writing the multipliers as $\lambda_0$ and $\beta$, we have</p>
+$$
+\begin{aligned}
+\mathcal{L}&=-\sum_{i}p_i\ln p_i-\lambda_0\Bigl(\sum_{i}p_i-1\Bigr)\\
+&\quad-\beta\Bigl(\sum_{i}p_iE_i-\bar{E}\Bigr).
+\end{aligned}
+$$
+<p>Take the partial derivative with respect to $p_i$. Since $\partial(p_i\ln p_i)/\partial p_i$ $=\ln p_i+1$,</p>
+$$
+\begin{aligned}
+&\pdiff{\mathcal{L}}{p_i}=-\ln p_i-1-\lambda_0-\beta E_i=0\\
+&\Longrightarrow\ \ p_i=e^{-1-\lambda_0}\,e^{-\beta E_i} .
+\end{aligned}
+$$
+<p>The coefficient $e^{-1-\lambda_0}$ does not depend on $i$. Fixing it by the sum constraint $\sum_i p_i=1$ gives $e^{-1-\lambda_0}=1/\sum_j e^{-\beta E_j}$. Therefore</p>
+\begin{equation}
+\begin{aligned}
+p_i&=\frac{e^{-\beta E_i}}{Z},\\
+Z&=\sum_{j}e^{-\beta E_j}
+\end{aligned} \label{eq:5-canonical}
+\end{equation}
+<p>This is the form of the canonical distribution (Boltzmann distribution), and $Z$ is the partition function (the same derivation appears in <a href="../UnivPhys_Textbook_EN/ch50_canonical_ensemble.html#sec50-8">Introductory University Physics, Chapter 50, Section 50.8</a>). The value of $\beta$ is determined by the constraint on the mean energy, $\sum_i p_iE_i=\bar{E}$.</p>
+
+<p>That this distribution really is the maximum can be checked with the KL divergence. For any distribution $q$ with the same mean energy $\bar{E}$, using $\ln p_i=-\beta E_i-\ln Z$ we obtain</p>
+$$
+\begin{aligned}
+\KL(q\,\|\,p)&=\sum_{i}q_i\ln q_i-\sum_{i}q_i\ln p_i\\
+&=-H[q]+\beta\sum_{i}q_iE_i+\ln Z\\
+&=-H[q]+\beta\bar{E}+\ln Z .
+\end{aligned}
+$$
+<p>Setting $q=p$, the left-hand side is 0, so $H[p]=\beta\bar{E}+\ln Z$. Hence $\KL(q\,\|\,p)=H[p]-H[q]\ge0$, and $H[q]\le H[p]$ holds. Equality holds only for $q=p$.</p>
+
+<p><strong>The relation between $\beta$ and temperature.</strong> Differentiate $S$ $=k_{\mathrm B}H[p]$ $=k_{\mathrm B}(\beta\bar{E}+\ln Z)$ with respect to $\bar{E}$. Here $\beta$ is a function of $\bar{E}$, and $\diff{\ln Z}{\beta}$ $=-\sum_iE_ie^{-\beta E_i}/Z$ $=-\bar{E}$, so</p>
+$$
+\begin{aligned}
+\diff{S}{\bar{E}}&=k_{\mathrm B}\Bigl(\beta+\bar{E}\diff{\beta}{\bar{E}}+\diff{\ln Z}{\beta}\diff{\beta}{\bar{E}}\Bigr)\\
+&=k_{\mathrm B}\Bigl(\beta+\bar{E}\diff{\beta}{\bar{E}}-\bar{E}\diff{\beta}{\bar{E}}\Bigr)\\
+&=k_{\mathrm B}\beta .
+\end{aligned}
+$$
+<p>Comparing with the thermodynamic relation $\partial S/\partial E=1/T$, we get $\beta=1/(k_{\mathrm B}T)$. Moreover, rearranging $TS=\bar{E}+k_{\mathrm B}T\ln Z$ gives the Helmholtz free energy</p>
+$$
+A\equiv\bar{E}-TS=-k_{\mathrm B}T\ln Z
+$$
+<p>(many books write the free energy as $F$).</p>
+
+<p>The idea of “maximizing the entropy with a known mean value as a constraint” was emphasized by Jaynes (1957), from the standpoint of reformulating statistical mechanics as a problem of inference. The general form when there are several mean-value constraints (exponential-family distributions), and the fact that fixing the mean and variance gives a Gaussian distribution, are treated in <a href="ch27_materials_statmech.html#sec27-5">Chapter 27, Section 27.5</a>. That the softmax has the same form as the Boltzmann distribution is also touched on in Chapter 9 and <a href="ch27_materials_statmech.html#sec27-6">Chapter 27, Section 27.6</a>.</p>
+
+<div class="box ex">
+<p class="box-title">Example 5.8: Shannon entropy and thermodynamic entropy of a two-level system</p>
+<p>Independent defects having only two states, with energies $0$ and $\Delta$ (two-level systems), are in equilibrium at temperature $T$. For $\Delta=k_{\mathrm B}T\ln3$, find (1) the probabilities of the two states, (2) the Shannon entropy (in nats) of the state of one defect, and (3) the thermodynamic entropy per mole of defects. (4) How many eV is $\Delta$ when $T=300\ \mathrm{K}$?</p>
+<p><strong>Solution.</strong> (1) In Eq. \eqref{eq:5-canonical}, $\beta\Delta=\ln3$, so $e^{-\beta\Delta}=1/3$. Then $Z=1+1/3=4/3$, $p_0=1/Z=3/4=0.75$, and $p_1=(1/3)/(4/3)=1/4=0.25$.<br>
+(2) $H$ $=-(0.75\ln0.75+0.25\ln0.25)$ $=0.75\times0.2877+0.25\times1.3863$ $=0.2158+0.3466$ $=0.5623\ \mathrm{nat}$. As a check, $\beta\bar{E}+\ln Z$ $=\ln3\times0.25+\ln(4/3)$ $=0.2747+0.2877$ $=0.5623$, which agrees.<br>
+(3) $S$ $=RH$ $=8.314\times0.5623$ $\approx4.68\ \mathrm{J\,mol^{-1}\,K^{-1}}$.<br>
+(4) $k_{\mathrm B}T$ $=1.380649\times10^{-23}\times300$ $/(1.602177\times10^{-19})$ $\approx0.02585\ \mathrm{eV}$, so $\Delta$ $=0.02585\times\ln3$ $\approx0.0284\ \mathrm{eV}$.</p>
+</div>
+
+<h3>5.8.3 The same formula, different things</h3>
+
+<p>Even though the formulas are the same, the Shannon entropy and the thermodynamic entropy differ in what they are defined for (<a href="#tab5-2">Table 5.2</a>).</p>
+
+<div class="tablewrap">
+<table id="tab5-2">
+<caption>Table 5.2: Comparison of the Shannon entropy and the thermodynamic entropy</caption>
+<thead><tr><th>Item</th><th>Shannon entropy $H[p]$</th><th>Thermodynamic entropy $S$</th></tr></thead>
+<tbody>
+<tr><td>What kind of quantity</td><td>A property of any probability distribution</td><td>A state quantity of a physical system in equilibrium</td></tr>
+<tr><td>Meaning of the probabilities</td><td>Anything (model predictions, letter frequencies, phase fractions, etc.)</td><td>Equilibrium distribution over microscopic states (equal probabilities, canonical distribution, etc.)</td></tr>
+<tr><td>Unit</td><td>nat, bit (dimensionless)</td><td>$\mathrm{J\,K^{-1}}$ (per mole, $\mathrm{J\,mol^{-1}\,K^{-1}}$)</td></tr>
+<tr><td>How it is measured</td><td>Simply computed once the distribution is known</td><td>Can be measured by calorimetry ($\dd S=\delta Q_{\mathrm{rev}}/T$)</td></tr>
+<tr><td>Law of increase</td><td>None in general (the distribution can be chosen freely)</td><td>Does not decrease in an isolated system (the second law of thermodynamics)</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The thermodynamic entropy is, for a physical system in equilibrium, a quantity determined by experiments that measure the heat flowing in and out. The Shannon entropy need not even refer to a physical system: it can be defined for any probability distribution we choose. The right way to understand it is that statistical mechanics shows that, when the equilibrium distribution is chosen as the probability distribution, the two agree up to a factor of $k_{\mathrm B}$. Therefore, whether the entropy of the predictive distribution of a machine-learning model is large or small has no meaning like that of the second law of thermodynamics.</p>
+
+<!-- ============================================================ -->
+<h2 id="sec5-9">5.9 Connections to Materials Engineering and Condensed Matter Physics — Configurational Entropy and Phase Classification<span class="route-tag adv">Detailed Route</span></h2>
+
+<h3>5.9.1 Configurational entropy of ideal mixing</h3>
+
+<p>In an alloy or a solid solution, several kinds of atoms occupy the lattice points (sites) of a crystal. Suppose that $N_i$ atoms of component $i$ (with $\sum_iN_i=N$) occupy the $N$ sites. The number of such arrangements is the multinomial coefficient obtained by dividing the number of orderings of $N$ objects by the permutations among atoms of the same kind:</p>
+$$
+W=\frac{N!}{\prod_{i}N_i!}
+$$
+<p>Ignoring every difference other than the arrangement of the atoms (such as vibrations), assume that all arrangements have the same energy and occur with equal probability (<strong>ideal random mixing</strong>). Then, by Boltzmann's principle, the configurational entropy is $S=k_{\mathrm B}\ln W$. When $N$ is large, we use Stirling's formula $\ln N!\approx N\ln N-N$ (<a href="../UnivPhys_Textbook_EN/ch47_math_for_stat.html#sec47-3">Introductory University Physics, Chapter 47, Section 47.3</a>). Writing the composition (mole fraction) as $x_i=N_i/N$, we obtain</p>
+$$
+\begin{aligned}
+\ln W&\approx(N\ln N-N)\\
+&\quad-\sum_{i}(N_i\ln N_i-N_i)\\
+&=N\ln N-\sum_{i}N_i\ln N_i\\
+&=\sum_{i}N_i\ln N-\sum_{i}N_i\ln N_i\\
+&=-\sum_{i}N_i\ln\frac{N_i}{N}=-N\sum_{i}x_i\ln x_i .
+\end{aligned}
+$$
+<p>Therefore the configurational entropy of mixing per mole ($N=N_{\mathrm A}$) is</p>
+\begin{equation}
+\Delta S_{\mathrm{conf}}=-R\sum_{i}x_i\ln x_i \label{eq:5-mixing}
+\end{equation}
+<p>(the same form as the entropy of mixing in <a href="../UnivPhys_Textbook_EN/ch49_boltzmann_entropy.html#sec49-7">Introductory University Physics, Chapter 49, Section 49.7</a>).</p>
+
+<p>In the language of information content, this can be read as follows. Choose one site and regard “which atom occupies it” as a random variable. Its distribution is exactly the composition $(x_1,x_2,\dots)$, and Eq. \eqref{eq:5-mixing} is <strong>$R$ times the Shannon entropy $H[\bm{x}]$ of that distribution</strong>. In ideal random mixing the sites are independent, so, as in Section 5.2.4, the entropies simply add over the sites: $N$ sites give $NH$, and one mole gives $N_{\mathrm A}k_{\mathrm B}H=RH$. By Theorem 5.2 of Section 5.4.4, for a fixed number of components $n$, $\Delta S_{\mathrm{conf}}$ <strong>attains its maximum $R\ln n$ at the equimolar composition ($x_i=1/n$)</strong> (<a href="#fig5-8">Figure 5.8</a>).</p>
+
+<figure id="fig5-8">
+<img src="figs/ch05_fig5-8.svg" alt="A figure with two panels, one above the other. The upper panel plots the configurational entropy of ideal mixing of a binary system A(1-x)B(x), divided by R, against the composition x; it takes its maximum ln 2 (about 0.693) at x=0.5. The lower panel shows the configurational entropy ln n of equimolar n-component systems as bars for n=1 to 8; the bar for the equimolar five-component system (hatched) is 1.61." style="max-width:440px;width:100%">
+<figcaption>Figure 5.8: Configurational entropy of ideal random mixing, Eq. \eqref{eq:5-mixing} (divided by the gas constant $R$). (a) Binary system $\mathrm{A}_{1-x}\mathrm{B}_x$, with maximum $\ln2$ at $x=1/2$. (b) The value $\ln n$ for equimolar $n$-component systems. The hatched bar is the equimolar five-component system ($\ln5\approx1.61$). The values are computed from the equation.</figcaption>
+</figure>
+
+<div class="box phys">
+<p class="box-title">Application: The origin of the name “high-entropy alloys”</p>
+<p>An alloy containing many principal elements (often five or more) in comparable amounts is called a <strong>high-entropy alloy</strong>. The name comes from a 2004 paper by Yeh and coworkers, who called alloys with many principal elements “high-entropy alloys” and presented them as a new approach to alloy design. In the same year, Cantor and coworkers reported that an equimolar Fe–Cr–Mn–Ni–Co alloy forms a single fcc solid solution. “High entropy” refers to the fact that the configurational entropy in Eq. \eqref{eq:5-mixing} is $R\ln5\approx1.61R$ for an equimolar five-component system, more than twice the maximum $R\ln2\approx0.69R$ of a binary system.</p>
+<p>In the Gibbs energy of mixing $\Delta G_{\mathrm{mix}}$ $=\Delta H_{\mathrm{mix}}-T\Delta S_{\mathrm{mix}}$, the term $-T\Delta S_{\mathrm{conf}}$ favors the solid solution more strongly at higher temperatures. For example, at $T=1500\ \mathrm{K}$ we have $T\cdot R\ln5$ $\approx1500\times13.38\ \mathrm{J\,mol^{-1}\,K^{-1}}$ $\approx20.1\ \mathrm{kJ\,mol^{-1}}$. However, Eq. \eqref{eq:5-mixing} is the value for a <strong>completely random arrangement</strong>. In real alloys there is a tendency for like atoms, or for unlike atoms, to come close to each other (short-range order), so the arrangement is not completely random and the configurational entropy is smaller than this value. Moreover, the entropies due to vibrations, electrons, and magnetism, as well as the enthalpy of mixing $\Delta H_{\mathrm{mix}}$, also affect the stability of a phase, so the configurational entropy alone does not determine whether a single phase forms.</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Example 5.9: Configurational entropy of an equimolar alloy</p>
+<p>Assuming ideal random mixing, find the configurational entropy per mole of (1) an equimolar binary alloy and (2) an equimolar five-component alloy ($R=8.314\ \mathrm{J\,mol^{-1}\,K^{-1}}$). (3) When identifying the element at one site by yes-or-no questions, find in bits the information content required for the equimolar five-component alloy.</p>
+<p><strong>Solution.</strong> (1) Since $x_1=x_2=1/2$, Eq. \eqref{eq:5-mixing} becomes $-R(\tfrac12\ln\tfrac12+\tfrac12\ln\tfrac12)$ $=R\ln2$ $=8.314\times0.6931$ $\approx5.76\ \mathrm{J\,mol^{-1}\,K^{-1}}$.<br>
+(2) Since $x_i=1/5$ (five components), we get $-R\cdot5\cdot\tfrac15\ln\tfrac15$ $=R\ln5$ $=8.314\times1.6094$ $\approx13.38\ \mathrm{J\,mol^{-1}\,K^{-1}}$ ($1.61R$).<br>
+(3) $\log_{2}5\approx2.32\ \mathrm{bit}$. On average, 2.32 questions per site are needed (to approach this with a whole number of questions, many sites are encoded together). In nats it is $\ln5\approx1.61$, and multiplying this by $R$ gives (2).</p>
+</div>
+
+<h3>5.9.2 Phase classification and cross-entropy</h3>
+
+<p>Suppose we train a classification model that predicts the phase formed (for example, “single phase,” “two phases,” or “amorphous”) from an XRD pattern or from the composition and synthesis conditions. The loss function used is the cross-entropy \eqref{eq:5-ce-loss} of Section 5.5.3. We list three cautions specific to materials data.</p>
+<ul>
+  <li><strong>Label ambiguity</strong>: Whether a trace amount of a secondary phase is recorded as “single phase” or as “two phases” depends on the detection limit and on judgment. If, instead of a one-hot vector, we take as the target a distribution that reflects the confidence of the judgment (for example, $(0.8,0.2)$), we can use $p$ in Eq. \eqref{eq:5-ce} as it is. The entropy $H[p]$ of the target distribution is the lower bound of the cross-entropy (Eq. \eqref{eq:5-ce-decomp}), so the more ambiguous the labels are, the less the loss can fall toward 0.</li>
+  <li><strong>Class imbalance</strong>: If the new phase of interest makes up only 2% of the data, even a model that always answers “known phase” has a fairly small average cross-entropy. Look not only at the average loss but also at the precision and recall of each class (<a href="ch09_linear_classification.html#sec9-7">Chapter 9, Section 9.7</a>).</li>
+  <li><strong>Predictions of probability 0</strong>: A model that assigns probability 0 to some class has infinite loss ($-\ln0$) if even one sample of that class exists. In implementations, we take measures such as clipping the probabilities to be at least $\varepsilon$ or computing with log-sum-exp (<a href="ch09_linear_classification.html#sec9-5">Chapter 9, Section 9.5</a>).</li>
+</ul>
+
+<h3>5.9.3 Descriptor selection and mutual information</h3>
+
+<p>Consider the problem of predicting whether a perovskite-type structure forms, using descriptors such as the tolerance factor calculated from ionic radii. If we divide a descriptor into two values, “large” and “small,” and compute the mutual information \eqref{eq:5-mi} with the phase formed (perovskite-type or not), we can compare which descriptor removes more of our uncertainty about the phase (Exercise 5.8). In doing so, note that the mutual information looks inflated if many samples of the same material lineage are included, that its value changes with how the descriptor is divided, and that it is biased upward when the data are few (Section 5.7.3, <a href="ch06_generalization.html#sec6-8">Chapter 6, Section 6.8</a>).</p>
+
+<!-- ============================================================ -->
+<h2 id="sec5-10">5.10 Common Misconceptions and Limits of Applicability<span class="route-tag adv">Detailed Route</span></h2>
+
+<div class="box warn">
+<p class="box-title">Caution: The KL divergence is not a distance</p>
+<p>The KL divergence is nonnegative, and it is zero only when the two distributions coincide, so one is tempted to call it a “distance between distributions.” However, among the conditions for a distance, it satisfies neither symmetry $\KL(p\,\|\,q)=\KL(q\,\|\,p)$ nor the triangle inequality (Illustration 5.1, Example 5.10). This is why the name “divergence” is used. When you say “the KL of $p$ and $q$,” always state which one was placed on the left. The expectation is taken with respect to the distribution placed on the left.</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Differential entropy is not the limit of discrete entropy</p>
+<p>As we saw in Section 5.3.3, the entropy of a continuous variable discretized finely diverges as $h-\ln\Delta$, and the differential entropy $h$ is what remains after the diverging part is removed. For this reason $h$ can be negative, and changing the unit of the variable changes it by $\ln\abs{c}$. One cannot read it as “the entropy is negative, so something is wrong,” or compare the $h$ of two quantities with different units to ask which one is more spread out. What does not depend on units are the KL divergence and the mutual information.</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: “A lot of information” does not mean “useful”</p>
+<p>Entropy measures “how hard something is to predict”; it does not ask whether its content is useful for any purpose. A sequence of equiprobable random numbers has the maximum entropy but is of no use whatsoever. The larger the noise in a measured value, the larger the entropy of the measured value. Whether it is useful for the quantity of interest $y$ should be measured by the mutual information $I[x;y]$ with $y$, not by $H[x]$.</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Do not bring the laws of thermodynamics into the “entropy” of machine learning</p>
+<p>The cross-entropy loss and the entropy of a model's predictive distribution are quantities about a probability distribution that we chose; they are not state quantities of a physical system (Section 5.8.3). Arguments such as “the entropy decreasing as learning proceeds violates the second law” or “a prediction with large entropy is thermally stable” do not hold. Conversely, the configurational entropy \eqref{eq:5-mixing} can be used as a thermodynamic quantity only because of the physical assumption of a random configuration in equilibrium.</p>
+</div>
+
+<div class="box warn">
+<p class="box-title">Caution: Cross-entropy does not necessarily go down to 0</p>
+<p>By Eq. \eqref{eq:5-ce-decomp}, $H[p,q]\ge H[p]$, and if the data themselves contain indecision (the outcome varies for the same input), the loss cannot fall below $H[p]$ no matter how good the model is. This corresponds to the aleatoric uncertainty (arising from noise) of <a href="ch04_bayesian_inference.html#sec4-8">Chapter 4, Section 4.8</a>. If the loss on the training data falls clearly below $H[p]$, there is a suspicion that the model has memorized even the noise (overfitting; <a href="ch06_generalization.html#sec6-2">Chapter 6, Section 6.2</a>).</p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Example 5.10: The KL divergence does not satisfy the triangle inequality</p>
+<p>For the Bernoulli distribution $B(\mu)$ (the probability of $x=1$ is $\mu$), let $p=B(0.5)$, $q=B(0.3)$, and $r=B(0.1)$. Find $\KL(p\,\|\,q)$, $\KL(q\,\|\,r)$, and $\KL(p\,\|\,r)$, and check whether the triangle inequality $\KL(p\,\|\,r)\le\KL(p\,\|\,q)+\KL(q\,\|\,r)$ holds.</p>
+<p><strong>Solution.</strong> We use $\KL(B(a)\,\|\,B(b))$ $=a\ln\frac ab+(1-a)\ln\frac{1-a}{1-b}$.</p>
+$$
+\begin{aligned}
+\KL(p\,\|\,q)&=0.5\ln\frac{0.5}{0.3}+0.5\ln\frac{0.5}{0.7}\\
+&=0.2554-0.1682=0.0872,\\
+\KL(q\,\|\,r)&=0.3\ln\frac{0.3}{0.1}+0.7\ln\frac{0.7}{0.9}\\
+&=0.3296-0.1759=0.1537,\\
+\KL(p\,\|\,r)&=0.5\ln\frac{0.5}{0.1}+0.5\ln\frac{0.5}{0.9}\\
+&=0.8047-0.2939=0.5108 .
+\end{aligned}
+$$
+<p>Since $\KL(p\,\|\,q)+\KL(q\,\|\,r)=0.2409$ whereas $\KL(p\,\|\,r)=0.5108$, the triangle inequality does not hold. Going through an intermediate distribution makes things “closer,” so the KL divergence does not behave as a distance.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sec5-11">5.11 Summary, Link to the Next Chapter, Exercises, and References</h2>
+
+<h3>5.11.1 Summary</h3>
+<ul>
+  <li><strong>Self-information</strong>: From the requirement that the information content of independent events add, $h(x)=-\ln p(x)$. The units are the nat (the default in this book) and the bit ($1\ \mathrm{bit}=\ln2\ \mathrm{nat}$).</li>
+  <li><strong>Entropy</strong>: The mean of the self-information, $H[p]=-\sum p\ln p$ ($0\ln0=0$). It is nonnegative; for a distribution over $K$ values it is largest for the uniform distribution, with the value $\ln K$. For independent variables it adds. $\exp(H)$ is the effective number of choices.</li>
+  <li><strong>Differential entropy</strong>: For a Gaussian distribution it is $\tfrac12\ln(2\pi e\sigma^{2})$. It can be negative, and it changes by $\ln\abs{c}$ with the unit. It is not the limit of discrete entropy. With the variance fixed, it is largest for the Gaussian distribution.</li>
+  <li><strong>Cross-entropy and the KL divergence</strong>: $H[p,q]=H[p]+\KL(p\,\|\,q)$. $\KL\ge0$ (from $\ln t\le t-1$), with equality only for $p=q$. It is asymmetric and does not satisfy the triangle inequality.</li>
+  <li><strong>Relation to maximum likelihood estimation</strong>: Minimizing $\KL(\hat{p}\,\|\,q_{\bm{\theta}})$ = minimizing the average negative log-likelihood = maximum likelihood estimation. The cross-entropy loss $-\ln q(\text{correct answer})$ of classification and the loss of next-token prediction are exactly this.</li>
+  <li><strong>Direction of the KL divergence</strong>: Minimizing $\KL(p\,\|\,q)$ makes the model cover $p$ (moment matching), whereas minimizing $\KL(q\,\|\,p)$ makes it settle onto a single peak.</li>
+  <li><strong>Mutual information</strong>: $I[x;y]$ $=\KL(p(x,y)\,\|\,p(x)p(y))$ $=H[y]-H[y\mid x]\ge0$, and it is 0 only when the variables are independent.</li>
+  <li><strong>Statistical mechanics</strong>: $S=k_{\mathrm B}H$. Maximizing the entropy with the mean energy fixed gives the canonical distribution $e^{-\beta E_i}/Z$, $\beta=1/(k_{\mathrm B}T)$, $A=-k_{\mathrm B}T\ln Z$. However, $H$ is a quantity of an arbitrary distribution, whereas $S$ is a state quantity of a physical system in equilibrium.</li>
+  <li><strong>Materials</strong>: The configurational entropy of ideal mixing, $-R\sum x_i\ln x_i$, is $R$ times the entropy of the composition. For an equimolar five-component system, $R\ln5$ $\approx13.4\ \mathrm{J\,mol^{-1}\,K^{-1}}$.</li>
+</ul>
+
+<div class="keyeq">
+\begin{equation}
+\begin{gathered}
+H[p]=-\sum_{x}p(x)\ln p(x),\\
+H[p,q]=H[p]+\KL(p\,\|\,q),\\
+\KL(p\,\|\,q)\ge0,\\
+\KL(\hat{p}\,\|\,q_{\bm{\theta}})\\
+=-\frac1N\sum_{n}\ln q_{\bm{\theta}}(x_n)-H[\hat{p}]
+\end{gathered} \label{eq:5-key}
+\end{equation}
+</div>
+
+<h3>5.11.2 Link to the Next Chapter</h3>
+<p>In this chapter we saw that “minimizing the loss,” the goal of learning, amounts to “making the KL divergence between the distribution of the data and the distribution of the model small.” However, making the KL divergence from the data at hand (the empirical distribution) as small as possible is not necessarily a good thing. The empirical distribution is merely a collection of a finite number of points, and a model that fits it too closely can end up farther from the distribution of data not yet seen. In the next chapter, <a href="ch06_generalization.html">Chapter 6</a>, we treat this <strong>overfitting</strong>, the proper use of training data, validation data, and test data, regularization, and the data leakage peculiar to materials data. How to actually make the loss small (gradient descent) is derived in <a href="ch07_optimization.html#sec7-2">Chapter 7, Section 7.2</a>, and the gradient of the cross-entropy loss in <a href="ch09_linear_classification.html#sec9-3">Chapter 9, Section 9.3</a>.</p>
+
+<h3>5.11.3 Exercises</h3>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.1: Entropy and the effective number of choices (computation)</p>
+<p>For the distribution $p=(0.4,\,0.3,\,0.2,\,0.1)$ taking four values, (1) find the entropy in nats and in bits. (2) Find the effective number of choices $\exp(H)$. (3) Find the KL divergence $\KL(p\,\|\,u)$ from the uniform distribution $u$, and verify that it agrees with $\ln4-H[p]$.</p>
+<p><em>Hint:</em> For (3), use the equation in the proof of Theorem 5.2.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-1">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.2: Upper limit of the joint entropy (derivation)</p>
+<p>(1) For discrete random variables $x,y$, show that $H[x,y]=H[x]+H[y]-I[x;y]$, and derive $H[x,y]\le H[x]+H[y]$ (with equality when they are independent). (2) Compute $H[x,y]$ directly for Table 2.1 of Chapter 2 (the joint distribution of Example 5.7), and verify the relation in (1) numerically. (3) Find $H[x\mid y]$.</p>
+<p><em>Hint:</em> For (1), combine the chain rule of entropy with $I[x;y]=H[y]-H[y\mid x]$.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-2">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.3: Differential entropy of three distributions with the same variance (derivation)</p>
+<p>Find the differential entropies of the following three distributions with variance 1, and verify that the Gaussian distribution gives the largest (Theorem 5.2 (b)). (1) The uniform distribution of width $a$ ($a$ is determined so that the variance is 1). (2) The Laplace distribution $p(x)=\dfrac{1}{2b}e^{-\abs{x}/b}$ (the variance is $2b^{2}$). (3) The Gaussian distribution $\Normal(0,1)$.</p>
+<p><em>Hint:</em> For (2), use $\Ex[\abs{x}]=b$.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-3">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.4: Cross-entropy loss for binary classification (computation)</p>
+<p>A binary classifier output the “probability of being a good product” $\hat{y}=(0.9,\,0.2,\,0.6,\,0.4)$ for four samples. The correct answers are $y=(1,\,0,\,1,\,1)$ (1 means a good product). (1) Find the loss for each sample and the average cross-entropy loss. (2) Among models that always output the same probability $c$ without looking at the input, find the $c$ that minimizes the average loss, and the loss at that value. (3) Find the loss of the model that always outputs $0.5$, and discuss it in comparison with (1) and (2).</p>
+<p><em>Hint:</em> (2) has the same form as the Bernoulli example in Section 5.5.2.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-4">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.5: Probability 0 and the divergence of the KL divergence (discussion)</p>
+<p>Let $p=(0.5,\,0.5,\,0)$ and $q=(0.45,\,0.45,\,0.1)$. (1) Find $\KL(p\,\|\,q)$ and $\KL(q\,\|\,p)$. (2) What happens to the cross-entropy loss when a classification model outputs probability 0 for some class? Explain in relation to (1). (3) Give one remedy and state what it changes.</p>
+<p><em>Hint:</em> Look at the convention in Definition 5.4 (when $q=0$ and $p\gt0$).</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-5">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.6: A non-equimolar high-entropy alloy (a materials topic)</p>
+<p>Assume ideal random mixing. (1) Find the configurational entropy per mole of $\mathrm{Al_{0.5}CoCrFeNi}$, which contains Al in half the amount of each of the other four elements (atomic ratio $0.5:1:1:1:1$). (2) Compare it with the values for equimolar $\mathrm{CoCrFeNi}$ (four components) and for the equimolar five-component alloy. (3) When five elements are used, what composition maximizes the configurational entropy? State the reason using a theorem of this chapter.</p>
+<p><em>Hint:</em> The mole fractions are $x_{\mathrm{Al}}=0.5/4.5$ and $1/4.5$ for the others.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-6">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.7: Spin entropy of a paramagnet (a materials topic)</p>
+<p>Consider mutually independent magnetic moments (spin 1/2) in a magnetic field $B$. Each moment takes one of two states, parallel to the field (energy $-\mu_{\mathrm B}B$) or antiparallel ($+\mu_{\mathrm B}B$), and is in equilibrium at temperature $T$. $\mu_{\mathrm B}$ is the Bohr magneton. Let $\xi=\mu_{\mathrm B}B/(k_{\mathrm B}T)$. (1) Find the probabilities of the two states, and show that the entropy per mole is $S/R=\ln(2\cosh\xi)-\xi\tanh\xi$. (2) Find $S$ in $\mathrm{J\,mol^{-1}\,K^{-1}}$ for $\xi=0.5,\,1,\,2$. (3) Find the limits $\xi\to0$ and $\xi\to\infty$, and state their meaning. (4) Since $S$ is a function of $\xi=\mu_{\mathrm B}B/(k_{\mathrm B}T)$ alone, state what happens to the temperature when the magnetic field is weakened while the entropy is kept constant (adiabatically).</p>
+<p><em>Hint:</em> For (1), use Eq. \eqref{eq:5-canonical} and the check formula $H=\beta\bar{E}+\ln Z$ of Example 5.8.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-7">→ Solution</a></p>
+</div>
+
+<div class="box ex">
+<p class="box-title">Exercise 5.8: Mutual information between descriptors and the phase formed (a materials topic)</p>
+<p>Whether the perovskite structure formed (the phase $y$: formed or not formed) and two descriptors $a$ and $b$ (each divided into two values, “large” and “small”) were examined for 100 compositions (synthetic data for teaching purposes; no random numbers were used; the numbers were chosen by hand for explanation). For descriptor $a$: (large, formed) 40, (large, not formed) 10, (small, formed) 10, (small, not formed) 40. For descriptor $b$: (large, formed) 30, (large, not formed) 20, (small, formed) 20, (small, not formed) 30. (1) Find $I[a;y]$ and $I[b;y]$ in nats. (2) By what percentage is the indecision in the entropy $H[y]$ of the phase formed reduced by each descriptor? (3) Can one say from this result alone that “descriptor $a$ is the cause that determines the structure”? Answer, including the viewpoint of how the data were collected.</p>
+<p><em>Hint:</em> In both tables the marginal distribution is $(0.5,\,0.5)$.</p>
+<p class="sol-link"><a href="appC_solutions.html#sol-5-8">→ Solution</a></p>
+</div>
+
+<h3>5.11.4 References</h3>
+<div class="refs">
+<ol>
+<li>C. E. Shannon, "A Mathematical Theory of Communication", <em>Bell System Technical Journal</em> <strong>27</strong>, 379–423, 623–656 (1948), doi:10.1002/j.1538-7305.1948.tb01338.x (the original paper that introduced information content and entropy).</li>
+<li>S. Kullback and R. A. Leibler, "On Information and Sufficiency", <em>The Annals of Mathematical Statistics</em> <strong>22</strong>, 79–86 (1951), doi:10.1214/aoms/1177729694 (the original paper on the KL divergence).</li>
+<li>E. T. Jaynes, "Information Theory and Statistical Mechanics", <em>Physical Review</em> <strong>106</strong>, 620–630 (1957), doi:10.1103/PhysRev.106.620 (a paper that rebuilt statistical mechanics on the idea of maximum entropy).</li>
+<li>T. M. Cover and J. A. Thomas, <em>Elements of Information Theory</em>, 2nd ed., Wiley-Interscience (2006) (the standard textbook on entropy, relative entropy, mutual information, differential entropy, and coding theorems).</li>
+<li>D. J. C. MacKay, <em>Information Theory, Inference, and Learning Algorithms</em>, Cambridge University Press (2003) (a textbook that treats information theory together with inference and learning; the full text can be read on screen at the author's website https://www.inference.org.uk/mackay/itila/).</li>
+<li>C. M. Bishop, <em>Pattern Recognition and Machine Learning</em>, Springer (2006) (Chapter 1 treats the basics of information theory from the standpoint of machine learning).</li>
+<li>J.-W. Yeh <em>et al.</em>, "Nanostructured High-Entropy Alloys with Multiple Principal Elements: Novel Alloy Design Concepts and Outcomes", <em>Advanced Engineering Materials</em> <strong>6</strong>, 299–303 (2004), doi:10.1002/adem.200300567 (the paper that used the name “high-entropy alloy”).</li>
+<li>B. Cantor, I. T. H. Chang, P. Knight and A. J. B. Vincent, "Microstructural development in equiatomic multicomponent alloys", <em>Materials Science and Engineering A</em> <strong>375–377</strong>, 213–218 (2004), doi:10.1016/j.msea.2003.10.257 (a report that an equimolar Fe–Cr–Mn–Ni–Co alloy becomes a single fcc solid solution).</li>
+</ol>
+</div>
+
+<nav class="pager">
+  <a href="ch04_bayesian_inference.html">← Chapter 4: Maximum Likelihood, MAP, and Bayesian Estimation — Learning a Distribution from Data</a>
+  <span class="spacer"></span>
+  <a href="ch06_generalization.html">Chapter 6: Generalization, Model Selection, and Regularization — Models That Predict Unseen Data →</a>
+</nav>
+</main>
+</body>
+</html>
